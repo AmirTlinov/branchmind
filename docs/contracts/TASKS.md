@@ -34,6 +34,12 @@ All stateful tools in this family operate inside an explicit `workspace` (a stab
 
 - `workspace` is required in v0 to avoid implicit context and silent cross-project writes.
 
+## Payload budgets (v0)
+
+- `tasks_context` and `tasks_delta` accept optional `max_chars`.
+- When `max_chars` is provided, responses include `budget` with `{ max_chars, used_chars, truncated }`,
+  and list payloads may be truncated from the tail to fit the budget.
+
 ## Tool family
 
 > Names are provisional. The default assumption is `tasks_*` for compatibility with prior ecosystems.

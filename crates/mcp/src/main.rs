@@ -915,6 +915,10 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let plans = match self.store.list_plans(&workspace, 50, 0) {
             Ok(v) => v,
@@ -925,30 +929,51 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        ai_ok(
-            "context",
-            json!({
-                "workspace": workspace.as_str(),
-                "plans": plans.into_iter().map(|p| json!({
-                    "id": p.id,
-                    "revision": p.revision,
-                    "title": p.title,
-                    "contract": p.contract,
-                    "contract_data": parse_json_or_null(p.contract_json),
-                    "created_at_ms": p.created_at_ms,
-                    "updated_at_ms": p.updated_at_ms
-                })).collect::<Vec<_>>(),
-                "tasks": tasks.into_iter().map(|t| json!({
-                    "id": t.id,
-                    "revision": t.revision,
-                    "parent": t.parent_plan_id,
-                    "title": t.title,
-                    "description": t.description,
-                    "created_at_ms": t.created_at_ms,
-                    "updated_at_ms": t.updated_at_ms
-                })).collect::<Vec<_>>()
-            }),
-        )
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "plans": plans.into_iter().map(|p| json!({
+                "id": p.id,
+                "revision": p.revision,
+                "title": p.title,
+                "contract": p.contract,
+                "contract_data": parse_json_or_null(p.contract_json),
+                "created_at_ms": p.created_at_ms,
+                "updated_at_ms": p.updated_at_ms
+            })).collect::<Vec<_>>(),
+            "tasks": tasks.into_iter().map(|t| json!({
+                "id": t.id,
+                "revision": t.revision,
+                "parent": t.parent_plan_id,
+                "title": t.title,
+                "description": t.description,
+                "created_at_ms": t.created_at_ms,
+                "updated_at_ms": t.updated_at_ms
+            })).collect::<Vec<_>>()
+        });
+
+        redact_value(&mut result, 6);
+
+        if let Some(limit) = max_chars {
+            let mut truncated = false;
+            let (_used, tasks_truncated) = enforce_graph_list_budget(&mut result, "tasks", limit);
+            truncated |= tasks_truncated;
+            let (_used, plans_truncated) = enforce_graph_list_budget(&mut result, "plans", limit);
+            truncated |= plans_truncated;
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used, tasks_truncated) =
+                    enforce_graph_list_budget(&mut result, "tasks", limit);
+                let (_used, plans_truncated) =
+                    enforce_graph_list_budget(&mut result, "plans", limit);
+                let _ = attach_budget(
+                    &mut result,
+                    limit,
+                    truncated || tasks_truncated || plans_truncated,
+                );
+            }
+        }
+
+        ai_ok("context", result)
     }
 
     fn tool_tasks_delta(&mut self, args: Value) -> Value {
@@ -957,6 +982,10 @@ impl McpServer {
         };
         let workspace = match require_workspace(args_obj) {
             Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
             Err(resp) => return resp,
         };
         let since = args_obj.get("since").and_then(|v| v.as_str());
@@ -971,21 +1000,31 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        ai_ok(
-            "delta",
-            json!({
-                "workspace": workspace.as_str(),
-                "events": events.into_iter().map(|e| json!({
-                    "event_id": e.event_id(),
-                    "ts": ts_ms_to_rfc3339(e.ts_ms),
-                    "ts_ms": e.ts_ms,
-                    "task": e.task_id,
-                    "path": e.path,
-                    "type": e.event_type,
-                    "payload": parse_json_or_string(&e.payload_json),
-                })).collect::<Vec<_>>()
-            }),
-        )
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "events": events.into_iter().map(|e| json!({
+                "event_id": e.event_id(),
+                "ts": ts_ms_to_rfc3339(e.ts_ms),
+                "ts_ms": e.ts_ms,
+                "task": e.task_id,
+                "path": e.path,
+                "type": e.event_type,
+                "payload": parse_json_or_string(&e.payload_json),
+            })).collect::<Vec<_>>()
+        });
+
+        redact_value(&mut result, 6);
+
+        if let Some(limit) = max_chars {
+            let (_used, truncated) = enforce_graph_list_budget(&mut result, "events", limit);
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used, truncated2) = enforce_graph_list_budget(&mut result, "events", limit);
+                let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            }
+        }
+
+        ai_ok("delta", result)
     }
 
     fn tool_tasks_focus_get(&mut self, args: Value) -> Value {
@@ -1623,24 +1662,23 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        ai_ok(
-            "branchmind_notes_commit",
-            json!({
-                "workspace": workspace.as_str(),
-                "entry": {
-                    "seq": entry.seq,
-                    "ts": ts_ms_to_rfc3339(entry.ts_ms),
-                    "ts_ms": entry.ts_ms,
-                    "branch": entry.branch,
-                    "doc": entry.doc,
-                    "kind": entry.kind.as_str(),
-                    "title": entry.title,
-                    "format": entry.format,
-                    "meta": entry.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "content": entry.content
-                }
-            }),
-        )
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "entry": {
+                "seq": entry.seq,
+                "ts": ts_ms_to_rfc3339(entry.ts_ms),
+                "ts_ms": entry.ts_ms,
+                "branch": entry.branch,
+                "doc": entry.doc,
+                "kind": entry.kind.as_str(),
+                "title": entry.title,
+                "format": entry.format,
+                "meta": entry.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                "content": entry.content
+            }
+        });
+        redact_value(&mut result, 6);
+        ai_ok("branchmind_notes_commit", result)
     }
 
     fn tool_branchmind_show(&mut self, args: Value) -> Value {
@@ -1782,6 +1820,8 @@ impl McpServer {
             },
             "truncated": false
         });
+
+        redact_value(&mut result, 6);
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_branchmind_show_budget(&mut result, limit);
@@ -3942,6 +3982,8 @@ impl McpServer {
             "truncated": false
         });
 
+        redact_value(&mut result, 6);
+
         if let Some(limit) = max_chars {
             let mut truncated_any = false;
             for _ in 0..4 {
@@ -4454,7 +4496,10 @@ fn tool_definitions() -> Vec<Value> {
             "description": "List plans and tasks in a workspace (v0 skeleton).",
             "inputSchema": {
                 "type": "object",
-                "properties": { "workspace": { "type": "string" } },
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "max_chars": { "type": "integer" }
+                },
                 "required": ["workspace"]
             }
         }),
@@ -4466,7 +4511,8 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "workspace": { "type": "string" },
                     "since": { "type": "string" },
-                    "limit": { "type": "integer" }
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]
             }
@@ -5601,6 +5647,175 @@ fn attach_budget(value: &mut Value, max_chars: usize, truncated: bool) -> usize 
     }
 
     used
+}
+
+const SENSITIVE_KEYWORDS: [&str; 8] = [
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+];
+
+fn redact_value(value: &mut Value, depth: usize) {
+    if depth == 0 {
+        return;
+    }
+    match value {
+        Value::String(s) => {
+            let redacted = redact_text(s);
+            if &redacted != s {
+                *s = redacted;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_value(item, depth - 1);
+            }
+        }
+        Value::Object(map) => {
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                if is_sensitive_key(&key) {
+                    map.insert(key, Value::String("<redacted>".to_string()));
+                } else if let Some(value) = map.get_mut(&key) {
+                    redact_value(value, depth - 1);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    SENSITIVE_KEYWORDS
+        .iter()
+        .any(|token| lower.contains(token))
+}
+
+fn redact_text(text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut out = text.to_string();
+    out = redact_token_prefix(&out, "ghp_", 20);
+    out = redact_token_prefix(&out, "github_pat_", 20);
+    out = redact_token_prefix(&out, "sk-", 20);
+    for key in ["token", "apikey", "api_key", "secret", "password"] {
+        out = redact_query_param(&out, key);
+    }
+    out = redact_bearer_token(&out);
+    out = redact_private_key_block(&out);
+    out
+}
+
+fn redact_token_prefix(input: &str, prefix: &str, min_tail: usize) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    let bytes = input.as_bytes();
+    let prefix_bytes = prefix.as_bytes();
+    while i < bytes.len() {
+        if bytes[i..].starts_with(prefix_bytes) {
+            let start = i;
+            let mut j = i + prefix_bytes.len();
+            while j < bytes.len() && is_token_char(bytes[j]) {
+                j += 1;
+            }
+            if j - start >= prefix_bytes.len() + min_tail {
+                out.push_str("<redacted>");
+            } else {
+                out.push_str(&input[start..j]);
+            }
+            i = j;
+        } else {
+            let ch = input[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn is_token_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+}
+
+fn redact_query_param(input: &str, key: &str) -> String {
+    let lower = input.to_ascii_lowercase();
+    let pattern = format!("{key}=");
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while let Some(pos) = lower[i..].find(&pattern) {
+        let start = i + pos;
+        let value_start = start + pattern.len();
+        out.push_str(&input[i..value_start]);
+        let mut j = value_start;
+        let bytes = input.as_bytes();
+        while j < bytes.len() {
+            let b = bytes[j];
+            if b.is_ascii_whitespace() || b == b'&' || b == b';' {
+                break;
+            }
+            j += 1;
+        }
+        out.push_str("<redacted>");
+        i = j;
+    }
+    out.push_str(&input[i..]);
+    out
+}
+
+fn redact_bearer_token(input: &str) -> String {
+    let lower = input.to_ascii_lowercase();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    let needle = "bearer ";
+    while let Some(pos) = lower[i..].find(needle) {
+        let start = i + pos;
+        let token_start = start + needle.len();
+        out.push_str(&input[i..token_start]);
+        let mut j = token_start;
+        let bytes = input.as_bytes();
+        while j < bytes.len() {
+            let b = bytes[j];
+            if b.is_ascii_whitespace() {
+                break;
+            }
+            j += 1;
+        }
+        out.push_str("<redacted>");
+        i = j;
+    }
+    out.push_str(&input[i..]);
+    out
+}
+
+fn redact_private_key_block(input: &str) -> String {
+    if !input.contains("PRIVATE KEY") {
+        return input.to_string();
+    }
+    let begin = "-----BEGIN ";
+    let end = "-----END ";
+    let Some(start) = input.find(begin) else {
+        return "<redacted>".to_string();
+    };
+    let Some(end_pos) = input[start..].find(end) else {
+        return "<redacted>".to_string();
+    };
+    let end_abs = start + end_pos;
+    let end_line = input[end_abs..]
+        .find("-----")
+        .map(|p| end_abs + p + 5)
+        .unwrap_or(input.len());
+    let mut out = String::with_capacity(input.len());
+    out.push_str(&input[..start]);
+    out.push_str("<redacted>");
+    out.push_str(&input[end_line..]);
+    out
 }
 
 fn parse_storage_dir() -> PathBuf {

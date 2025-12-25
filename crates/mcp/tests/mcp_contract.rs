@@ -259,7 +259,9 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "trace must contain steps_added"
     );
 
-    let long_note = "x".repeat(2048);
+    let secret_note =
+        "Authorization: Bearer sk-THISISSECRET0123456789012345 token=supersecret";
+    let long_note = format!("{secret_note} {}", "x".repeat(2048));
     let notes_commit = server.request(json!({
         "jsonrpc": "2.0",
         "id": 7,
@@ -271,6 +273,27 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         notes_commit_text.get("success").and_then(|v| v.as_bool()),
         Some(true)
     );
+
+    let show_notes = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 70,
+        "method": "tools/call",
+        "params": { "name": "branchmind_show", "arguments": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "notes", "limit": 50 } }
+    }));
+    let show_notes_text = extract_tool_text(&show_notes);
+    let note_entries = show_notes_text
+        .get("result")
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .expect("entries");
+    let note_content = note_entries
+        .iter()
+        .find(|e| e.get("kind").and_then(|v| v.as_str()) == Some("note"))
+        .and_then(|e| e.get("content"))
+        .and_then(|v| v.as_str())
+        .expect("note content");
+    assert!(!note_content.contains("sk-THISISSECRET"));
+    assert!(note_content.contains("<redacted>"));
 
     let show_notes_budget = server.request(json!({
         "jsonrpc": "2.0",
@@ -1780,6 +1803,36 @@ fn tasks_create_context_delta_smoke() {
     );
     assert_eq!(plans[0].get("revision").and_then(|v| v.as_i64()), Some(1));
 
+    let context_limited = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 55,
+        "method": "tools/call",
+        "params": { "name": "tasks_context", "arguments": { "workspace": "ws1", "max_chars": 10 } }
+    }));
+    let ctx_limited_text = extract_tool_text(&context_limited);
+    let limited_budget = ctx_limited_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    assert_eq!(
+        limited_budget
+            .get("truncated")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let limited_plans = ctx_limited_text
+        .get("result")
+        .and_then(|v| v.get("plans"))
+        .and_then(|v| v.as_array())
+        .expect("plans");
+    let limited_tasks = ctx_limited_text
+        .get("result")
+        .and_then(|v| v.get("tasks"))
+        .and_then(|v| v.as_array())
+        .expect("tasks");
+    assert!(limited_plans.is_empty());
+    assert!(limited_tasks.is_empty());
+
     let delta = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
@@ -1793,6 +1846,30 @@ fn tasks_create_context_delta_smoke() {
         .and_then(|v| v.as_array())
         .expect("events");
     assert_eq!(events.len(), 3);
+
+    let delta_limited = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 66,
+        "method": "tools/call",
+        "params": { "name": "tasks_delta", "arguments": { "workspace": "ws1", "max_chars": 10 } }
+    }));
+    let delta_limited_text = extract_tool_text(&delta_limited);
+    let limited_budget = delta_limited_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    assert_eq!(
+        limited_budget
+            .get("truncated")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let limited_events = delta_limited_text
+        .get("result")
+        .and_then(|v| v.get("events"))
+        .and_then(|v| v.as_array())
+        .expect("events");
+    assert!(limited_events.is_empty());
 }
 
 #[test]

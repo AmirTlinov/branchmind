@@ -120,6 +120,16 @@ Every potentially large output must accept at least one budget knob:
 
 All truncation must be explicit: `truncated=true` plus `budget.used`/`budget.limit` where applicable.
 
+## Redaction (best-effort, safe-by-default)
+
+Outputs are scrubbed for likely secrets:
+
+- key names containing `token`, `secret`, `password`, `api_key`, `authorization`, `bearer`,
+- token-like prefixes (`ghp_`, `github_pat_`, `sk-`),
+- `Bearer` tokens and query-string secrets (`token=...`, `api_key=...`, etc).
+
+Redaction replaces sensitive values with `<redacted>` without changing the schema.
+
 ## Error model
 
 Errors are typed and actionable.
