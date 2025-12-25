@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/core",
+  "crates/storage",
+  "crates/mcp",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
