@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use bm_core::graph::{ConflictId, GraphNodeId, GraphRel, GraphTagError, GraphType, normalize_tags as core_normalize_tags};
 use bm_core::ids::WorkspaceId;
 use bm_core::model::{ReasoningRef, TaskKind};
 use bm_core::paths::StepPath;
@@ -2855,9 +2856,7 @@ impl SqliteStore {
         workspace: &WorkspaceId,
         conflict_id: &str,
     ) -> Result<GraphConflictDetail, StoreError> {
-        if conflict_id.trim().is_empty() {
-            return Err(StoreError::InvalidInput("conflict_id must not be empty"));
-        }
+        validate_conflict_id(conflict_id)?;
 
         let tx = self.conn.transaction()?;
         let row = graph_conflict_detail_row_tx(&tx, workspace.as_str(), conflict_id)?
@@ -2873,9 +2872,7 @@ impl SqliteStore {
         conflict_id: &str,
         resolution: &str,
     ) -> Result<GraphConflictResolveResult, StoreError> {
-        if conflict_id.trim().is_empty() {
-            return Err(StoreError::InvalidInput("conflict_id must not be empty"));
-        }
+        validate_conflict_id(conflict_id)?;
         if resolution.trim().is_empty() {
             return Err(StoreError::InvalidInput("resolution must not be empty"));
         }
@@ -4508,77 +4505,34 @@ fn append_sources_clause(sql: &mut String, params: &mut Vec<SqlValue>, sources: 
 }
 
 fn validate_graph_node_id(value: &str) -> Result<(), StoreError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(StoreError::InvalidInput("node id must not be empty"));
-    }
-    if trimmed.len() > 256 {
-        return Err(StoreError::InvalidInput("node id is too long"));
-    }
-    if trimmed.contains('|') {
-        return Err(StoreError::InvalidInput("node id must not contain '|'"));
-    }
-    if trimmed.chars().any(|c| c.is_control()) {
-        return Err(StoreError::InvalidInput(
-            "node id contains control characters",
-        ));
-    }
-    Ok(())
+    GraphNodeId::try_new(value)
+        .map(|_| ())
+        .map_err(|err| StoreError::InvalidInput(err.message()))
 }
 
 fn validate_graph_type(value: &str) -> Result<(), StoreError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(StoreError::InvalidInput("node type must not be empty"));
-    }
-    if trimmed.len() > 128 {
-        return Err(StoreError::InvalidInput("node type is too long"));
-    }
-    if trimmed.chars().any(|c| c.is_control()) {
-        return Err(StoreError::InvalidInput(
-            "node type contains control characters",
-        ));
-    }
-    Ok(())
+    GraphType::try_new(value)
+        .map(|_| ())
+        .map_err(|err| StoreError::InvalidInput(err.message()))
 }
 
 fn validate_graph_rel(value: &str) -> Result<(), StoreError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(StoreError::InvalidInput("edge rel must not be empty"));
-    }
-    if trimmed.len() > 128 {
-        return Err(StoreError::InvalidInput("edge rel is too long"));
-    }
-    if trimmed.contains('|') {
-        return Err(StoreError::InvalidInput("edge rel must not contain '|'"));
-    }
-    if trimmed.chars().any(|c| c.is_control()) {
-        return Err(StoreError::InvalidInput(
-            "edge rel contains control characters",
-        ));
-    }
-    Ok(())
+    GraphRel::try_new(value)
+        .map(|_| ())
+        .map_err(|err| StoreError::InvalidInput(err.message()))
+}
+
+fn validate_conflict_id(value: &str) -> Result<(), StoreError> {
+    ConflictId::try_new(value)
+        .map(|_| ())
+        .map_err(|err| StoreError::InvalidInput(err.message()))
 }
 
 fn normalize_tags(tags: &[String]) -> Result<Vec<String>, StoreError> {
-    use std::collections::BTreeSet;
-
-    let mut out = BTreeSet::new();
-    for tag in tags {
-        let trimmed = tag.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.chars().any(|c| c.is_control()) {
-            return Err(StoreError::InvalidInput("tag contains control characters"));
-        }
-        if trimmed.contains('|') {
-            return Err(StoreError::InvalidInput("tag must not contain '|'"));
-        }
-        out.insert(trimmed.to_lowercase());
-    }
-    Ok(out.into_iter().collect())
+    core_normalize_tags(tags).map_err(|err| match err {
+        GraphTagError::ContainsPipe => StoreError::InvalidInput(err.message()),
+        GraphTagError::ContainsControl => StoreError::InvalidInput(err.message()),
+    })
 }
 
 fn encode_tags(tags: &[String]) -> Option<String> {
