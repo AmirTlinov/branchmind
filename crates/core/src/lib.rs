@@ -73,7 +73,9 @@ pub mod paths {
                 let Some(raw) = segment.strip_prefix("s:") else {
                     return Err(StepPathError::InvalidSegment);
                 };
-                let index = raw.parse::<usize>().map_err(|_| StepPathError::InvalidIndex)?;
+                let index = raw
+                    .parse::<usize>()
+                    .map_err(|_| StepPathError::InvalidIndex)?;
                 indices.push(index);
             }
 
@@ -91,7 +93,9 @@ pub mod paths {
         }
 
         pub fn root(ordinal: usize) -> Self {
-            Self { indices: vec![ordinal] }
+            Self {
+                indices: vec![ordinal],
+            }
         }
 
         pub fn to_string(&self) -> String {

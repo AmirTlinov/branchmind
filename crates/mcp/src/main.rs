@@ -5,11 +5,11 @@ use bm_core::model::TaskKind;
 use bm_core::paths::StepPath;
 use bm_storage::{SqliteStore, StoreError};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 const MCP_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "branchmind-rust-mcp";
@@ -41,7 +41,9 @@ fn tool_text_content(payload: &Value) -> Value {
             ("type".to_string(), Value::String("text".to_string())),
             (
                 "text".to_string(),
-                Value::String(serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string())),
+                Value::String(
+                    serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string()),
+                ),
             ),
         ]
         .into_iter()
@@ -90,19 +92,36 @@ impl McpServer {
         }
 
         if method == "tools/list" {
-            return Some(json_rpc_response(request.id, json!({ "tools": tool_definitions() })));
+            return Some(json_rpc_response(
+                request.id,
+                json!({ "tools": tool_definitions() }),
+            ));
         }
 
         if method == "tools/call" {
             let Some(params) = request.params else {
-                return Some(json_rpc_error(request.id, -32602, "params must be an object"));
+                return Some(json_rpc_error(
+                    request.id,
+                    -32602,
+                    "params must be an object",
+                ));
             };
             let Some(params_obj) = params.as_object() else {
-                return Some(json_rpc_error(request.id, -32602, "params must be an object"));
+                return Some(json_rpc_error(
+                    request.id,
+                    -32602,
+                    "params must be an object",
+                ));
             };
 
-            let tool_name = params_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let args = params_obj.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            let tool_name = params_obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let args = params_obj
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
             let response_body = self.call_tool(tool_name, args);
 
             return Some(json_rpc_response(
@@ -114,7 +133,11 @@ impl McpServer {
             ));
         }
 
-        Some(json_rpc_error(request.id, -32601, &format!("Method not found: {method}")))
+        Some(json_rpc_error(
+            request.id,
+            -32601,
+            &format!("Method not found: {method}"),
+        ))
     }
 
     fn call_tool(&mut self, name: &str, args: Value) -> Value {
@@ -132,6 +155,10 @@ impl McpServer {
             "tasks_focus_set" => self.tool_tasks_focus_set(args),
             "tasks_focus_clear" => self.tool_tasks_focus_clear(args),
             "tasks_radar" => self.tool_tasks_radar(args),
+            "branchmind_init" => self.tool_branchmind_init(args),
+            "branchmind_status" => self.tool_branchmind_status(args),
+            "branchmind_notes_commit" => self.tool_branchmind_notes_commit(args),
+            "branchmind_show" => self.tool_branchmind_show(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
         }
@@ -161,15 +188,30 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let parent = args_obj.get("parent").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let kind = parse_kind(args_obj.get("kind").and_then(|v| v.as_str()), parent.is_some());
+        let parent = args_obj
+            .get("parent")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let kind = parse_kind(
+            args_obj.get("kind").and_then(|v| v.as_str()),
+            parent.is_some(),
+        );
 
-        let description = args_obj.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let contract = args_obj.get("contract").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let description = args_obj
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let contract = args_obj
+            .get("contract")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let contract_json = args_obj.get("contract_data").map(|v| v.to_string());
 
         if args_obj.get("steps").is_some() {
-            return ai_error("NOT_IMPLEMENTED", "steps are not implemented in v0 skeleton");
+            return ai_error(
+                "NOT_IMPLEMENTED",
+                "steps are not implemented in v0 skeleton",
+            );
         }
 
         let event_type = match kind {
@@ -266,11 +308,17 @@ impl McpServer {
             let mut success_criteria = Vec::with_capacity(criteria_array.len());
             for item in criteria_array {
                 let Some(s) = item.as_str() else {
-                    return ai_error("INVALID_INPUT", "steps[].success_criteria items must be strings");
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "steps[].success_criteria items must be strings",
+                    );
                 };
                 success_criteria.push(s.to_string());
             }
-            steps.push(bm_storage::NewStep { title, success_criteria });
+            steps.push(bm_storage::NewStep {
+                title,
+                success_criteria,
+            });
         }
 
         let result = self.store.steps_decompose(
@@ -393,7 +441,9 @@ impl McpServer {
                     }
                 }),
             ),
-            Err(StoreError::CheckpointsNotConfirmed { .. }) => ai_error("STORE_ERROR", "unexpected checkpoints error"),
+            Err(StoreError::CheckpointsNotConfirmed { .. }) => {
+                ai_error("STORE_ERROR", "unexpected checkpoints error")
+            }
             Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
             Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
                 "REVISION_MISMATCH",
@@ -707,7 +757,8 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let contract_json = match optional_nullable_object_as_json_string(args_obj, "contract_data") {
+        let contract_json = match optional_nullable_object_as_json_string(args_obj, "contract_data")
+        {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -723,7 +774,10 @@ impl McpServer {
             }
             TaskKind::Task => {
                 if contract.is_some() || contract_json.is_some() {
-                    return ai_error("INVALID_INPUT", "contract fields are not valid for kind=task");
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "contract fields are not valid for kind=task",
+                    );
                 }
                 if title.is_none() && description.is_none() {
                     return ai_error("INVALID_INPUT", "no fields to edit");
@@ -819,19 +873,17 @@ impl McpServer {
             ),
             Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown id"),
             Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
-            Err(StoreError::RevisionMismatch { expected, actual }) => {
-                ai_error_with(
-                    "REVISION_MISMATCH",
-                    &format!("expected={expected} actual={actual}"),
-                    Some("Refresh the current revision and retry with expected_revision."),
-                    vec![suggest_call(
-                        "tasks_context",
-                        "Refresh current revisions for this workspace.",
-                        "high",
-                        json!({ "workspace": workspace.as_str() }),
-                    )],
-                )
-            }
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
             Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
         }
     }
@@ -1015,7 +1067,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let requested_task = args_obj.get("task").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let requested_task = args_obj
+            .get("task")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let focus = match self.store.focus_get(&workspace) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -1075,7 +1130,10 @@ impl McpServer {
             },
         };
 
-        let reasoning_ref = match self.store.ensure_reasoning_ref(&workspace, &target_id, kind) {
+        let reasoning_ref = match self
+            .store
+            .ensure_reasoning_ref(&workspace, &target_id, kind)
+        {
             Ok(r) => json!({
                 "branch": r.branch,
                 "notes_doc": r.notes_doc,
@@ -1087,8 +1145,16 @@ impl McpServer {
         };
 
         let now = match kind {
-            TaskKind::Plan => format!("Plan {}: {}", target_id, target.get("title").and_then(|v| v.as_str()).unwrap_or("")),
-            TaskKind::Task => format!("Task {}: {}", target_id, target.get("title").and_then(|v| v.as_str()).unwrap_or("")),
+            TaskKind::Plan => format!(
+                "Plan {}: {}",
+                target_id,
+                target.get("title").and_then(|v| v.as_str()).unwrap_or("")
+            ),
+            TaskKind::Task => format!(
+                "Task {}: {}",
+                target_id,
+                target.get("title").and_then(|v| v.as_str()).unwrap_or("")
+            ),
         };
 
         let why = match kind {
@@ -1131,10 +1197,16 @@ impl McpServer {
                         next.push("Add steps with tasks_decompose".to_string());
                     } else {
                         if summary.missing_criteria > 0 {
-                            verify.push(format!("Missing criteria checkpoints: {}", summary.missing_criteria));
+                            verify.push(format!(
+                                "Missing criteria checkpoints: {}",
+                                summary.missing_criteria
+                            ));
                         }
                         if summary.missing_tests > 0 {
-                            verify.push(format!("Missing tests checkpoints: {}", summary.missing_tests));
+                            verify.push(format!(
+                                "Missing tests checkpoints: {}",
+                                summary.missing_tests
+                            ));
                         }
 
                         if let Some(first) = summary.first_open {
@@ -1176,11 +1248,369 @@ impl McpServer {
         }
 
         if let Some(limit) = max_chars {
-            let (used, truncated) = enforce_max_chars_budget(&mut result, limit);
-            attach_budget(&mut result, limit, used, truncated);
+            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
+                let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            }
         }
 
         ai_ok("radar", result)
+    }
+
+    fn tool_branchmind_init(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        match self.store.workspace_init(&workspace) {
+            Ok(()) => ai_ok(
+                "branchmind_init",
+                json!({
+                    "workspace": workspace.as_str(),
+                    "storage_dir": self.store.storage_dir().to_string_lossy().to_string(),
+                    "schema_version": "v0"
+                }),
+            ),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_branchmind_status(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let workspace_exists = match self.store.workspace_exists(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let last_event = match self.store.workspace_last_event_head(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let last_doc_entry = match self.store.workspace_last_doc_entry_head(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "schema_version": "v0",
+            "workspace_exists": workspace_exists,
+            "last_event": last_event.map(|(seq, ts_ms)| json!({
+                "event_id": format!("evt_{:016}", seq),
+                "ts": ts_ms_to_rfc3339(ts_ms),
+                "ts_ms": ts_ms
+            })),
+            "last_doc_entry": last_doc_entry.map(|(seq, ts_ms, branch, doc, kind)| json!({
+                "seq": seq,
+                "ts": ts_ms_to_rfc3339(ts_ms),
+                "ts_ms": ts_ms,
+                "branch": branch,
+                "doc": doc,
+                "kind": kind
+            })),
+        });
+
+        if let Some(limit) = max_chars {
+            let (_used, truncated) = enforce_branchmind_show_budget(&mut result, limit);
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_branchmind_show_budget(&mut result, limit);
+                let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            }
+        }
+
+        ai_ok("branchmind_status", result)
+    }
+
+    fn tool_branchmind_notes_commit(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let content = match require_string(args_obj, "content") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if content.trim().is_empty() {
+            return ai_error("INVALID_INPUT", "content must not be empty");
+        }
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if target.is_some() && (branch.is_some() || doc.is_some()) {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide either target or (branch, doc), not both",
+            );
+        }
+
+        let (branch, doc) = match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
+                    }
+                };
+                let reasoning = match self
+                    .store
+                    .ensure_reasoning_ref(&workspace, &target_id, kind)
+                {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Unknown target id");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                (reasoning.branch, reasoning.notes_doc)
+            }
+            None => {
+                let Some(branch) = branch else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "branch is required when target is not provided",
+                    );
+                };
+                let Some(doc) = doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "doc is required when target is not provided",
+                    );
+                };
+                (branch, doc)
+            }
+        };
+
+        let title = match optional_string(args_obj, "title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let format = match optional_string(args_obj, "format") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let meta_json = match optional_object_as_json_string(args_obj, "meta") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let entry = match self
+            .store
+            .doc_append_note(&workspace, &branch, &doc, title, format, meta_json, content)
+        {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_notes_commit",
+            json!({
+                "workspace": workspace.as_str(),
+                "entry": {
+                    "seq": entry.seq,
+                    "ts": ts_ms_to_rfc3339(entry.ts_ms),
+                    "ts_ms": entry.ts_ms,
+                    "branch": entry.branch,
+                    "doc": entry.doc,
+                    "kind": entry.kind.as_str(),
+                    "title": entry.title,
+                    "format": entry.format,
+                    "meta": entry.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "content": entry.content
+                }
+            }),
+        )
+    }
+
+    fn tool_branchmind_show(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if target.is_some() && (branch.is_some() || doc.is_some()) {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide either target or (branch, doc), not both",
+            );
+        }
+
+        let doc_kind = args_obj
+            .get("doc_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("trace");
+
+        let cursor = match optional_i64(args_obj, "cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(20),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let (branch, doc) = match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
+                    }
+                };
+                let reasoning = match self
+                    .store
+                    .ensure_reasoning_ref(&workspace, &target_id, kind)
+                {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Unknown target id");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let doc = match doc_kind {
+                    "trace" => reasoning.trace_doc,
+                    "notes" => reasoning.notes_doc,
+                    _ => return ai_error("INVALID_INPUT", "doc_kind must be 'trace' or 'notes'"),
+                };
+                (reasoning.branch, doc)
+            }
+            None => {
+                let Some(branch) = branch else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "branch is required when target is not provided",
+                    );
+                };
+                let Some(doc) = doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "doc is required when target is not provided",
+                    );
+                };
+                (branch, doc)
+            }
+        };
+
+        let slice = match self
+            .store
+            .doc_show_tail(&workspace, &branch, &doc, cursor, limit)
+        {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let entries = slice
+            .entries
+            .into_iter()
+            .map(|e| match e.kind {
+                bm_storage::DocEntryKind::Note => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "title": e.title,
+                    "format": e.format,
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "content": e.content
+                }),
+                bm_storage::DocEntryKind::Event => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "event_id": e.source_event_id,
+                    "event_type": e.event_type,
+                    "task_id": e.task_id,
+                    "path": e.path
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branch": branch,
+            "doc": doc,
+            "entries": entries,
+            "pagination": {
+                "cursor": cursor,
+                "next_cursor": slice.next_cursor,
+                "has_more": slice.has_more,
+                "limit": limit,
+                "count": entries.len()
+            },
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let (_used, truncated) = enforce_branchmind_show_budget(&mut result, limit);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_branchmind_show_budget(&mut result, limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_show", result)
     }
 }
 
@@ -1190,6 +1620,65 @@ fn tool_definitions() -> Vec<Value> {
             "name": "storage",
             "description": "Get storage paths and namespaces.",
             "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        }),
+        json!({
+            "name": "branchmind_init",
+            "description": "Initialize workspace storage for reasoning memory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "branchmind_status",
+            "description": "Get reasoning store status for a workspace.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "branchmind_notes_commit",
+            "description": "Append a note entry to the notes document of a target or an explicit (branch, doc).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "content": { "type": "string" },
+                    "title": { "type": "string" },
+                    "format": { "type": "string" },
+                    "meta": { "type": "object" }
+                },
+                "required": ["workspace", "content"]
+            }
+        }),
+        json!({
+            "name": "branchmind_show",
+            "description": "Read a bounded slice (tail/pagination) of a reasoning document.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "doc_kind": { "type": "string", "enum": ["notes", "trace"] },
+                    "branch": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "cursor": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
         }),
         json!({
             "name": "tasks_create",
@@ -1405,6 +1894,16 @@ fn parse_kind(kind: Option<&str>, has_parent: bool) -> TaskKind {
     }
 }
 
+fn parse_plan_or_task_kind(id: &str) -> Option<TaskKind> {
+    if id.starts_with("PLAN-") {
+        Some(TaskKind::Plan)
+    } else if id.starts_with("TASK-") {
+        Some(TaskKind::Task)
+    } else {
+        None
+    }
+}
+
 fn require_workspace(args: &serde_json::Map<String, Value>) -> Result<WorkspaceId, Value> {
     let Some(v) = args.get("workspace").and_then(|v| v.as_str()) else {
         return Err(ai_error("INVALID_INPUT", "workspace is required"));
@@ -1432,32 +1931,45 @@ fn optional_i64(args: &serde_json::Map<String, Value>, key: &str) -> Result<Opti
             .as_i64()
             .map(Some)
             .ok_or_else(|| ai_error("INVALID_INPUT", &format!("{key} must be an integer"))),
-        _ => Err(ai_error("INVALID_INPUT", &format!("{key} must be an integer"))),
+        _ => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be an integer"),
+        )),
     }
 }
 
-fn optional_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, Value> {
+fn optional_string(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, Value> {
     let Some(value) = args.get(key) else {
         return Ok(None);
     };
     match value {
         Value::Null => Ok(None),
         Value::String(v) => Ok(Some(v.to_string())),
-        _ => Err(ai_error("INVALID_INPUT", &format!("{key} must be a string"))),
+        _ => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be a string"),
+        )),
     }
 }
 
-fn optional_usize(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<usize>, Value> {
+fn optional_usize(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<usize>, Value> {
     let Some(value) = args.get(key) else {
         return Ok(None);
     };
     match value {
         Value::Null => Ok(None),
-        Value::Number(n) => n
-            .as_u64()
-            .map(|v| v as usize)
-            .map(Some)
-            .ok_or_else(|| ai_error("INVALID_INPUT", &format!("{key} must be a positive integer"))),
+        Value::Number(n) => n.as_u64().map(|v| v as usize).map(Some).ok_or_else(|| {
+            ai_error(
+                "INVALID_INPUT",
+                &format!("{key} must be a positive integer"),
+            )
+        }),
         _ => Err(ai_error(
             "INVALID_INPUT",
             &format!("{key} must be a positive integer"),
@@ -1465,17 +1977,28 @@ fn optional_usize(args: &serde_json::Map<String, Value>, key: &str) -> Result<Op
     }
 }
 
-fn optional_step_path(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<StepPath>, Value> {
+fn optional_step_path(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<StepPath>, Value> {
     let Some(value) = args.get(key) else {
         return Ok(None);
     };
     let Some(raw) = value.as_str() else {
-        return Err(ai_error("INVALID_INPUT", &format!("{key} must be a string")));
+        return Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be a string"),
+        ));
     };
-    StepPath::parse(raw).map(Some).map_err(|_| ai_error("INVALID_INPUT", &format!("{key} is invalid")))
+    StepPath::parse(raw)
+        .map(Some)
+        .map_err(|_| ai_error("INVALID_INPUT", &format!("{key} is invalid")))
 }
 
-fn optional_string_array(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<Vec<String>>, Value> {
+fn optional_string_array(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<Vec<String>>, Value> {
     if !args.contains_key(key) {
         return Ok(None);
     }
@@ -1483,31 +2006,46 @@ fn optional_string_array(args: &serde_json::Map<String, Value>, key: &str) -> Re
         return Ok(None);
     };
     let Some(arr) = value.as_array() else {
-        return Err(ai_error("INVALID_INPUT", &format!("{key} must be an array of strings")));
+        return Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be an array of strings"),
+        ));
     };
     let mut out = Vec::with_capacity(arr.len());
     for item in arr {
         let Some(s) = item.as_str() else {
-            return Err(ai_error("INVALID_INPUT", &format!("{key} must be an array of strings")));
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!("{key} must be an array of strings"),
+            ));
         };
         out.push(s.to_string());
     }
     Ok(Some(out))
 }
 
-fn optional_non_null_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, Value> {
+fn optional_non_null_string(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, Value> {
     if !args.contains_key(key) {
         return Ok(None);
     }
     match args.get(key) {
         Some(Value::String(v)) => Ok(Some(v.to_string())),
         Some(Value::Null) => Err(ai_error("INVALID_INPUT", &format!("{key} cannot be null"))),
-        Some(_) => Err(ai_error("INVALID_INPUT", &format!("{key} must be a string"))),
+        Some(_) => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be a string"),
+        )),
         None => Ok(None),
     }
 }
 
-fn optional_nullable_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<Option<String>>, Value> {
+fn optional_nullable_string(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<Option<String>>, Value> {
     if !args.contains_key(key) {
         return Ok(None);
     }
@@ -1531,12 +2069,29 @@ fn optional_nullable_object_as_json_string(
     }
     match args.get(key) {
         Some(Value::Null) => Ok(Some(None)),
-        Some(Value::Object(_)) => Ok(Some(Some(
-            args.get(key)
-                .expect("key exists")
-                .to_string(),
-        ))),
-        Some(_) => Err(ai_error("INVALID_INPUT", &format!("{key} must be an object or null"))),
+        Some(Value::Object(_)) => Ok(Some(Some(args.get(key).expect("key exists").to_string()))),
+        Some(_) => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be an object or null"),
+        )),
+        None => Ok(None),
+    }
+}
+
+fn optional_object_as_json_string(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, Value> {
+    if !args.contains_key(key) {
+        return Ok(None);
+    }
+    match args.get(key) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::Object(_)) => Ok(Some(args.get(key).expect("key exists").to_string())),
+        Some(_) => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be an object or null"),
+        )),
         None => Ok(None),
     }
 }
@@ -1557,7 +2112,9 @@ fn format_store_error(err: StoreError) -> String {
         StoreError::Io(e) => format!("IO: {e}"),
         StoreError::Sql(e) => format!("SQL: {e}"),
         StoreError::InvalidInput(msg) => format!("Invalid input: {msg}"),
-        StoreError::RevisionMismatch { expected, actual } => format!("Revision mismatch: expected={expected} actual={actual}"),
+        StoreError::RevisionMismatch { expected, actual } => {
+            format!("Revision mismatch: expected={expected} actual={actual}")
+        }
         StoreError::UnknownId => "Unknown id".to_string(),
         StoreError::StepNotFound => "Step not found".to_string(),
         StoreError::CheckpointsNotConfirmed { criteria, tests } => {
@@ -1590,7 +2147,12 @@ fn ai_ok_with(intent: &str, result: Value, suggestions: Vec<Value>) -> Value {
     })
 }
 
-fn ai_error_with(code: &str, message: &str, recovery: Option<&str>, suggestions: Vec<Value>) -> Value {
+fn ai_error_with(
+    code: &str,
+    message: &str,
+    recovery: Option<&str>,
+    suggestions: Vec<Value>,
+) -> Value {
     let error = match recovery {
         None => json!({ "code": code, "message": message }),
         Some(recovery) => json!({ "code": code, "message": message, "recovery": recovery }),
@@ -1643,6 +2205,108 @@ fn truncate_string(value: &str, max_chars: usize) -> String {
     out
 }
 
+fn enforce_branchmind_show_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
+    if max_chars == 0 {
+        return (json_len_chars(value), false);
+    }
+
+    let mut used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, false);
+    }
+
+    let mut truncated = false;
+
+    if value.get("entries").is_some() {
+        if let Some(entries) = value.get_mut("entries").and_then(|v| v.as_array_mut()) {
+            for entry in entries.iter_mut() {
+                if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
+                    continue;
+                }
+                let Some(content) = entry
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                else {
+                    continue;
+                };
+                let shorter = truncate_string(&content, 256);
+                if let Some(obj) = entry.as_object_mut() {
+                    obj.insert("content".to_string(), Value::String(shorter));
+                }
+            }
+        }
+        truncated = true;
+        used = json_len_chars(value);
+        if used <= max_chars {
+            return (used, truncated);
+        }
+
+        if let Some(entries) = value.get_mut("entries").and_then(|v| v.as_array_mut()) {
+            for entry in entries.iter_mut() {
+                if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
+                    continue;
+                }
+                if let Some(obj) = entry.as_object_mut() {
+                    if obj.contains_key("meta") {
+                        obj.insert("meta".to_string(), Value::Null);
+                    }
+                }
+            }
+        }
+        used = json_len_chars(value);
+        if used <= max_chars {
+            return (used, truncated);
+        }
+
+        loop {
+            used = json_len_chars(value);
+            if used <= max_chars {
+                return (used, truncated);
+            }
+            let removed =
+                if let Some(entries) = value.get_mut("entries").and_then(|v| v.as_array_mut()) {
+                    if entries.is_empty() {
+                        false
+                    } else {
+                        entries.remove(0);
+                        true
+                    }
+                } else {
+                    false
+                };
+            if !removed {
+                break;
+            }
+            truncated = true;
+        }
+    }
+
+    if value.get("last_doc_entry").is_some() {
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("last_doc_entry");
+        }
+        truncated = true;
+        used = json_len_chars(value);
+        if used <= max_chars {
+            return (used, truncated);
+        }
+    }
+
+    if value.get("last_event").is_some() {
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("last_event");
+        }
+        truncated = true;
+        used = json_len_chars(value);
+        if used <= max_chars {
+            return (used, truncated);
+        }
+    }
+
+    (used, truncated)
+}
+
 fn enforce_max_chars_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
     if max_chars == 0 {
         return (json_len_chars(value), false);
@@ -1688,17 +2352,37 @@ fn enforce_max_chars_budget(value: &mut Value, max_chars: usize) -> (usize, bool
     (used, truncated)
 }
 
-fn attach_budget(value: &mut Value, max_chars: usize, used_chars: usize, truncated: bool) {
+fn attach_budget(value: &mut Value, max_chars: usize, truncated: bool) -> usize {
     if let Some(obj) = value.as_object_mut() {
         obj.insert(
             "budget".to_string(),
             json!({
                 "max_chars": max_chars,
-                "used_chars": used_chars,
+                "used_chars": 0,
                 "truncated": truncated
             }),
         );
     }
+
+    let mut used = json_len_chars(value);
+    for _ in 0..4 {
+        if let Some(obj) = value.as_object_mut() {
+            if let Some(budget) = obj.get_mut("budget").and_then(|v| v.as_object_mut()) {
+                budget.insert(
+                    "used_chars".to_string(),
+                    Value::Number(serde_json::Number::from(used as u64)),
+                );
+                budget.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+        }
+        let next = json_len_chars(value);
+        if next == used {
+            break;
+        }
+        used = next;
+    }
+
+    used
 }
 
 fn parse_storage_dir() -> PathBuf {

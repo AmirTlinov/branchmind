@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
 use bm_core::ids::WorkspaceId;
-use bm_core::paths::StepPath;
 use bm_core::model::{ReasoningRef, TaskKind};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use bm_core::paths::StepPath;
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -24,12 +24,18 @@ impl std::fmt::Display for StoreError {
             Self::Sql(err) => write!(f, "sqlite: {err}"),
             Self::InvalidInput(message) => write!(f, "invalid input: {message}"),
             Self::RevisionMismatch { expected, actual } => {
-                write!(f, "revision mismatch (expected={expected}, actual={actual})")
+                write!(
+                    f,
+                    "revision mismatch (expected={expected}, actual={actual})"
+                )
             }
             Self::UnknownId => write!(f, "unknown id"),
             Self::StepNotFound => write!(f, "step not found"),
             Self::CheckpointsNotConfirmed { criteria, tests } => {
-                write!(f, "checkpoints not confirmed (criteria={criteria}, tests={tests})")
+                write!(
+                    f,
+                    "checkpoints not confirmed (criteria={criteria}, tests={tests})"
+                )
             }
         }
     }
@@ -77,6 +83,61 @@ pub struct ReasoningRefRow {
     pub notes_doc: String,
     pub graph_doc: String,
     pub trace_doc: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentKind {
+    Notes,
+    Trace,
+}
+
+impl DocumentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Notes => "notes",
+            Self::Trace => "trace",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocEntryKind {
+    Note,
+    Event,
+}
+
+impl DocEntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Event => "event",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DocEntryRow {
+    pub seq: i64,
+    pub ts_ms: i64,
+    pub branch: String,
+    pub doc: String,
+    pub kind: DocEntryKind,
+    pub title: Option<String>,
+    pub format: Option<String>,
+    pub meta_json: Option<String>,
+    pub content: Option<String>,
+    pub source_event_id: Option<String>,
+    pub event_type: Option<String>,
+    pub task_id: Option<String>,
+    pub path: Option<String>,
+    pub payload_json: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DocSlice {
+    pub entries: Vec<DocEntryRow>,
+    pub next_cursor: Option<i64>,
+    pub has_more: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +223,14 @@ impl SqliteStore {
         &self.storage_dir
     }
 
+    pub fn workspace_init(&mut self, workspace: &WorkspaceId) -> Result<(), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn migrate(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             r#"
@@ -237,6 +306,34 @@ impl SqliteStore {
               PRIMARY KEY (workspace, id)
             );
 
+            CREATE TABLE IF NOT EXISTS documents (
+              workspace TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, branch, doc)
+            );
+
+            CREATE TABLE IF NOT EXISTS doc_entries (
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              workspace TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              ts_ms INTEGER NOT NULL,
+              kind TEXT NOT NULL,
+              title TEXT,
+              format TEXT,
+              meta_json TEXT,
+              content TEXT,
+              source_event_id TEXT,
+              event_type TEXT,
+              task_id TEXT,
+              path TEXT,
+              payload_json TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS steps (
               workspace TEXT NOT NULL,
               task_id TEXT NOT NULL,
@@ -286,6 +383,8 @@ impl SqliteStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_events_workspace_seq ON events(workspace, seq);
+            CREATE INDEX IF NOT EXISTS idx_doc_entries_lookup ON doc_entries(workspace, branch, doc, seq);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_entries_event_dedup ON doc_entries(workspace, branch, doc, source_event_id) WHERE source_event_id IS NOT NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_root_unique ON steps(workspace, task_id, ordinal) WHERE parent_step_id IS NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_child_unique ON steps(workspace, task_id, parent_step_id, ordinal) WHERE parent_step_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_steps_lookup ON steps(workspace, task_id, parent_step_id, ordinal);
@@ -346,7 +445,8 @@ impl SqliteStore {
                 )?;
             }
             TaskKind::Task => {
-                let parent_plan_id = parent_plan_id.ok_or(StoreError::InvalidInput("parent is required for kind=task"))?;
+                let parent_plan_id = parent_plan_id
+                    .ok_or(StoreError::InvalidInput("parent is required for kind=task"))?;
                 tx.execute(
                     r#"
                     INSERT INTO tasks(workspace,id,revision,parent_plan_id,title,description,created_at_ms,updated_at_ms)
@@ -377,6 +477,15 @@ impl SqliteStore {
             None,
             &event_type,
             &event_payload_json,
+        )?;
+
+        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, &id, kind, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
         )?;
 
         tx.commit()?;
@@ -465,6 +574,15 @@ impl SqliteStore {
             &event_payload_json,
         )?;
 
+        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, id, TaskKind::Plan, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
         tx.commit()?;
         Ok((new_revision, event))
     }
@@ -494,7 +612,13 @@ impl SqliteStore {
                 WHERE workspace = ?1 AND id = ?2
                 "#,
                 params![workspace.as_str(), id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .optional()?;
 
@@ -521,7 +645,14 @@ impl SqliteStore {
             SET revision = ?3, title = ?4, description = ?5, updated_at_ms = ?6
             WHERE workspace = ?1 AND id = ?2
             "#,
-            params![workspace.as_str(), id, new_revision, new_title, new_description, now_ms],
+            params![
+                workspace.as_str(),
+                id,
+                new_revision,
+                new_title,
+                new_description,
+                now_ms
+            ],
         )?;
 
         let event = insert_event_tx(
@@ -534,11 +665,24 @@ impl SqliteStore {
             &event_payload_json,
         )?;
 
+        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
         tx.commit()?;
         Ok((new_revision, event))
     }
 
-    pub fn get_plan(&self, workspace: &WorkspaceId, id: &str) -> Result<Option<PlanRow>, StoreError> {
+    pub fn get_plan(
+        &self,
+        workspace: &WorkspaceId,
+        id: &str,
+    ) -> Result<Option<PlanRow>, StoreError> {
         Ok(self
             .conn
             .query_row(
@@ -563,7 +707,11 @@ impl SqliteStore {
             .optional()?)
     }
 
-    pub fn get_task(&self, workspace: &WorkspaceId, id: &str) -> Result<Option<TaskRow>, StoreError> {
+    pub fn get_task(
+        &self,
+        workspace: &WorkspaceId,
+        id: &str,
+    ) -> Result<Option<TaskRow>, StoreError> {
         Ok(self
             .conn
             .query_row(
@@ -617,7 +765,10 @@ impl SqliteStore {
 
     pub fn focus_clear(&mut self, workspace: &WorkspaceId) -> Result<bool, StoreError> {
         let tx = self.conn.transaction()?;
-        let deleted = tx.execute("DELETE FROM focus WHERE workspace = ?1", params![workspace.as_str()])?;
+        let deleted = tx.execute(
+            "DELETE FROM focus WHERE workspace = ?1",
+            params![workspace.as_str()],
+        )?;
         tx.commit()?;
         Ok(deleted > 0)
     }
@@ -708,6 +859,183 @@ impl SqliteStore {
         Ok(row)
     }
 
+    pub fn doc_append_note(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        title: Option<String>,
+        format: Option<String>,
+        meta_json: Option<String>,
+        content: String,
+    ) -> Result<DocEntryRow, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+        if content.trim().is_empty() {
+            return Err(StoreError::InvalidInput("content must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            branch,
+            doc,
+            DocumentKind::Notes.as_str(),
+            now_ms,
+        )?;
+
+        tx.execute(
+            r#"
+            INSERT INTO doc_entries(workspace, branch, doc, ts_ms, kind, title, format, meta_json, content)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                workspace.as_str(),
+                branch,
+                doc,
+                now_ms,
+                DocEntryKind::Note.as_str(),
+                title.as_deref(),
+                format.as_deref(),
+                meta_json.as_deref(),
+                &content
+            ],
+        )?;
+        let seq = tx.last_insert_rowid();
+        touch_document_tx(&tx, workspace.as_str(), branch, doc, now_ms)?;
+
+        tx.commit()?;
+        Ok(DocEntryRow {
+            seq,
+            ts_ms: now_ms,
+            branch: branch.to_string(),
+            doc: doc.to_string(),
+            kind: DocEntryKind::Note,
+            title,
+            format,
+            meta_json,
+            content: Some(content),
+            source_event_id: None,
+            event_type: None,
+            task_id: None,
+            path: None,
+            payload_json: None,
+        })
+    }
+
+    pub fn doc_show_tail(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        cursor: Option<i64>,
+        limit: usize,
+    ) -> Result<DocSlice, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let before_seq = cursor.unwrap_or(i64::MAX);
+        let limit = limit.clamp(1, 200) as i64;
+        let tx = self.conn.transaction()?;
+
+        let mut entries_desc = Vec::new();
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT seq, ts_ms, kind, title, format, meta_json, content, source_event_id, event_type, task_id, path, payload_json
+                FROM doc_entries
+                WHERE workspace=?1 AND branch=?2 AND doc=?3 AND seq < ?4
+                ORDER BY seq DESC
+                LIMIT ?5
+                "#,
+            )?;
+            let mut rows = stmt.query(params![
+                workspace.as_str(),
+                branch,
+                doc,
+                before_seq,
+                limit + 1
+            ])?;
+
+            while let Some(row) = rows.next()? {
+                let kind_str: String = row.get(2)?;
+                let kind = match kind_str.as_str() {
+                    "note" => DocEntryKind::Note,
+                    "event" => DocEntryKind::Event,
+                    _ => DocEntryKind::Event,
+                };
+                entries_desc.push(DocEntryRow {
+                    seq: row.get(0)?,
+                    ts_ms: row.get(1)?,
+                    branch: branch.to_string(),
+                    doc: doc.to_string(),
+                    kind,
+                    title: row.get(3)?,
+                    format: row.get(4)?,
+                    meta_json: row.get(5)?,
+                    content: row.get(6)?,
+                    source_event_id: row.get(7)?,
+                    event_type: row.get(8)?,
+                    task_id: row.get(9)?,
+                    path: row.get(10)?,
+                    payload_json: row.get(11)?,
+                });
+            }
+        }
+
+        let has_more = entries_desc.len() as i64 > limit;
+        if has_more {
+            entries_desc.truncate(limit as usize);
+        }
+
+        let next_cursor = if has_more {
+            entries_desc.last().map(|e| e.seq)
+        } else {
+            None
+        };
+
+        entries_desc.reverse();
+        tx.commit()?;
+
+        Ok(DocSlice {
+            entries: entries_desc,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    pub fn doc_ingest_task_event(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        event: &EventRow,
+    ) -> Result<bool, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, event.ts_ms)?;
+        let inserted = ingest_task_event_tx(&tx, workspace.as_str(), branch, doc, event)?;
+        tx.commit()?;
+        Ok(inserted)
+    }
+
     pub fn steps_decompose(
         &mut self,
         workspace: &WorkspaceId,
@@ -724,7 +1052,8 @@ impl SqliteStore {
         let tx = self.conn.transaction()?;
         ensure_workspace_tx(&tx, workspace, now_ms)?;
 
-        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
 
         let parent_step_id = match parent_path {
             None => None,
@@ -794,7 +1123,8 @@ impl SqliteStore {
         }
 
         let parent_path_str = parent_path.map(|p| p.to_string());
-        let event_payload_json = build_steps_added_payload(task_id, parent_path_str.as_deref(), &created_steps);
+        let event_payload_json =
+            build_steps_added_payload(task_id, parent_path_str.as_deref(), &created_steps);
         let event = insert_event_tx(
             &tx,
             workspace.as_str(),
@@ -803,6 +1133,16 @@ impl SqliteStore {
             parent_path_str,
             "steps_added",
             &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
         )?;
 
         tx.commit()?;
@@ -832,8 +1172,10 @@ impl SqliteStore {
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
 
-        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
-        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
 
         let mut fields = Vec::new();
 
@@ -910,6 +1252,16 @@ impl SqliteStore {
             &event_payload_json,
         )?;
 
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
         tx.commit()?;
         Ok(StepOpResult {
             task_revision,
@@ -934,8 +1286,10 @@ impl SqliteStore {
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
 
-        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
-        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
 
         tx.execute(
             "INSERT INTO step_notes(workspace, task_id, step_id, ts_ms, note) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -956,6 +1310,16 @@ impl SqliteStore {
             Some(path.clone()),
             "step_noted",
             &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
         )?;
 
         tx.commit()?;
@@ -983,8 +1347,10 @@ impl SqliteStore {
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
 
-        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
-        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
         if criteria_confirmed.is_some() && tests_confirmed.is_some() {
             tx.execute(
                 "UPDATE steps SET criteria_confirmed=?4, tests_confirmed=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
@@ -1013,7 +1379,8 @@ impl SqliteStore {
             step_id: step_id.clone(),
             path: path.clone(),
         };
-        let event_payload_json = build_step_verified_payload(task_id, &step_ref, criteria_confirmed, tests_confirmed);
+        let event_payload_json =
+            build_step_verified_payload(task_id, &step_ref, criteria_confirmed, tests_confirmed);
         let event = insert_event_tx(
             &tx,
             workspace.as_str(),
@@ -1022,6 +1389,16 @@ impl SqliteStore {
             Some(path.clone()),
             "step_verified",
             &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
         )?;
 
         tx.commit()?;
@@ -1043,8 +1420,10 @@ impl SqliteStore {
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
 
-        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
-        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
 
         let row = tx
             .query_row(
@@ -1089,6 +1468,16 @@ impl SqliteStore {
             &event_payload_json,
         )?;
 
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
         tx.commit()?;
         Ok(StepOpResult {
             task_revision,
@@ -1097,7 +1486,11 @@ impl SqliteStore {
         })
     }
 
-    pub fn task_steps_summary(&mut self, workspace: &WorkspaceId, task_id: &str) -> Result<TaskStepSummary, StoreError> {
+    pub fn task_steps_summary(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+    ) -> Result<TaskStepSummary, StoreError> {
         let tx = self.conn.transaction()?;
 
         let exists = tx
@@ -1183,7 +1576,12 @@ impl SqliteStore {
         })
     }
 
-    pub fn task_open_blockers(&self, workspace: &WorkspaceId, task_id: &str, limit: usize) -> Result<Vec<String>, StoreError> {
+    pub fn task_open_blockers(
+        &self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT b.text
@@ -1195,11 +1593,18 @@ impl SqliteStore {
             LIMIT ?3
             "#,
         )?;
-        let rows = stmt.query_map(params![workspace.as_str(), task_id, limit as i64], |row| row.get::<_, String>(0))?;
+        let rows = stmt.query_map(params![workspace.as_str(), task_id, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn list_plans(&self, workspace: &WorkspaceId, limit: usize, offset: usize) -> Result<Vec<PlanRow>, StoreError> {
+    pub fn list_plans(
+        &self,
+        workspace: &WorkspaceId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<PlanRow>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT id, revision, title, contract, contract_json, created_at_ms, updated_at_ms
@@ -1226,7 +1631,12 @@ impl SqliteStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn list_tasks(&self, workspace: &WorkspaceId, limit: usize, offset: usize) -> Result<Vec<TaskRow>, StoreError> {
+    pub fn list_tasks(
+        &self,
+        workspace: &WorkspaceId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<TaskRow>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT id, revision, parent_plan_id, title, description, created_at_ms, updated_at_ms
@@ -1261,7 +1671,9 @@ impl SqliteStore {
     ) -> Result<Vec<EventRow>, StoreError> {
         let since_seq = match since_event_id {
             None => 0i64,
-            Some(event_id) => parse_event_id(event_id).ok_or(StoreError::InvalidInput("since must be like evt_<16-digit-seq>"))?,
+            Some(event_id) => parse_event_id(event_id).ok_or(StoreError::InvalidInput(
+                "since must be like evt_<16-digit-seq>",
+            ))?,
         };
 
         let mut stmt = self.conn.prepare(
@@ -1273,19 +1685,69 @@ impl SqliteStore {
             LIMIT ?3
             "#,
         )?;
-        let rows = stmt.query_map(params![workspace.as_str(), since_seq, limit as i64], |row| {
-            Ok(EventRow {
-                seq: row.get(0)?,
-                ts_ms: row.get(1)?,
-                task_id: row.get(2)?,
-                path: row.get(3)?,
-                event_type: row.get(4)?,
-                payload_json: row.get(5)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            params![workspace.as_str(), since_seq, limit as i64],
+            |row| {
+                Ok(EventRow {
+                    seq: row.get(0)?,
+                    ts_ms: row.get(1)?,
+                    task_id: row.get(2)?,
+                    path: row.get(3)?,
+                    event_type: row.get(4)?,
+                    payload_json: row.get(5)?,
+                })
+            },
+        )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    pub fn workspace_exists(&self, workspace: &WorkspaceId) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM workspaces WHERE workspace=?1",
+                params![workspace.as_str()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    pub fn workspace_last_event_head(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Option<(i64, i64)>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT seq, ts_ms FROM events WHERE workspace=?1 ORDER BY seq DESC LIMIT 1",
+                params![workspace.as_str()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn workspace_last_doc_entry_head(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Option<(i64, i64, String, String, String)>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT seq, ts_ms, branch, doc, kind FROM doc_entries WHERE workspace=?1 ORDER BY seq DESC LIMIT 1",
+                params![workspace.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()?)
+    }
 }
 
 fn now_ms() -> i64 {
@@ -1295,7 +1757,119 @@ fn now_ms() -> i64 {
     now.as_millis() as i64
 }
 
-fn ensure_workspace_tx(tx: &Transaction<'_>, workspace: &WorkspaceId, now_ms: i64) -> Result<(), StoreError> {
+fn ensure_document_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    kind: &str,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    tx.execute(
+        r#"
+        INSERT INTO documents(workspace, branch, doc, kind, created_at_ms, updated_at_ms)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(workspace, branch, doc) DO NOTHING
+        "#,
+        params![workspace, branch, doc, kind, now_ms, now_ms],
+    )?;
+    Ok(())
+}
+
+fn touch_document_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE documents SET updated_at_ms=?4 WHERE workspace=?1 AND branch=?2 AND doc=?3",
+        params![workspace, branch, doc, now_ms],
+    )?;
+    Ok(())
+}
+
+fn ensure_reasoning_ref_tx(
+    tx: &Transaction<'_>,
+    workspace: &WorkspaceId,
+    id: &str,
+    kind: TaskKind,
+    now_ms: i64,
+) -> Result<ReasoningRefRow, StoreError> {
+    let reference = ReasoningRef::for_entity(kind, id);
+    tx.execute(
+        r#"
+        INSERT OR IGNORE INTO reasoning_refs(workspace, id, kind, branch, notes_doc, graph_doc, trace_doc, created_at_ms)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "#,
+        params![
+            workspace.as_str(),
+            id,
+            kind.as_str(),
+            &reference.branch,
+            &reference.notes_doc,
+            &reference.graph_doc,
+            &reference.trace_doc,
+            now_ms
+        ],
+    )?;
+    Ok(ReasoningRefRow {
+        branch: reference.branch,
+        notes_doc: reference.notes_doc,
+        graph_doc: reference.graph_doc,
+        trace_doc: reference.trace_doc,
+    })
+}
+
+fn ingest_task_event_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    event: &EventRow,
+) -> Result<bool, StoreError> {
+    ensure_document_tx(
+        tx,
+        workspace,
+        branch,
+        doc,
+        DocumentKind::Trace.as_str(),
+        event.ts_ms,
+    )?;
+
+    let event_id = event.event_id();
+    let inserted = tx.execute(
+        r#"
+        INSERT OR IGNORE INTO doc_entries(workspace, branch, doc, ts_ms, kind, source_event_id, event_type, task_id, path, payload_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "#,
+        params![
+            workspace,
+            branch,
+            doc,
+            event.ts_ms,
+            DocEntryKind::Event.as_str(),
+            event_id,
+            &event.event_type,
+            event.task_id.as_deref(),
+            event.path.as_deref(),
+            &event.payload_json
+        ],
+    )?;
+
+    if inserted > 0 {
+        touch_document_tx(tx, workspace, branch, doc, event.ts_ms)?;
+    }
+
+    Ok(inserted > 0)
+}
+
+fn ensure_workspace_tx(
+    tx: &Transaction<'_>,
+    workspace: &WorkspaceId,
+    now_ms: i64,
+) -> Result<(), StoreError> {
     tx.execute(
         "INSERT OR IGNORE INTO workspaces(workspace, created_at_ms) VALUES (?1, ?2)",
         params![workspace.as_str(), now_ms],
@@ -1336,7 +1910,12 @@ fn bump_task_revision_tx(
     Ok(next)
 }
 
-fn resolve_step_id_tx(tx: &Transaction<'_>, workspace: &str, task_id: &str, path: &StepPath) -> Result<String, StoreError> {
+fn resolve_step_id_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    path: &StepPath,
+) -> Result<String, StoreError> {
     let mut parent_step_id: Option<String> = None;
     for ordinal in path.indices() {
         let step_id: Option<String> = match parent_step_id.as_deref() {
@@ -1364,7 +1943,12 @@ fn resolve_step_id_tx(tx: &Transaction<'_>, workspace: &str, task_id: &str, path
     parent_step_id.ok_or(StoreError::StepNotFound)
 }
 
-fn step_path_for_step_id_tx(tx: &Transaction<'_>, workspace: &str, task_id: &str, step_id: &str) -> Result<String, StoreError> {
+fn step_path_for_step_id_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    step_id: &str,
+) -> Result<String, StoreError> {
     let mut ordinals = Vec::new();
     let mut current = step_id.to_string();
 
@@ -1387,7 +1971,11 @@ fn step_path_for_step_id_tx(tx: &Transaction<'_>, workspace: &str, task_id: &str
     }
 
     ordinals.reverse();
-    Ok(ordinals.into_iter().map(|i| format!("s:{i}")).collect::<Vec<_>>().join("."))
+    Ok(ordinals
+        .into_iter()
+        .map(|i| format!("s:{i}"))
+        .collect::<Vec<_>>()
+        .join("."))
 }
 
 fn resolve_step_selector_tx(
@@ -1410,7 +1998,10 @@ fn resolve_step_selector_tx(
             if !exists {
                 return Err(StoreError::StepNotFound);
             }
-            Ok((step_id.to_string(), step_path_for_step_id_tx(tx, workspace, task_id, step_id)?))
+            Ok((
+                step_id.to_string(),
+                step_path_for_step_id_tx(tx, workspace, task_id, step_id)?,
+            ))
         }
         (None, Some(path)) => {
             let step_id = resolve_step_id_tx(tx, workspace, task_id, path)?;
@@ -1440,7 +2031,11 @@ fn next_counter_tx(tx: &Transaction<'_>, workspace: &str, name: &str) -> Result<
     Ok(next)
 }
 
-fn build_steps_added_payload(task_id: &str, parent_path: Option<&str>, steps: &[StepRef]) -> String {
+fn build_steps_added_payload(
+    task_id: &str,
+    parent_path: Option<&str>,
+    steps: &[StepRef],
+) -> String {
     let mut out = String::new();
     out.push_str("{\"task\":\"");
     out.push_str(task_id);

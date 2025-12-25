@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -102,7 +102,10 @@ fn mcp_requires_notifications_initialized() {
         "method": "initialize",
         "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
     }));
-    assert!(init.get("result").is_some(), "initialize must return result");
+    assert!(
+        init.get("result").is_some(),
+        "initialize must return result"
+    );
 
     let tools_list_before = server.request(json!({
         "jsonrpc": "2.0",
@@ -114,7 +117,8 @@ fn mcp_requires_notifications_initialized() {
 
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 
-    let tools_list = server.request(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {} }));
+    let tools_list =
+        server.request(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {} }));
     let tools = tools_list
         .get("result")
         .and_then(|v| v.get("tools"))
@@ -123,12 +127,20 @@ fn mcp_requires_notifications_initialized() {
 
     let mut names = tools
         .iter()
-        .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter_map(|t| {
+            t.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .collect::<Vec<_>>();
     names.sort();
     assert_eq!(
         names,
         vec![
+            "branchmind_init",
+            "branchmind_notes_commit",
+            "branchmind_show",
+            "branchmind_status",
             "storage",
             "tasks_context",
             "tasks_create",
@@ -145,6 +157,128 @@ fn mcp_requires_notifications_initialized() {
             "tasks_verify",
         ]
     );
+}
+
+#[test]
+fn branchmind_notes_and_trace_ingestion_smoke() {
+    let mut server = Server::start("branchmind_memory_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let created_task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } }
+    }));
+    let created_task_text = extract_tool_text(&created_task);
+    let task_id = created_task_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let decompose = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws1", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+    }));
+    let decompose_text = extract_tool_text(&decompose);
+    assert_eq!(
+        decompose_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let task_id = decompose_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let show_trace = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "branchmind_show", "arguments": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "trace", "limit": 50 } }
+    }));
+    let trace_text = extract_tool_text(&show_trace);
+    let entries = trace_text
+        .get("result")
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .expect("entries");
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.get("event_type").and_then(|v| v.as_str()) == Some("task_created")),
+        "trace must contain task_created"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.get("event_type").and_then(|v| v.as_str()) == Some("steps_added")),
+        "trace must contain steps_added"
+    );
+
+    let long_note = "x".repeat(2048);
+    let notes_commit = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": { "name": "branchmind_notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": long_note } }
+    }));
+    let notes_commit_text = extract_tool_text(&notes_commit);
+    assert_eq!(
+        notes_commit_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let show_notes_budget = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": { "name": "branchmind_show", "arguments": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "notes", "limit": 50, "max_chars": 400 } }
+    }));
+    let notes_text = extract_tool_text(&show_notes_budget);
+    assert_eq!(
+        notes_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let truncated = notes_text
+        .get("result")
+        .and_then(|v| v.get("truncated"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    assert!(truncated, "expected truncated=true with small max_chars");
+    let used = notes_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .and_then(|v| v.get("used_chars"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(9999);
+    assert!(used <= 400, "budget.used_chars must not exceed max_chars");
 }
 
 #[test]
@@ -188,9 +322,7 @@ fn tasks_create_context_delta_smoke() {
     }));
     let created_task_text = extract_tool_text(&created_task);
     assert_eq!(
-        created_task_text
-            .get("success")
-            .and_then(|v| v.as_bool()),
+        created_task_text.get("success").and_then(|v| v.as_bool()),
         Some(true)
     );
 
@@ -236,10 +368,7 @@ fn tasks_create_context_delta_smoke() {
         plans[0].get("title").and_then(|v| v.as_str()),
         Some("Plan B")
     );
-    assert_eq!(
-        plans[0].get("revision").and_then(|v| v.as_i64()),
-        Some(1)
-    );
+    assert_eq!(plans[0].get("revision").and_then(|v| v.as_i64()), Some(1));
 
     let delta = server.request(json!({
         "jsonrpc": "2.0",
@@ -307,7 +436,10 @@ fn tasks_edit_revision_mismatch() {
         .get("suggestions")
         .and_then(|v| v.as_array())
         .expect("suggestions");
-    assert!(!suggestions.is_empty(), "REVISION_MISMATCH must include suggestions");
+    assert!(
+        !suggestions.is_empty(),
+        "REVISION_MISMATCH must include suggestions"
+    );
     assert_eq!(
         suggestions[0].get("target").and_then(|v| v.as_str()),
         Some("tasks_context")
@@ -376,9 +508,7 @@ fn tasks_focus_and_radar_smoke() {
     }));
     let focus_before_text = extract_tool_text(&focus_before);
     assert_eq!(
-        focus_before_text
-            .get("result")
-            .and_then(|v| v.get("focus")),
+        focus_before_text.get("result").and_then(|v| v.get("focus")),
         Some(&Value::Null)
     );
 
@@ -575,7 +705,10 @@ fn tasks_steps_gated_done_and_radar() {
         .and_then(|v| v.get("verify"))
         .and_then(|v| v.as_array())
         .expect("radar.verify");
-    assert!(!verify.is_empty(), "radar.verify must reflect missing checkpoints");
+    assert!(
+        !verify.is_empty(),
+        "radar.verify must reflect missing checkpoints"
+    );
 
     let done_without_verify = server.request(json!({
         "jsonrpc": "2.0",
