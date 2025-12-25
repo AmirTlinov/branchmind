@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod graph;
+
 pub mod ids {
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
     pub struct WorkspaceId(String);
@@ -97,13 +99,17 @@ pub mod paths {
                 indices: vec![ordinal],
             }
         }
+    }
 
-        pub fn to_string(&self) -> String {
-            self.indices
-                .iter()
-                .map(|i| format!("s:{i}"))
-                .collect::<Vec<_>>()
-                .join(".")
+    impl std::fmt::Display for StepPath {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            for (idx, ordinal) in self.indices.iter().enumerate() {
+                if idx > 0 {
+                    f.write_str(".")?;
+                }
+                write!(f, "s:{ordinal}")?;
+            }
+            Ok(())
         }
     }
 
@@ -169,8 +175,6 @@ pub mod think {
 
     pub fn is_supported_think_card_type(value: &str) -> bool {
         let value = value.trim();
-        SUPPORTED_THINK_CARD_TYPES
-            .iter()
-            .any(|candidate| *candidate == value)
+        SUPPORTED_THINK_CARD_TYPES.contains(&value)
     }
 }

@@ -207,6 +207,14 @@ Minimal fields:
 
 ## Graph tool surface (Milestone 4)
 
+### Type discipline (v0)
+
+Although MCP inputs/outputs are JSON strings, the server treats graph keys as typed domain values:
+
+- Node IDs (`GraphNodeId`) and edge keys (`from`, `rel`, `to`) are strictly validated.
+- `type` and `rel` are free-form strings, but must pass validation (no control chars; bounded length; `|` reserved).
+- `tags` are normalized (lowercased, deduplicated, stable ordering).
+
 ### `branchmind_graph_apply`
 
 Apply a batch of typed graph operations to a target’s graph document or an explicit `(branch, doc)`.

@@ -75,6 +75,33 @@ Human-oriented, index-based step addressing.
 { "type": "string", "pattern": "^s:[0-9]+(\\.s:[0-9]+)*$" }
 ```
 
+### GraphNodeId / GraphType / GraphRel (v0)
+
+Graph identifiers are **validated and canonicalized** by the server. They are intentionally
+string-based on the MCP surface, but treated as typed domain values internally.
+
+Constraints (v0):
+
+- `GraphNodeId`:
+  - non-empty, max 256 chars
+  - must not contain `|`
+  - must not contain control characters
+- `GraphType`:
+  - non-empty, max 128 chars
+  - must not contain control characters
+- `GraphRel`:
+  - non-empty, max 128 chars
+  - must not contain `|`
+  - must not contain control characters
+
+### ConflictId (v0)
+
+Graph merge conflicts are first-class entities with deterministic IDs.
+
+```json
+{ "type": "string", "pattern": "^CONFLICT-[0-9a-f]{32}$" }
+```
+
 ## Optimistic concurrency
 
 Every mutable entity carries a monotonic integer `revision`.
