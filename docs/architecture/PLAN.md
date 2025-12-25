@@ -10,7 +10,7 @@ This plan is intentionally staged to keep the system verifiable at every step.
 
 ## Milestone 1 — Task domain MVP (execution)
 
-- `tasks_create` (plan/task) + `tasks_context` (list) + `tasks_edit` (meta)
+- `tasks_create` (plan/task) + `tasks_context` (list) + `tasks_edit` (meta) + `tasks_delta` (event stream)
 - Revisions (`expected_revision`) and strict targeting semantics
 - `tasks_radar` (one-screen) for a single active target
 
@@ -36,4 +36,3 @@ This plan is intentionally staged to keep the system verifiable at every step.
 - Performance: indexes, pagination, bounded outputs everywhere
 - Crash-safety: transactions + recovery
 - Security: artifact leakage tests; redaction policy where needed
-

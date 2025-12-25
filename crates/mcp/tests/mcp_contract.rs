@@ -128,7 +128,7 @@ fn mcp_requires_notifications_initialized() {
     names.sort();
     assert_eq!(
         names,
-        vec!["storage", "tasks_context", "tasks_create", "tasks_delta"]
+        vec!["storage", "tasks_context", "tasks_create", "tasks_delta", "tasks_edit"]
     );
 }
 
@@ -169,7 +169,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     assert_eq!(
@@ -179,9 +179,28 @@ fn tasks_create_context_delta_smoke() {
         Some(true)
     );
 
-    let context = server.request(json!({
+    let edited_plan = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_edit", "arguments": { "workspace": "ws1", "task": plan_id, "expected_revision": 0, "title": "Plan B" } }
+    }));
+    let edited_text = extract_tool_text(&edited_plan);
+    assert_eq!(
+        edited_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        edited_text
+            .get("result")
+            .and_then(|v| v.get("revision"))
+            .and_then(|v| v.as_i64()),
+        Some(1)
+    );
+
+    let context = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
         "method": "tools/call",
         "params": { "name": "tasks_context", "arguments": { "workspace": "ws1" } }
     }));
@@ -198,10 +217,18 @@ fn tasks_create_context_delta_smoke() {
         .expect("tasks");
     assert_eq!(plans.len(), 1);
     assert_eq!(tasks.len(), 1);
+    assert_eq!(
+        plans[0].get("title").and_then(|v| v.as_str()),
+        Some("Plan B")
+    );
+    assert_eq!(
+        plans[0].get("revision").and_then(|v| v.as_i64()),
+        Some(1)
+    );
 
     let delta = server.request(json!({
         "jsonrpc": "2.0",
-        "id": 5,
+        "id": 6,
         "method": "tools/call",
         "params": { "name": "tasks_delta", "arguments": { "workspace": "ws1" } }
     }));
@@ -211,5 +238,68 @@ fn tasks_create_context_delta_smoke() {
         .and_then(|v| v.get("events"))
         .and_then(|v| v.as_array())
         .expect("events");
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.len(), 3);
+}
+
+#[test]
+fn tasks_edit_revision_mismatch() {
+    let mut server = Server::start("tasks_edit_revision_mismatch");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let mismatch = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_edit", "arguments": { "workspace": "ws1", "task": plan_id, "expected_revision": 999, "title": "Nope" } }
+    }));
+    assert_eq!(
+        mismatch
+            .get("result")
+            .and_then(|v| v.get("isError"))
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let mismatch_text = extract_tool_text(&mismatch);
+    assert_eq!(
+        mismatch_text
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("REVISION_MISMATCH")
+    );
+
+    let delta = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_delta", "arguments": { "workspace": "ws1" } }
+    }));
+    let delta_text = extract_tool_text(&delta);
+    let events = delta_text
+        .get("result")
+        .and_then(|v| v.get("events"))
+        .and_then(|v| v.as_array())
+        .expect("events");
+    assert_eq!(events.len(), 1);
 }

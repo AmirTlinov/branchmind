@@ -10,6 +10,7 @@ pub enum StoreError {
     Io(std::io::Error),
     Sql(rusqlite::Error),
     InvalidInput(&'static str),
+    RevisionMismatch { expected: i64, actual: i64 },
     UnknownId,
 }
 
@@ -19,6 +20,9 @@ impl std::fmt::Display for StoreError {
             Self::Io(err) => write!(f, "io: {err}"),
             Self::Sql(err) => write!(f, "sqlite: {err}"),
             Self::InvalidInput(message) => write!(f, "invalid input: {message}"),
+            Self::RevisionMismatch { expected, actual } => {
+                write!(f, "revision mismatch (expected={expected}, actual={actual})")
+            }
             Self::UnknownId => write!(f, "unknown id"),
         }
     }
@@ -246,6 +250,161 @@ impl SqliteStore {
 
         tx.commit()?;
         Ok((id, 0i64, event))
+    }
+
+    pub fn edit_plan(
+        &mut self,
+        workspace: &WorkspaceId,
+        id: &str,
+        expected_revision: Option<i64>,
+        title: Option<String>,
+        contract: Option<Option<String>>,
+        contract_json: Option<Option<String>>,
+        event_type: String,
+        event_payload_json: String,
+    ) -> Result<(i64, EventRow), StoreError> {
+        if title.is_none() && contract.is_none() && contract_json.is_none() {
+            return Err(StoreError::InvalidInput("no fields to edit"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let row = tx
+            .query_row(
+                r#"
+                SELECT revision, title, contract, contract_json
+                FROM plans
+                WHERE workspace = ?1 AND id = ?2
+                "#,
+                params![workspace.as_str(), id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((revision, current_title, current_contract, current_contract_json)) = row else {
+            return Err(StoreError::UnknownId);
+        };
+
+        if let Some(expected) = expected_revision {
+            if expected != revision {
+                return Err(StoreError::RevisionMismatch {
+                    expected,
+                    actual: revision,
+                });
+            }
+        }
+
+        let new_revision = revision + 1;
+        let new_title = title.unwrap_or(current_title);
+        let new_contract = contract.unwrap_or(current_contract);
+        let new_contract_json = contract_json.unwrap_or(current_contract_json);
+
+        tx.execute(
+            r#"
+            UPDATE plans
+            SET revision = ?3, title = ?4, contract = ?5, contract_json = ?6, updated_at_ms = ?7
+            WHERE workspace = ?1 AND id = ?2
+            "#,
+            params![
+                workspace.as_str(),
+                id,
+                new_revision,
+                new_title,
+                new_contract,
+                new_contract_json,
+                now_ms
+            ],
+        )?;
+
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(id.to_string()),
+            None,
+            &event_type,
+            &event_payload_json,
+        )?;
+
+        tx.commit()?;
+        Ok((new_revision, event))
+    }
+
+    pub fn edit_task(
+        &mut self,
+        workspace: &WorkspaceId,
+        id: &str,
+        expected_revision: Option<i64>,
+        title: Option<String>,
+        description: Option<Option<String>>,
+        event_type: String,
+        event_payload_json: String,
+    ) -> Result<(i64, EventRow), StoreError> {
+        if title.is_none() && description.is_none() {
+            return Err(StoreError::InvalidInput("no fields to edit"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let row = tx
+            .query_row(
+                r#"
+                SELECT revision, title, description
+                FROM tasks
+                WHERE workspace = ?1 AND id = ?2
+                "#,
+                params![workspace.as_str(), id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?)),
+            )
+            .optional()?;
+
+        let Some((revision, current_title, current_description)) = row else {
+            return Err(StoreError::UnknownId);
+        };
+
+        if let Some(expected) = expected_revision {
+            if expected != revision {
+                return Err(StoreError::RevisionMismatch {
+                    expected,
+                    actual: revision,
+                });
+            }
+        }
+
+        let new_revision = revision + 1;
+        let new_title = title.unwrap_or(current_title);
+        let new_description = description.unwrap_or(current_description);
+
+        tx.execute(
+            r#"
+            UPDATE tasks
+            SET revision = ?3, title = ?4, description = ?5, updated_at_ms = ?6
+            WHERE workspace = ?1 AND id = ?2
+            "#,
+            params![workspace.as_str(), id, new_revision, new_title, new_description, now_ms],
+        )?;
+
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(id.to_string()),
+            None,
+            &event_type,
+            &event_payload_json,
+        )?;
+
+        tx.commit()?;
+        Ok((new_revision, event))
     }
 
     pub fn list_plans(&self, workspace: &WorkspaceId, limit: usize, offset: usize) -> Result<Vec<PlanRow>, StoreError> {

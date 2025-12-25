@@ -117,6 +117,7 @@ impl McpServer {
     fn call_tool(&mut self, name: &str, args: Value) -> Value {
         match name {
             "tasks_create" => self.tool_tasks_create(args),
+            "tasks_edit" => self.tool_tasks_edit(args),
             "tasks_context" => self.tool_tasks_context(args),
             "tasks_delta" => self.tool_tasks_delta(args),
             "storage" => self.tool_storage(args),
@@ -199,6 +200,167 @@ impl McpServer {
                     }
                 }),
             ),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_edit(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let kind = if task_id.starts_with("PLAN-") {
+            TaskKind::Plan
+        } else if task_id.starts_with("TASK-") {
+            TaskKind::Task
+        } else {
+            return ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-");
+        };
+
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let title = match optional_non_null_string(args_obj, "title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let description = match optional_nullable_string(args_obj, "description") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let contract = match optional_nullable_string(args_obj, "contract") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let contract_json = match optional_nullable_object_as_json_string(args_obj, "contract_data") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        match kind {
+            TaskKind::Plan => {
+                if description.is_some() {
+                    return ai_error("INVALID_INPUT", "description is not valid for kind=plan");
+                }
+                if title.is_none() && contract.is_none() && contract_json.is_none() {
+                    return ai_error("INVALID_INPUT", "no fields to edit");
+                }
+            }
+            TaskKind::Task => {
+                if contract.is_some() || contract_json.is_some() {
+                    return ai_error("INVALID_INPUT", "contract fields are not valid for kind=task");
+                }
+                if title.is_none() && description.is_none() {
+                    return ai_error("INVALID_INPUT", "no fields to edit");
+                }
+            }
+        }
+
+        let mut patch = serde_json::Map::new();
+        if let Some(ref value) = title {
+            patch.insert("title".to_string(), Value::String(value.clone()));
+        }
+
+        match kind {
+            TaskKind::Plan => {
+                if let Some(ref value) = contract {
+                    patch.insert(
+                        "contract".to_string(),
+                        match value {
+                            Some(v) => Value::String(v.clone()),
+                            None => Value::Null,
+                        },
+                    );
+                }
+                if let Some(ref value) = contract_json {
+                    patch.insert(
+                        "contract_data".to_string(),
+                        match value {
+                            Some(raw) => parse_json_or_string(raw),
+                            None => Value::Null,
+                        },
+                    );
+                }
+            }
+            TaskKind::Task => {
+                if let Some(ref value) = description {
+                    patch.insert(
+                        "description".to_string(),
+                        match value {
+                            Some(v) => Value::String(v.clone()),
+                            None => Value::Null,
+                        },
+                    );
+                }
+            }
+        }
+
+        let event_type = format!("{}_edited", kind.as_str());
+        let event_payload_json = json!({
+            "kind": kind.as_str(),
+            "patch": Value::Object(patch),
+        })
+        .to_string();
+
+        let result = match kind {
+            TaskKind::Plan => self.store.edit_plan(
+                &workspace,
+                &task_id,
+                expected_revision,
+                title,
+                contract,
+                contract_json,
+                event_type.clone(),
+                event_payload_json,
+            ),
+            TaskKind::Task => self.store.edit_task(
+                &workspace,
+                &task_id,
+                expected_revision,
+                title,
+                description,
+                event_type.clone(),
+                event_payload_json,
+            ),
+        };
+
+        match result {
+            Ok((revision, event)) => ai_ok(
+                "edit",
+                json!({
+                    "id": task_id,
+                    "kind": kind.as_str(),
+                    "revision": revision,
+                    "event": {
+                        "event_id": event.event_id(),
+                        "ts_ms": event.ts_ms,
+                        "task_id": event.task_id,
+                        "path": event.path,
+                        "type": event.event_type,
+                        "payload": parse_json_or_string(&event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(StoreError::RevisionMismatch { expected, actual }) => {
+                ai_error("REVISION_MISMATCH", &format!("expected={expected} actual={actual}"))
+            }
             Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
         }
     }
@@ -310,6 +472,23 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "tasks_edit",
+            "description": "Edit plan/task meta fields (v0).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "contract": { "type": "string" },
+                    "contract_data": { "type": "object" }
+                },
+                "required": ["workspace", "task"]
+            }
+        }),
+        json!({
             "name": "tasks_context",
             "description": "List plans and tasks in a workspace (v0 skeleton).",
             "inputSchema": {
@@ -365,6 +544,66 @@ fn require_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<St
     Ok(v.to_string())
 }
 
+fn optional_i64(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<i64>, Value> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::Number(n) => n
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| ai_error("INVALID_INPUT", &format!("{key} must be an integer"))),
+        _ => Err(ai_error("INVALID_INPUT", &format!("{key} must be an integer"))),
+    }
+}
+
+fn optional_non_null_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, Value> {
+    if !args.contains_key(key) {
+        return Ok(None);
+    }
+    match args.get(key) {
+        Some(Value::String(v)) => Ok(Some(v.to_string())),
+        Some(Value::Null) => Err(ai_error("INVALID_INPUT", &format!("{key} cannot be null"))),
+        Some(_) => Err(ai_error("INVALID_INPUT", &format!("{key} must be a string"))),
+        None => Ok(None),
+    }
+}
+
+fn optional_nullable_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<Option<String>>, Value> {
+    if !args.contains_key(key) {
+        return Ok(None);
+    }
+    match args.get(key) {
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(v)) => Ok(Some(Some(v.to_string()))),
+        Some(_) => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be a string or null"),
+        )),
+        None => Ok(None),
+    }
+}
+
+fn optional_nullable_object_as_json_string(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<Option<String>>, Value> {
+    if !args.contains_key(key) {
+        return Ok(None);
+    }
+    match args.get(key) {
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::Object(_)) => Ok(Some(Some(
+            args.get(key)
+                .expect("key exists")
+                .to_string(),
+        ))),
+        Some(_) => Err(ai_error("INVALID_INPUT", &format!("{key} must be an object or null"))),
+        None => Ok(None),
+    }
+}
+
 fn parse_json_or_null(value: Option<String>) -> Value {
     match value {
         None => Value::Null,
@@ -381,6 +620,7 @@ fn format_store_error(err: StoreError) -> String {
         StoreError::Io(e) => format!("IO: {e}"),
         StoreError::Sql(e) => format!("SQL: {e}"),
         StoreError::InvalidInput(msg) => format!("Invalid input: {msg}"),
+        StoreError::RevisionMismatch { expected, actual } => format!("Revision mismatch: expected={expected} actual={actual}"),
         StoreError::UnknownId => "Unknown id".to_string(),
     }
 }
