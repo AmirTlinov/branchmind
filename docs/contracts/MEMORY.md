@@ -119,6 +119,44 @@ Semantics:
 - `notes` and `trace` are equivalent to calling `branchmind_show` with `cursor=null` and the provided limits.
 - `max_chars` applies to the whole snapshot payload; truncation must be explicit.
 
+### `branchmind_diff`
+
+Directional diff between two branches for a single document.
+
+Input: `{ workspace, from, to, doc?, cursor?, limit?, max_chars? }`
+
+- `doc` defaults to `"notes"`.
+- `cursor`/`limit` follow the same semantics as `branchmind_show` (tail pagination by `seq`).
+
+Output:
+
+- `{ from, to, doc, entries:[...], pagination:{ cursor, next_cursor?, has_more, limit, count }, truncated }`
+
+Semantics:
+
+- `entries` are those present in the **effective view** of `(to, doc)` but **not** present in the effective view of `(from, doc)`.
+- This is a reasoning-log diff (append-only): “removed” does not exist; reverse arguments to see the opposite direction.
+
+### `branchmind_merge`
+
+Idempotent merge of note entries from one branch into another (VCS-like for reasoning notes).
+
+Input: `{ workspace, from, into, doc?, cursor?, limit?, dry_run? }`
+
+- `doc` defaults to `"notes"`.
+- `dry_run=true` performs discovery only (no writes).
+
+Output:
+
+- `{ from, into, doc, merged, skipped, pagination:{ cursor, next_cursor?, has_more, limit, count } }`
+
+Semantics:
+
+- Only `kind="note"` entries are merged; other kinds are ignored.
+- Merge is idempotent via `source_event_id` on inserted notes: `merge:<from_branch>:<from_seq>`.
+- A merge copies content into `into` (it does not rewrite history of `from`).
+- Pagination supports large merges: if `has_more=true`, retry with `cursor=next_cursor`.
+
 ### `branchmind_branch_create`
 
 Creates a new branch ref from an existing branch snapshot (no copy).

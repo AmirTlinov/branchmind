@@ -162,6 +162,8 @@ impl McpServer {
             "branchmind_checkout" => self.tool_branchmind_checkout(args),
             "branchmind_notes_commit" => self.tool_branchmind_notes_commit(args),
             "branchmind_show" => self.tool_branchmind_show(args),
+            "branchmind_diff" => self.tool_branchmind_diff(args),
+            "branchmind_merge" => self.tool_branchmind_merge(args),
             "branchmind_export" => self.tool_branchmind_export(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
@@ -1787,6 +1789,270 @@ impl McpServer {
         ai_ok("branchmind_show", result)
     }
 
+    fn tool_branchmind_diff(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let from = match require_string(args_obj, "from") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let to = match require_string(args_obj, "to") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v.unwrap_or_else(|| "notes".to_string()),
+            Err(resp) => return resp,
+        };
+        let cursor = match optional_i64(args_obj, "cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(20),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let from_exists = match self.store.branch_exists(&workspace, &from) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !from_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown from-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+        let to_exists = match self.store.branch_exists(&workspace, &to) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !to_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown to-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+
+        let slice = match self
+            .store
+            .doc_diff_tail(&workspace, &from, &to, &doc, cursor, limit)
+        {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let entries = slice
+            .entries
+            .into_iter()
+            .map(|e| match e.kind {
+                bm_storage::DocEntryKind::Note => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "title": e.title,
+                    "format": e.format,
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "content": e.content
+                }),
+                bm_storage::DocEntryKind::Event => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "event_id": e.source_event_id,
+                    "event_type": e.event_type,
+                    "task_id": e.task_id,
+                    "path": e.path
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "from": from,
+            "to": to,
+            "doc": doc,
+            "entries": entries,
+            "pagination": {
+                "cursor": cursor,
+                "next_cursor": slice.next_cursor,
+                "has_more": slice.has_more,
+                "limit": limit,
+                "count": entries.len()
+            },
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let (_used, truncated) = enforce_branchmind_show_budget(&mut result, limit);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_branchmind_show_budget(&mut result, limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_diff", result)
+    }
+
+    fn tool_branchmind_merge(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let from = match require_string(args_obj, "from") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let into = match require_string(args_obj, "into") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v.unwrap_or_else(|| "notes".to_string()),
+            Err(resp) => return resp,
+        };
+        let cursor = match optional_i64(args_obj, "cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(200),
+            Err(resp) => return resp,
+        };
+        let dry_run = match optional_bool(args_obj, "dry_run") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+
+        let from_exists = match self.store.branch_exists(&workspace, &from) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !from_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown from-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+        let into_exists = match self.store.branch_exists(&workspace, &into) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !into_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown into-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+
+        let merged = match self
+            .store
+            .doc_merge_notes(&workspace, &from, &into, &doc, cursor, limit, dry_run)
+        {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_merge",
+            json!({
+                "workspace": workspace.as_str(),
+                "from": from,
+                "into": into,
+                "doc": doc,
+                "merged": merged.merged,
+                "skipped": merged.skipped,
+                "pagination": {
+                    "cursor": cursor,
+                    "next_cursor": merged.next_cursor,
+                    "has_more": merged.has_more,
+                    "limit": limit,
+                    "count": merged.count
+                }
+            }),
+        )
+    }
+
     fn tool_branchmind_export(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -2121,6 +2387,40 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "branchmind_diff",
+            "description": "Directional diff between two branches for a single document.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "from": { "type": "string" },
+                    "to": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "cursor": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "from", "to"]
+            }
+        }),
+        json!({
+            "name": "branchmind_merge",
+            "description": "Idempotent merge of note entries from one branch into another (notes VCS).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "from": { "type": "string" },
+                    "into": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "cursor": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "dry_run": { "type": "boolean" }
+                },
+                "required": ["workspace", "from", "into"]
+            }
+        }),
+        json!({
             "name": "branchmind_export",
             "description": "Build a bounded snapshot for fast IDE/agent resumption (target + refs + tail notes/trace).",
             "inputSchema": {
@@ -2428,6 +2728,20 @@ fn optional_usize(
         _ => Err(ai_error(
             "INVALID_INPUT",
             &format!("{key} must be a positive integer"),
+        )),
+    }
+}
+
+fn optional_bool(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<bool>, Value> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::Bool(v) => Ok(Some(*v)),
+        _ => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be a boolean"),
         )),
     }
 }

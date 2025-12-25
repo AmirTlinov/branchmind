@@ -158,6 +158,15 @@ pub struct DocSlice {
 }
 
 #[derive(Clone, Debug)]
+pub struct MergeNotesResult {
+    pub merged: usize,
+    pub skipped: usize,
+    pub count: usize,
+    pub next_cursor: Option<i64>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct StepRef {
     pub step_id: String,
     pub path: String,
@@ -1062,6 +1071,183 @@ impl SqliteStore {
         })
     }
 
+    pub fn doc_diff_tail(
+        &mut self,
+        workspace: &WorkspaceId,
+        from_branch: &str,
+        to_branch: &str,
+        doc: &str,
+        cursor: Option<i64>,
+        limit: usize,
+    ) -> Result<DocSlice, StoreError> {
+        if from_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("from_branch must not be empty"));
+        }
+        if to_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("to_branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let before_seq = cursor.unwrap_or(i64::MAX);
+        let limit = limit.clamp(1, 200) as i64;
+        let tx = self.conn.transaction()?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), from_branch)?
+            || !branch_exists_tx(&tx, workspace.as_str(), to_branch)?
+        {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let slice = doc_diff_tail_tx(
+            &tx,
+            workspace.as_str(),
+            from_branch,
+            to_branch,
+            doc,
+            before_seq,
+            limit,
+        )?;
+        tx.commit()?;
+        Ok(slice)
+    }
+
+    pub fn doc_merge_notes(
+        &mut self,
+        workspace: &WorkspaceId,
+        from_branch: &str,
+        into_branch: &str,
+        doc: &str,
+        cursor: Option<i64>,
+        limit: usize,
+        dry_run: bool,
+    ) -> Result<MergeNotesResult, StoreError> {
+        if from_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("from_branch must not be empty"));
+        }
+        if into_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("into_branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let before_seq = cursor.unwrap_or(i64::MAX);
+        let limit = limit.clamp(1, 200) as i64;
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), from_branch)?
+            || !branch_exists_tx(&tx, workspace.as_str(), into_branch)?
+        {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        if !dry_run {
+            ensure_workspace_tx(&tx, workspace, now_ms)?;
+            ensure_document_tx(
+                &tx,
+                workspace.as_str(),
+                into_branch,
+                doc,
+                DocumentKind::Notes.as_str(),
+                now_ms,
+            )?;
+        }
+
+        // Merge candidates are entries present in sourceView(from_branch) but not in destView(into_branch).
+        let diff = doc_diff_tail_tx(
+            &tx,
+            workspace.as_str(),
+            into_branch,
+            from_branch,
+            doc,
+            before_seq,
+            limit,
+        )?;
+
+        let mut merged = 0usize;
+        let mut skipped = 0usize;
+        let mut touched = false;
+
+        for entry in diff.entries.iter() {
+            if entry.kind != DocEntryKind::Note {
+                skipped += 1;
+                continue;
+            }
+
+            let Some(content) = entry.content.as_deref() else {
+                skipped += 1;
+                continue;
+            };
+
+            let merge_key = format!("merge:{from_branch}:{}", entry.seq);
+            if dry_run {
+                let exists = tx
+                    .query_row(
+                        "SELECT 1 FROM doc_entries WHERE workspace=?1 AND branch=?2 AND doc=?3 AND source_event_id=?4 LIMIT 1",
+                        params![workspace.as_str(), into_branch, doc, &merge_key],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if exists {
+                    skipped += 1;
+                } else {
+                    merged += 1;
+                }
+                continue;
+            }
+
+            let meta_json = merge_meta_json(
+                entry.meta_json.as_deref(),
+                from_branch,
+                entry.seq,
+                entry.ts_ms,
+            );
+
+            let inserted = tx.execute(
+                r#"
+                INSERT OR IGNORE INTO doc_entries(workspace, branch, doc, ts_ms, kind, title, format, meta_json, content, source_event_id)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "#,
+                params![
+                    workspace.as_str(),
+                    into_branch,
+                    doc,
+                    now_ms,
+                    DocEntryKind::Note.as_str(),
+                    entry.title.as_deref(),
+                    entry.format.as_deref(),
+                    &meta_json,
+                    content,
+                    &merge_key
+                ],
+            )?;
+
+            if inserted > 0 {
+                merged += 1;
+                touched = true;
+            } else {
+                skipped += 1;
+            }
+        }
+
+        if touched {
+            touch_document_tx(&tx, workspace.as_str(), into_branch, doc, now_ms)?;
+        }
+
+        tx.commit()?;
+        Ok(MergeNotesResult {
+            merged,
+            skipped,
+            count: diff.entries.len(),
+            next_cursor: diff.next_cursor,
+            has_more: diff.has_more,
+        })
+    }
+
     pub fn doc_ingest_task_event(
         &mut self,
         workspace: &WorkspaceId,
@@ -1264,6 +1450,53 @@ impl SqliteStore {
             }
         }
         Ok(out)
+    }
+
+    pub fn branch_exists(&self, workspace: &WorkspaceId, branch: &str) -> Result<bool, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+
+        if self
+            .conn
+            .query_row(
+                "SELECT 1 FROM branches WHERE workspace=?1 AND name=?2",
+                params![workspace.as_str(), branch],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            return Ok(true);
+        }
+
+        if self
+            .conn
+            .query_row(
+                "SELECT 1 FROM reasoning_refs WHERE workspace=?1 AND branch=?2 LIMIT 1",
+                params![workspace.as_str(), branch],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            return Ok(true);
+        }
+
+        if self
+            .conn
+            .query_row(
+                "SELECT 1 FROM doc_entries WHERE workspace=?1 AND branch=?2 LIMIT 1",
+                params![workspace.as_str(), branch],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     pub fn steps_decompose(
@@ -2250,6 +2483,166 @@ fn branch_sources_tx(
     }
 
     Ok(sources)
+}
+
+fn doc_diff_tail_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    from_branch: &str,
+    to_branch: &str,
+    doc: &str,
+    before_seq: i64,
+    limit: i64,
+) -> Result<DocSlice, StoreError> {
+    let from_sources = branch_sources_tx(tx, workspace, from_branch)?;
+    let to_sources = branch_sources_tx(tx, workspace, to_branch)?;
+
+    let mut sql = String::from(
+        "SELECT seq, ts_ms, branch, kind, title, format, meta_json, content, source_event_id, event_type, task_id, path, payload_json \
+         FROM doc_entries \
+         WHERE workspace=? AND doc=? AND seq < ? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    params.push(SqlValue::Integer(before_seq));
+
+    append_sources_clause(&mut sql, &mut params, &to_sources);
+    sql.push_str(" AND NOT ");
+    append_sources_clause(&mut sql, &mut params, &from_sources);
+    sql.push_str(" ORDER BY seq DESC LIMIT ?");
+    params.push(SqlValue::Integer(limit + 1));
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params))?;
+
+    let mut entries_desc = Vec::new();
+    while let Some(row) = rows.next()? {
+        let kind_str: String = row.get(3)?;
+        let kind = match kind_str.as_str() {
+            "note" => DocEntryKind::Note,
+            "event" => DocEntryKind::Event,
+            _ => DocEntryKind::Event,
+        };
+        entries_desc.push(DocEntryRow {
+            seq: row.get(0)?,
+            ts_ms: row.get(1)?,
+            branch: row.get(2)?,
+            doc: doc.to_string(),
+            kind,
+            title: row.get(4)?,
+            format: row.get(5)?,
+            meta_json: row.get(6)?,
+            content: row.get(7)?,
+            source_event_id: row.get(8)?,
+            event_type: row.get(9)?,
+            task_id: row.get(10)?,
+            path: row.get(11)?,
+            payload_json: row.get(12)?,
+        });
+    }
+
+    let has_more = entries_desc.len() as i64 > limit;
+    if has_more {
+        entries_desc.truncate(limit as usize);
+    }
+
+    let next_cursor = if has_more {
+        entries_desc.last().map(|e| e.seq)
+    } else {
+        None
+    };
+
+    entries_desc.reverse();
+
+    Ok(DocSlice {
+        entries: entries_desc,
+        next_cursor,
+        has_more,
+    })
+}
+
+fn append_sources_clause(sql: &mut String, params: &mut Vec<SqlValue>, sources: &[BranchSource]) {
+    sql.push('(');
+    for (index, source) in sources.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(" OR ");
+        }
+        sql.push_str("(branch=?");
+        params.push(SqlValue::Text(source.branch.clone()));
+        if let Some(cutoff) = source.cutoff_seq {
+            sql.push_str(" AND seq <= ?");
+            params.push(SqlValue::Integer(cutoff));
+        }
+        sql.push(')');
+    }
+    sql.push(')');
+}
+
+fn merge_meta_json(
+    existing_meta_json: Option<&str>,
+    from_branch: &str,
+    from_seq: i64,
+    from_ts_ms: i64,
+) -> String {
+    let payload = format!(
+        r#"{{"from":"{}","from_seq":{},"from_ts_ms":{}}}"#,
+        json_escape(from_branch),
+        from_seq,
+        from_ts_ms
+    );
+
+    let Some(raw) = existing_meta_json else {
+        return format!(r#"{{"_merge":{payload}}}"#);
+    };
+
+    let trimmed = raw.trim();
+    if looks_like_json_object(trimmed) {
+        if trimmed == "{}" {
+            return format!(r#"{{"_merge":{payload}}}"#);
+        }
+
+        if trimmed.contains("\"_merge\"") {
+            return format!(r#"{{"_merge":{payload},"_meta":{trimmed}}}"#);
+        }
+
+        let mut out = trimmed.to_string();
+        out.pop(); // remove trailing '}'
+        if !out.trim_end().ends_with('{') {
+            out.push(',');
+        }
+        out.push_str(&format!(r#""_merge":{payload}}}"#));
+        return out;
+    }
+
+    format!(
+        r#"{{"_merge":{payload},"_meta_raw":"{}"}}"#,
+        json_escape(trimmed)
+    )
+}
+
+fn looks_like_json_object(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with('{') && trimmed.ends_with('}')
+}
+
+fn json_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn ensure_workspace_tx(
