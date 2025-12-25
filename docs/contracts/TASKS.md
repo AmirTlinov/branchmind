@@ -19,6 +19,15 @@ This server provides a task execution API designed for AI agents:
 - `handoff` must provide: what’s done / what remains / risks, plus the radar core.
 - Completion is gated: steps cannot be marked done without confirmed checkpoints.
 
+## Step selectors (v0)
+
+Steps can be addressed by:
+
+- `step_id` (stable, preferred for safety),
+- `path` (index-based convenience, e.g. `s:0.s:2`).
+
+Writes must never silently change targets; use explicit ids where possible.
+
 ## Workspace scoping (MUST)
 
 All stateful tools in this family operate inside an explicit `workspace` (a stable IDE-provided identifier).

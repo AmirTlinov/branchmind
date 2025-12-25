@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bm_core::ids::WorkspaceId;
+use bm_core::paths::StepPath;
 use bm_core::model::{ReasoningRef, TaskKind};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::{Path, PathBuf};
@@ -12,6 +13,8 @@ pub enum StoreError {
     InvalidInput(&'static str),
     RevisionMismatch { expected: i64, actual: i64 },
     UnknownId,
+    StepNotFound,
+    CheckpointsNotConfirmed { criteria: bool, tests: bool },
 }
 
 impl std::fmt::Display for StoreError {
@@ -24,6 +27,10 @@ impl std::fmt::Display for StoreError {
                 write!(f, "revision mismatch (expected={expected}, actual={actual})")
             }
             Self::UnknownId => write!(f, "unknown id"),
+            Self::StepNotFound => write!(f, "step not found"),
+            Self::CheckpointsNotConfirmed { criteria, tests } => {
+                write!(f, "checkpoints not confirmed (criteria={criteria}, tests={tests})")
+            }
         }
     }
 }
@@ -70,6 +77,52 @@ pub struct ReasoningRefRow {
     pub notes_doc: String,
     pub graph_doc: String,
     pub trace_doc: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepRef {
+    pub step_id: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepOpResult {
+    pub task_revision: i64,
+    pub step: StepRef,
+    pub event: EventRow,
+}
+
+#[derive(Clone, Debug)]
+pub struct DecomposeResult {
+    pub task_revision: i64,
+    pub steps: Vec<StepRef>,
+    pub event: EventRow,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewStep {
+    pub title: String,
+    pub success_criteria: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepStatus {
+    pub step_id: String,
+    pub path: String,
+    pub title: String,
+    pub criteria_confirmed: bool,
+    pub tests_confirmed: bool,
+    pub completed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskStepSummary {
+    pub total_steps: i64,
+    pub completed_steps: i64,
+    pub open_steps: i64,
+    pub missing_criteria: i64,
+    pub missing_tests: i64,
+    pub first_open: Option<StepStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -184,7 +237,59 @@ impl SqliteStore {
               PRIMARY KEY (workspace, id)
             );
 
+            CREATE TABLE IF NOT EXISTS steps (
+              workspace TEXT NOT NULL,
+              task_id TEXT NOT NULL,
+              step_id TEXT NOT NULL,
+              parent_step_id TEXT,
+              ordinal INTEGER NOT NULL,
+              title TEXT NOT NULL,
+              completed INTEGER NOT NULL,
+              criteria_confirmed INTEGER NOT NULL,
+              tests_confirmed INTEGER NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, step_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS step_criteria (
+              workspace TEXT NOT NULL,
+              step_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              PRIMARY KEY (workspace, step_id, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS step_tests (
+              workspace TEXT NOT NULL,
+              step_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              PRIMARY KEY (workspace, step_id, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS step_blockers (
+              workspace TEXT NOT NULL,
+              step_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              PRIMARY KEY (workspace, step_id, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS step_notes (
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              workspace TEXT NOT NULL,
+              task_id TEXT NOT NULL,
+              step_id TEXT NOT NULL,
+              ts_ms INTEGER NOT NULL,
+              note TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_events_workspace_seq ON events(workspace, seq);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_root_unique ON steps(workspace, task_id, ordinal) WHERE parent_step_id IS NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_child_unique ON steps(workspace, task_id, parent_step_id, ordinal) WHERE parent_step_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_steps_lookup ON steps(workspace, task_id, parent_step_id, ordinal);
+            CREATE INDEX IF NOT EXISTS idx_step_notes_step_seq ON step_notes(workspace, task_id, step_id, seq);
             "#,
         )?;
         self.conn.execute(
@@ -603,6 +708,497 @@ impl SqliteStore {
         Ok(row)
     }
 
+    pub fn steps_decompose(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        parent_path: Option<&StepPath>,
+        steps: Vec<NewStep>,
+    ) -> Result<DecomposeResult, StoreError> {
+        if steps.is_empty() {
+            return Err(StoreError::InvalidInput("steps must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+
+        let parent_step_id = match parent_path {
+            None => None,
+            Some(path) => Some(resolve_step_id_tx(&tx, workspace.as_str(), task_id, path)?),
+        };
+
+        let max_ordinal: Option<i64> = match parent_step_id.as_deref() {
+            None => tx
+                .query_row(
+                    "SELECT MAX(ordinal) FROM steps WHERE workspace=?1 AND task_id=?2 AND parent_step_id IS NULL",
+                    params![workspace.as_str(), task_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten(),
+            Some(parent_step_id) => tx
+                .query_row(
+                    "SELECT MAX(ordinal) FROM steps WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3",
+                    params![workspace.as_str(), task_id, parent_step_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten(),
+        };
+
+        let mut next_ordinal = max_ordinal.unwrap_or(-1) + 1;
+        let mut created_steps = Vec::with_capacity(steps.len());
+
+        for step in steps {
+            let seq = next_counter_tx(&tx, workspace.as_str(), "step_seq")?;
+            let step_id = format!("STEP-{seq:08X}");
+            let ordinal = next_ordinal;
+            next_ordinal += 1;
+
+            tx.execute(
+                r#"
+                INSERT INTO steps(workspace,task_id,step_id,parent_step_id,ordinal,title,completed,criteria_confirmed,tests_confirmed,created_at_ms,updated_at_ms)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                "#,
+                params![
+                    workspace.as_str(),
+                    task_id,
+                    step_id,
+                    parent_step_id,
+                    ordinal,
+                    step.title,
+                    0i64,
+                    0i64,
+                    0i64,
+                    now_ms,
+                    now_ms
+                ],
+            )?;
+
+            for (i, text) in step.success_criteria.into_iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO step_criteria(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), step_id, i as i64, text],
+                )?;
+            }
+
+            let path = match parent_path {
+                None => StepPath::root(ordinal as usize).to_string(),
+                Some(parent) => parent.child(ordinal as usize).to_string(),
+            };
+            created_steps.push(StepRef { step_id, path });
+        }
+
+        let parent_path_str = parent_path.map(|p| p.to_string());
+        let event_payload_json = build_steps_added_payload(task_id, parent_path_str.as_deref(), &created_steps);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            parent_path_str,
+            "steps_added",
+            &event_payload_json,
+        )?;
+
+        tx.commit()?;
+        Ok(DecomposeResult {
+            task_revision,
+            steps: created_steps,
+            event,
+        })
+    }
+
+    pub fn step_define(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        title: Option<String>,
+        success_criteria: Option<Vec<String>>,
+        tests: Option<Vec<String>>,
+        blockers: Option<Vec<String>>,
+    ) -> Result<StepOpResult, StoreError> {
+        if title.is_none() && success_criteria.is_none() && tests.is_none() && blockers.is_none() {
+            return Err(StoreError::InvalidInput("no fields to define"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        let mut fields = Vec::new();
+
+        if let Some(title) = title {
+            tx.execute(
+                "UPDATE steps SET title=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, title, now_ms],
+            )?;
+            fields.push("title");
+        }
+
+        if let Some(items) = success_criteria {
+            tx.execute(
+                "DELETE FROM step_criteria WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            for (i, text) in items.into_iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO step_criteria(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), step_id, i as i64, text],
+                )?;
+            }
+            tx.execute(
+                "UPDATE steps SET criteria_confirmed=0, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, now_ms],
+            )?;
+            fields.push("success_criteria");
+        }
+
+        if let Some(items) = tests {
+            tx.execute(
+                "DELETE FROM step_tests WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            for (i, text) in items.into_iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO step_tests(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), step_id, i as i64, text],
+                )?;
+            }
+            tx.execute(
+                "UPDATE steps SET tests_confirmed=0, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, now_ms],
+            )?;
+            fields.push("tests");
+        }
+
+        if let Some(items) = blockers {
+            tx.execute(
+                "DELETE FROM step_blockers WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            for (i, text) in items.into_iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO step_blockers(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), step_id, i as i64, text],
+                )?;
+            }
+            fields.push("blockers");
+        }
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let event_payload_json = build_step_defined_payload(task_id, &step_ref, &fields);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_defined",
+            &event_payload_json,
+        )?;
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
+    pub fn step_note(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        note: String,
+    ) -> Result<StepOpResult, StoreError> {
+        if note.trim().is_empty() {
+            return Err(StoreError::InvalidInput("note must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        tx.execute(
+            "INSERT INTO step_notes(workspace, task_id, step_id, ts_ms, note) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![workspace.as_str(), task_id, step_id, now_ms, note],
+        )?;
+        let note_seq = tx.last_insert_rowid();
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let event_payload_json = build_step_noted_payload(task_id, &step_ref, note_seq);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_noted",
+            &event_payload_json,
+        )?;
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
+    pub fn step_verify(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        criteria_confirmed: Option<bool>,
+        tests_confirmed: Option<bool>,
+    ) -> Result<StepOpResult, StoreError> {
+        if criteria_confirmed.is_none() && tests_confirmed.is_none() {
+            return Err(StoreError::InvalidInput("no checkpoints to verify"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+        if criteria_confirmed.is_some() && tests_confirmed.is_some() {
+            tx.execute(
+                "UPDATE steps SET criteria_confirmed=?4, tests_confirmed=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![
+                    workspace.as_str(),
+                    task_id,
+                    step_id,
+                    if criteria_confirmed.unwrap() { 1i64 } else { 0i64 },
+                    if tests_confirmed.unwrap() { 1i64 } else { 0i64 },
+                    now_ms
+                ],
+            )?;
+        } else if let Some(v) = criteria_confirmed {
+            tx.execute(
+                "UPDATE steps SET criteria_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        } else if let Some(v) = tests_confirmed {
+            tx.execute(
+                "UPDATE steps SET tests_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let event_payload_json = build_step_verified_payload(task_id, &step_ref, criteria_confirmed, tests_confirmed);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_verified",
+            &event_payload_json,
+        )?;
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
+    pub fn step_done(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+    ) -> Result<StepOpResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision = bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) = resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        let row = tx
+            .query_row(
+                "SELECT completed, criteria_confirmed, tests_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            )
+            .optional()?;
+
+        let Some((completed, criteria_confirmed, tests_confirmed)) = row else {
+            return Err(StoreError::StepNotFound);
+        };
+
+        if completed != 0 {
+            return Err(StoreError::InvalidInput("step already completed"));
+        }
+
+        if criteria_confirmed == 0 || tests_confirmed == 0 {
+            return Err(StoreError::CheckpointsNotConfirmed {
+                criteria: criteria_confirmed == 0,
+                tests: tests_confirmed == 0,
+            });
+        }
+
+        tx.execute(
+            "UPDATE steps SET completed=1, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            params![workspace.as_str(), task_id, step_id, now_ms],
+        )?;
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let event_payload_json = build_step_done_payload(task_id, &step_ref);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_done",
+            &event_payload_json,
+        )?;
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
+    pub fn task_steps_summary(&mut self, workspace: &WorkspaceId, task_id: &str) -> Result<TaskStepSummary, StoreError> {
+        let tx = self.conn.transaction()?;
+
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM tasks WHERE workspace=?1 AND id=?2",
+                params![workspace.as_str(), task_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(StoreError::UnknownId);
+        }
+
+        let total_steps: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2",
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
+        let completed_steps: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2 AND completed=1",
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
+        let open_steps: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2 AND completed=0",
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
+        let missing_criteria: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2 AND completed=0 AND criteria_confirmed=0",
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
+        let missing_tests: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2 AND completed=0 AND tests_confirmed=0",
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
+
+        let first_open = tx
+            .query_row(
+                r#"
+                SELECT step_id, title, completed, criteria_confirmed, tests_confirmed
+                FROM steps
+                WHERE workspace=?1 AND task_id=?2 AND completed=0
+                ORDER BY created_at_ms ASC
+                LIMIT 1
+                "#,
+                params![workspace.as_str(), task_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(|(step_id, title, completed, criteria, tests)| {
+                let path = step_path_for_step_id_tx(&tx, workspace.as_str(), task_id, &step_id)
+                    .unwrap_or_else(|_| "s:?".to_string());
+                StepStatus {
+                    step_id,
+                    path,
+                    title,
+                    completed: completed != 0,
+                    criteria_confirmed: criteria != 0,
+                    tests_confirmed: tests != 0,
+                }
+            });
+
+        tx.commit()?;
+        Ok(TaskStepSummary {
+            total_steps,
+            completed_steps,
+            open_steps,
+            missing_criteria,
+            missing_tests,
+            first_open,
+        })
+    }
+
+    pub fn task_open_blockers(&self, workspace: &WorkspaceId, task_id: &str, limit: usize) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT b.text
+            FROM step_blockers b
+            JOIN steps s
+              ON s.workspace = b.workspace AND s.step_id = b.step_id
+            WHERE s.workspace = ?1 AND s.task_id = ?2 AND s.completed = 0
+            ORDER BY s.created_at_ms ASC, b.ordinal ASC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = stmt.query_map(params![workspace.as_str(), task_id, limit as i64], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn list_plans(&self, workspace: &WorkspaceId, limit: usize, offset: usize) -> Result<Vec<PlanRow>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -707,6 +1303,123 @@ fn ensure_workspace_tx(tx: &Transaction<'_>, workspace: &WorkspaceId, now_ms: i6
     Ok(())
 }
 
+fn bump_task_revision_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    expected_revision: Option<i64>,
+    now_ms: i64,
+) -> Result<i64, StoreError> {
+    let current: i64 = tx
+        .query_row(
+            "SELECT revision FROM tasks WHERE workspace=?1 AND id=?2",
+            params![workspace, task_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(StoreError::UnknownId)?;
+
+    if let Some(expected) = expected_revision {
+        if expected != current {
+            return Err(StoreError::RevisionMismatch {
+                expected,
+                actual: current,
+            });
+        }
+    }
+
+    let next = current + 1;
+    tx.execute(
+        "UPDATE tasks SET revision=?3, updated_at_ms=?4 WHERE workspace=?1 AND id=?2",
+        params![workspace, task_id, next, now_ms],
+    )?;
+    Ok(next)
+}
+
+fn resolve_step_id_tx(tx: &Transaction<'_>, workspace: &str, task_id: &str, path: &StepPath) -> Result<String, StoreError> {
+    let mut parent_step_id: Option<String> = None;
+    for ordinal in path.indices() {
+        let step_id: Option<String> = match parent_step_id.as_deref() {
+            None => tx
+                .query_row(
+                    "SELECT step_id FROM steps WHERE workspace=?1 AND task_id=?2 AND parent_step_id IS NULL AND ordinal=?3",
+                    params![workspace, task_id, *ordinal as i64],
+                    |row| row.get(0),
+                )
+                .optional()?,
+            Some(parent_step_id) => tx
+                .query_row(
+                    "SELECT step_id FROM steps WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3 AND ordinal=?4",
+                    params![workspace, task_id, parent_step_id, *ordinal as i64],
+                    |row| row.get(0),
+                )
+                .optional()?,
+        };
+
+        let Some(step_id) = step_id else {
+            return Err(StoreError::StepNotFound);
+        };
+        parent_step_id = Some(step_id);
+    }
+    parent_step_id.ok_or(StoreError::StepNotFound)
+}
+
+fn step_path_for_step_id_tx(tx: &Transaction<'_>, workspace: &str, task_id: &str, step_id: &str) -> Result<String, StoreError> {
+    let mut ordinals = Vec::new();
+    let mut current = step_id.to_string();
+
+    for _ in 0..128 {
+        let row = tx
+            .query_row(
+                "SELECT parent_step_id, ordinal FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace, task_id, current],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let Some((parent, ordinal)) = row else {
+            return Err(StoreError::StepNotFound);
+        };
+        ordinals.push(ordinal as usize);
+        match parent {
+            None => break,
+            Some(parent_id) => current = parent_id,
+        }
+    }
+
+    ordinals.reverse();
+    Ok(ordinals.into_iter().map(|i| format!("s:{i}")).collect::<Vec<_>>().join("."))
+}
+
+fn resolve_step_selector_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    step_id: Option<&str>,
+    path: Option<&StepPath>,
+) -> Result<(String, String), StoreError> {
+    match (step_id, path) {
+        (Some(step_id), _) => {
+            let exists = tx
+                .query_row(
+                    "SELECT 1 FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                    params![workspace, task_id, step_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !exists {
+                return Err(StoreError::StepNotFound);
+            }
+            Ok((step_id.to_string(), step_path_for_step_id_tx(tx, workspace, task_id, step_id)?))
+        }
+        (None, Some(path)) => {
+            let step_id = resolve_step_id_tx(tx, workspace, task_id, path)?;
+            Ok((step_id, path.to_string()))
+        }
+        (None, None) => Err(StoreError::InvalidInput("step selector is required")),
+    }
+}
+
 fn next_counter_tx(tx: &Transaction<'_>, workspace: &str, name: &str) -> Result<i64, StoreError> {
     let current: i64 = tx
         .query_row(
@@ -725,6 +1438,95 @@ fn next_counter_tx(tx: &Transaction<'_>, workspace: &str, name: &str) -> Result<
         params![workspace, name, next],
     )?;
     Ok(next)
+}
+
+fn build_steps_added_payload(task_id: &str, parent_path: Option<&str>, steps: &[StepRef]) -> String {
+    let mut out = String::new();
+    out.push_str("{\"task\":\"");
+    out.push_str(task_id);
+    out.push_str("\",\"parent_path\":");
+    match parent_path {
+        None => out.push_str("null"),
+        Some(path) => {
+            out.push('"');
+            out.push_str(path);
+            out.push('"');
+        }
+    }
+    out.push_str(",\"steps\":[");
+    for (i, step) in steps.iter().enumerate() {
+        if i != 0 {
+            out.push(',');
+        }
+        out.push_str("{\"step_id\":\"");
+        out.push_str(&step.step_id);
+        out.push_str("\",\"path\":\"");
+        out.push_str(&step.path);
+        out.push_str("\"}");
+    }
+    out.push_str("]}");
+    out
+}
+
+fn build_step_defined_payload(task_id: &str, step: &StepRef, fields: &[&str]) -> String {
+    let mut out = String::new();
+    out.push_str("{\"task\":\"");
+    out.push_str(task_id);
+    out.push_str("\",\"step_id\":\"");
+    out.push_str(&step.step_id);
+    out.push_str("\",\"path\":\"");
+    out.push_str(&step.path);
+    out.push_str("\",\"fields\":[");
+    for (i, field) in fields.iter().enumerate() {
+        if i != 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(field);
+        out.push('"');
+    }
+    out.push_str("]}");
+    out
+}
+
+fn build_step_noted_payload(task_id: &str, step: &StepRef, note_seq: i64) -> String {
+    format!(
+        "{{\"task\":\"{task_id}\",\"step_id\":\"{}\",\"path\":\"{}\",\"note_seq\":{note_seq}}}",
+        step.step_id, step.path
+    )
+}
+
+fn build_step_verified_payload(
+    task_id: &str,
+    step: &StepRef,
+    criteria_confirmed: Option<bool>,
+    tests_confirmed: Option<bool>,
+) -> String {
+    let mut out = String::new();
+    out.push_str("{\"task\":\"");
+    out.push_str(task_id);
+    out.push_str("\",\"step_id\":\"");
+    out.push_str(&step.step_id);
+    out.push_str("\",\"path\":\"");
+    out.push_str(&step.path);
+    out.push('"');
+    if let Some(v) = criteria_confirmed {
+        out.push_str(",\"criteria_confirmed\":");
+        out.push_str(if v { "true" } else { "false" });
+    }
+    if let Some(v) = tests_confirmed {
+        out.push_str(",\"tests_confirmed\":");
+        out.push_str(if v { "true" } else { "false" });
+    }
+    out.push('}');
+    out
+}
+
+fn build_step_done_payload(task_id: &str, step: &StepRef) -> String {
+    format!(
+        "{{\"task\":\"{task_id}\",\"step_id\":\"{}\",\"path\":\"{}\"}}",
+        step.step_id, step.path
+    )
 }
 
 fn insert_event_tx(

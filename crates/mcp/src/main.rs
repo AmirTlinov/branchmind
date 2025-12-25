@@ -2,6 +2,7 @@
 
 use bm_core::ids::WorkspaceId;
 use bm_core::model::TaskKind;
+use bm_core::paths::StepPath;
 use bm_storage::{SqliteStore, StoreError};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -119,6 +120,11 @@ impl McpServer {
     fn call_tool(&mut self, name: &str, args: Value) -> Value {
         match name {
             "tasks_create" => self.tool_tasks_create(args),
+            "tasks_decompose" => self.tool_tasks_decompose(args),
+            "tasks_define" => self.tool_tasks_define(args),
+            "tasks_note" => self.tool_tasks_note(args),
+            "tasks_verify" => self.tool_tasks_verify(args),
+            "tasks_done" => self.tool_tasks_done(args),
             "tasks_edit" => self.tool_tasks_edit(args),
             "tasks_context" => self.tool_tasks_context(args),
             "tasks_delta" => self.tool_tasks_delta(args),
@@ -207,6 +213,453 @@ impl McpServer {
                     }
                 }),
             ),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_decompose(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let parent_path = match optional_step_path(args_obj, "parent") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let steps_value = args_obj.get("steps").cloned().unwrap_or(Value::Null);
+        let steps_array = steps_value
+            .as_array()
+            .ok_or_else(|| ai_error("INVALID_INPUT", "steps must be an array"));
+        let Ok(steps_array) = steps_array else {
+            return steps_array.err().unwrap();
+        };
+
+        if steps_array.is_empty() {
+            return ai_error("INVALID_INPUT", "steps must not be empty");
+        }
+
+        let mut steps = Vec::with_capacity(steps_array.len());
+        for step in steps_array {
+            let Some(obj) = step.as_object() else {
+                return ai_error("INVALID_INPUT", "steps[] items must be objects");
+            };
+            let title = match require_string(obj, "title") {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            let criteria_value = obj.get("success_criteria").cloned().unwrap_or(Value::Null);
+            let Some(criteria_array) = criteria_value.as_array() else {
+                return ai_error("INVALID_INPUT", "steps[].success_criteria must be an array");
+            };
+            let mut success_criteria = Vec::with_capacity(criteria_array.len());
+            for item in criteria_array {
+                let Some(s) = item.as_str() else {
+                    return ai_error("INVALID_INPUT", "steps[].success_criteria items must be strings");
+                };
+                success_criteria.push(s.to_string());
+            }
+            steps.push(bm_storage::NewStep { title, success_criteria });
+        }
+
+        let result = self.store.steps_decompose(
+            &workspace,
+            &task_id,
+            expected_revision,
+            parent_path.as_ref(),
+            steps,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "decompose",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "steps": out.steps.into_iter().map(|s| json!({ "step_id": s.step_id, "path": s.path })).collect::<Vec<_>>(),
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Parent step not found"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_define(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if step_id.is_none() && path.is_none() {
+            return ai_error("INVALID_INPUT", "step_id or path is required");
+        }
+
+        let title = match optional_non_null_string(args_obj, "title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let success_criteria = match optional_string_array(args_obj, "success_criteria") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let tests = match optional_string_array(args_obj, "tests") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let blockers = match optional_string_array(args_obj, "blockers") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let result = self.store.step_define(
+            &workspace,
+            &task_id,
+            expected_revision,
+            step_id.as_deref(),
+            path.as_ref(),
+            title,
+            success_criteria,
+            tests,
+            blockers,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "define",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "step": { "step_id": out.step.step_id, "path": out.step.path },
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::CheckpointsNotConfirmed { .. }) => ai_error("STORE_ERROR", "unexpected checkpoints error"),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_note(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let note = match require_string(args_obj, "note") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if step_id.is_none() && path.is_none() {
+            return ai_error("INVALID_INPUT", "step_id or path is required");
+        }
+
+        let result = self.store.step_note(
+            &workspace,
+            &task_id,
+            expected_revision,
+            step_id.as_deref(),
+            path.as_ref(),
+            note,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "note",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "step": { "step_id": out.step.step_id, "path": out.step.path },
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_verify(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if step_id.is_none() && path.is_none() {
+            return ai_error("INVALID_INPUT", "step_id or path is required");
+        }
+
+        let checkpoints = args_obj.get("checkpoints").cloned().unwrap_or(Value::Null);
+        let criteria_confirmed = checkpoints
+            .get("criteria")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
+        let tests_confirmed = checkpoints
+            .get("tests")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
+
+        let result = self.store.step_verify(
+            &workspace,
+            &task_id,
+            expected_revision,
+            step_id.as_deref(),
+            path.as_ref(),
+            criteria_confirmed,
+            tests_confirmed,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "verify",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "step": { "step_id": out.step.step_id, "path": out.step.path },
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_done(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if step_id.is_none() && path.is_none() {
+            return ai_error("INVALID_INPUT", "step_id or path is required");
+        }
+
+        let result = self.store.step_done(
+            &workspace,
+            &task_id,
+            expected_revision,
+            step_id.as_deref(),
+            path.as_ref(),
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "done",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "step": { "step_id": out.step.step_id, "path": out.step.path },
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::CheckpointsNotConfirmed { criteria, tests }) => ai_error_with(
+                "CHECKPOINTS_NOT_CONFIRMED",
+                &format!("missing: criteria={criteria} tests={tests}"),
+                Some("Confirm missing checkpoints via tasks_verify before closing the step."),
+                vec![suggest_call(
+                    "tasks_verify",
+                    "Confirm required checkpoints for this step.",
+                    "high",
+                    json!({
+                        "workspace": workspace.as_str(),
+                        "task": task_id,
+                        "step_id": step_id,
+                        "path": args_obj.get("path").cloned().unwrap_or(Value::Null),
+                        "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } }
+                    }),
+                )],
+            ),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
             Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
         }
     }
@@ -651,9 +1104,56 @@ impl McpServer {
                 .to_string(),
         };
 
-        let verify = Vec::<String>::new();
-        let blockers = Vec::<String>::new();
-        let next = Vec::<String>::new();
+        let mut verify = Vec::<String>::new();
+        let mut next = Vec::<String>::new();
+        let mut blockers = Vec::<String>::new();
+        let mut steps_summary: Option<Value> = None;
+
+        if kind == TaskKind::Task {
+            match self.store.task_steps_summary(&workspace, &target_id) {
+                Ok(summary) => {
+                    steps_summary = Some(json!({
+                        "total": summary.total_steps,
+                        "open": summary.open_steps,
+                        "completed": summary.completed_steps,
+                        "missing_criteria": summary.missing_criteria,
+                        "missing_tests": summary.missing_tests,
+                        "first_open": summary.first_open.as_ref().map(|s| json!({
+                            "step_id": s.step_id,
+                            "path": s.path,
+                            "title": s.title,
+                            "criteria_confirmed": s.criteria_confirmed,
+                            "tests_confirmed": s.tests_confirmed
+                        }))
+                    }));
+
+                    if summary.total_steps == 0 {
+                        next.push("Add steps with tasks_decompose".to_string());
+                    } else {
+                        if summary.missing_criteria > 0 {
+                            verify.push(format!("Missing criteria checkpoints: {}", summary.missing_criteria));
+                        }
+                        if summary.missing_tests > 0 {
+                            verify.push(format!("Missing tests checkpoints: {}", summary.missing_tests));
+                        }
+
+                        if let Some(first) = summary.first_open {
+                            if !first.criteria_confirmed || !first.tests_confirmed {
+                                next.push(format!("Confirm checkpoints for {}", first.path));
+                            } else {
+                                next.push(format!("Close next step {}", first.path));
+                            }
+                        }
+                    }
+                }
+                Err(StoreError::UnknownId) => {}
+                Err(_) => {}
+            }
+
+            if let Ok(items) = self.store.task_open_blockers(&workspace, &target_id, 10) {
+                blockers = items;
+            }
+        }
 
         let mut result = json!({
             "workspace": workspace.as_str(),
@@ -669,6 +1169,11 @@ impl McpServer {
                 "blockers": blockers
             }
         });
+        if let Some(steps) = steps_summary {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("steps".to_string(), steps);
+            }
+        }
 
         if let Some(limit) = max_chars {
             let (used, truncated) = enforce_max_chars_budget(&mut result, limit);
@@ -702,6 +1207,103 @@ fn tool_definitions() -> Vec<Value> {
                     "steps": { "type": "array" }
                 },
                 "required": ["workspace", "title"]
+            }
+        }),
+        json!({
+            "name": "tasks_decompose",
+            "description": "Add steps to a task.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "parent": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": { "type": "string" },
+                                "success_criteria": { "type": "array", "items": { "type": "string" } }
+                            },
+                            "required": ["title", "success_criteria"]
+                        }
+                    }
+                },
+                "required": ["workspace", "task", "steps"]
+            }
+        }),
+        json!({
+            "name": "tasks_define",
+            "description": "Update step fields (title/success_criteria/tests/blockers).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "title": { "type": "string" },
+                    "success_criteria": { "type": "array", "items": { "type": "string" } },
+                    "tests": { "type": "array", "items": { "type": "string" } },
+                    "blockers": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "task"]
+            }
+        }),
+        json!({
+            "name": "tasks_note",
+            "description": "Add a progress note to a step.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "note": { "type": "string" }
+                },
+                "required": ["workspace", "task", "note"]
+            }
+        }),
+        json!({
+            "name": "tasks_verify",
+            "description": "Confirm checkpoints for a step.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "checkpoints": {
+                        "type": "object",
+                        "properties": {
+                            "criteria": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
+                            "tests": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } }
+                        }
+                    }
+                },
+                "required": ["workspace", "task", "checkpoints"]
+            }
+        }),
+        json!({
+            "name": "tasks_done",
+            "description": "Mark a step completed (requires confirmed checkpoints).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" }
+                },
+                "required": ["workspace", "task"]
             }
         }),
         json!({
@@ -834,6 +1436,17 @@ fn optional_i64(args: &serde_json::Map<String, Value>, key: &str) -> Result<Opti
     }
 }
 
+fn optional_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, Value> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::String(v) => Ok(Some(v.to_string())),
+        _ => Err(ai_error("INVALID_INPUT", &format!("{key} must be a string"))),
+    }
+}
+
 fn optional_usize(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<usize>, Value> {
     let Some(value) = args.get(key) else {
         return Ok(None);
@@ -850,6 +1463,36 @@ fn optional_usize(args: &serde_json::Map<String, Value>, key: &str) -> Result<Op
             &format!("{key} must be a positive integer"),
         )),
     }
+}
+
+fn optional_step_path(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<StepPath>, Value> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    let Some(raw) = value.as_str() else {
+        return Err(ai_error("INVALID_INPUT", &format!("{key} must be a string")));
+    };
+    StepPath::parse(raw).map(Some).map_err(|_| ai_error("INVALID_INPUT", &format!("{key} is invalid")))
+}
+
+fn optional_string_array(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<Vec<String>>, Value> {
+    if !args.contains_key(key) {
+        return Ok(None);
+    }
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    let Some(arr) = value.as_array() else {
+        return Err(ai_error("INVALID_INPUT", &format!("{key} must be an array of strings")));
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str() else {
+            return Err(ai_error("INVALID_INPUT", &format!("{key} must be an array of strings")));
+        };
+        out.push(s.to_string());
+    }
+    Ok(Some(out))
 }
 
 fn optional_non_null_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, Value> {
@@ -916,6 +1559,10 @@ fn format_store_error(err: StoreError) -> String {
         StoreError::InvalidInput(msg) => format!("Invalid input: {msg}"),
         StoreError::RevisionMismatch { expected, actual } => format!("Revision mismatch: expected={expected} actual={actual}"),
         StoreError::UnknownId => "Unknown id".to_string(),
+        StoreError::StepNotFound => "Step not found".to_string(),
+        StoreError::CheckpointsNotConfirmed { criteria, tests } => {
+            format!("Checkpoints not confirmed: criteria={criteria} tests={tests}")
+        }
     }
 }
 

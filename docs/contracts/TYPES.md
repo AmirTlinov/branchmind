@@ -67,6 +67,14 @@ Stable opaque identifiers.
 { "type": "string", "pattern": "^(STEP|NODE)-[A-Za-z0-9]{8,}$" }
 ```
 
+### StepPath (v0)
+
+Human-oriented, index-based step addressing.
+
+```json
+{ "type": "string", "pattern": "^s:[0-9]+(\\.s:[0-9]+)*$" }
+```
+
 ## Optimistic concurrency
 
 Every mutable entity carries a monotonic integer `revision`.
@@ -108,4 +116,3 @@ Every error should include:
 - `message` (human-readable)
 - `recovery` (machine-oriented hint), when possible
 - `suggestions[]` (executable), when possible
-

@@ -51,6 +51,66 @@ pub mod ids {
     }
 }
 
+pub mod paths {
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct StepPath {
+        indices: Vec<usize>,
+    }
+
+    impl StepPath {
+        pub fn indices(&self) -> &[usize] {
+            &self.indices
+        }
+
+        pub fn parse(value: &str) -> Result<Self, StepPathError> {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(StepPathError::Empty);
+            }
+
+            let mut indices = Vec::new();
+            for segment in value.split('.') {
+                let Some(raw) = segment.strip_prefix("s:") else {
+                    return Err(StepPathError::InvalidSegment);
+                };
+                let index = raw.parse::<usize>().map_err(|_| StepPathError::InvalidIndex)?;
+                indices.push(index);
+            }
+
+            if indices.is_empty() {
+                return Err(StepPathError::Empty);
+            }
+
+            Ok(Self { indices })
+        }
+
+        pub fn child(&self, ordinal: usize) -> Self {
+            let mut indices = self.indices.clone();
+            indices.push(ordinal);
+            Self { indices }
+        }
+
+        pub fn root(ordinal: usize) -> Self {
+            Self { indices: vec![ordinal] }
+        }
+
+        pub fn to_string(&self) -> String {
+            self.indices
+                .iter()
+                .map(|i| format!("s:{i}"))
+                .collect::<Vec<_>>()
+                .join(".")
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum StepPathError {
+        Empty,
+        InvalidSegment,
+        InvalidIndex,
+    }
+}
+
 pub mod model {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum TaskKind {

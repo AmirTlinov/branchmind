@@ -14,6 +14,7 @@ This plan is intentionally staged to keep the system verifiable at every step.
 - Revisions (`expected_revision`) and strict targeting semantics
 - Focus pointer (`tasks_focus_get/set/clear`) for fast resumption (convenience only)
 - `tasks_radar` (one-screen) for a single active target (includes reasoning_ref)
+- Step tree primitives: `tasks_decompose` / `tasks_define` / `tasks_note` / `tasks_verify` / `tasks_done`
 
 ## Milestone 2 — Reasoning memory MVP (durable log)
 

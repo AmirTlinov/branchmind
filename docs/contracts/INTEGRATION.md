@@ -56,6 +56,14 @@ Requirements:
 - Events are written atomically with the task mutation.
 - Events are ingested into the reasoning subsystem (trace + optional graph nodes) deterministically.
 
+Typical task-step event types (v0):
+
+- `steps_added`
+- `step_defined`
+- `step_noted`
+- `step_verified`
+- `step_done`
+
 ## Conflicts lifecycle (discoverable)
 
 When a merge conflict exists, it must be discoverable via a query:
