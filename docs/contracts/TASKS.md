@@ -55,7 +55,50 @@ Minimum required tools (v0 MVP):
 - `tasks_note` (progress notes)
 - `tasks_verify` (confirm checkpoints)
 - `tasks_done` (close step)
+- `tasks_close_step` (atomic verify + close)
 - `tasks_radar` (one-screen snapshot)
 - `tasks_delta` (event/ops stream)
 
 For full intent surfaces and semantics, use this project’s contracts as the source of truth (do not import legacy behavior blindly).
+
+## Fast-path close (v0.1)
+
+### `tasks_close_step`
+
+Atomically confirms checkpoints and closes a step in a single call.
+
+Input:
+
+```json
+{
+  "workspace": "acme/repo",
+  "task": "TASK-001",
+  "step_id": "STEP-XXXXXXXX",
+  "path": "s:0.s:1",
+  "expected_revision": 4,
+  "checkpoints": {
+    "criteria": { "confirmed": true },
+    "tests": { "confirmed": true }
+  }
+}
+```
+
+Output:
+
+```json
+{
+  "task": "TASK-001",
+  "revision": 5,
+  "step": { "step_id": "STEP-XXXXXXXX", "path": "s:0.s:1" },
+  "events": [
+    { "type": "step_verified", "...": "..." },
+    { "type": "step_done", "...": "..." }
+  ]
+}
+```
+
+Semantics:
+
+- Requires `checkpoints` (at least one of criteria/tests) and enforces gating.
+- Emits both events in order (`step_verified` then `step_done`).
+- Atomic: either both updates persist, or neither does.

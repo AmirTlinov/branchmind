@@ -8,6 +8,8 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
 use std::path::{Path, PathBuf};
 
+const DEFAULT_BRANCH: &str = "main";
+
 #[derive(Debug)]
 pub enum StoreError {
     Io(std::io::Error),
@@ -438,6 +440,13 @@ pub struct StepOpResult {
 }
 
 #[derive(Clone, Debug)]
+pub struct StepCloseResult {
+    pub task_revision: i64,
+    pub step: StepRef,
+    pub events: Vec<EventRow>,
+}
+
+#[derive(Clone, Debug)]
 pub struct DecomposeResult {
     pub task_revision: i64,
     pub steps: Vec<StepRef>,
@@ -507,10 +516,25 @@ impl SqliteStore {
         &self.storage_dir
     }
 
+    pub fn default_branch_name(&self) -> &'static str {
+        DEFAULT_BRANCH
+    }
+
+    pub fn next_card_id(&mut self, workspace: &WorkspaceId) -> Result<String, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        let seq = next_counter_tx(&tx, workspace.as_str(), "card_seq")?;
+        tx.commit()?;
+        Ok(format!("CARD-{seq}"))
+    }
+
     pub fn workspace_init(&mut self, workspace: &WorkspaceId) -> Result<(), StoreError> {
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
         ensure_workspace_tx(&tx, workspace, now_ms)?;
+        let _ = bootstrap_default_branch_tx(&tx, workspace.as_str(), now_ms)?;
+        let _ = ensure_checkout_branch_tx(&tx, workspace.as_str(), DEFAULT_BRANCH, now_ms)?;
         tx.commit()?;
         Ok(())
     }
@@ -3149,16 +3173,22 @@ impl SqliteStore {
         let base_branch = match from {
             Some(v) if !v.trim().is_empty() => v.to_string(),
             Some(_) => return Err(StoreError::InvalidInput("from must not be empty")),
-            None => tx
-                .query_row(
-                    "SELECT branch FROM branch_checkout WHERE workspace=?1",
-                    params![workspace.as_str()],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-                .ok_or(StoreError::InvalidInput(
-                    "from is required when no checkout branch is set",
-                ))?,
+            None => {
+                if let Some(branch) = branch_checkout_get_tx(&tx, workspace.as_str())? {
+                    branch
+                } else {
+                    let _ = bootstrap_default_branch_tx(&tx, workspace.as_str(), now_ms)?;
+                    if let Some(branch) = branch_checkout_get_tx(&tx, workspace.as_str())? {
+                        branch
+                    } else if branch_exists_tx(&tx, workspace.as_str(), DEFAULT_BRANCH)? {
+                        DEFAULT_BRANCH.to_string()
+                    } else {
+                        return Err(StoreError::InvalidInput(
+                            "from is required when no checkout branch is set",
+                        ));
+                    }
+                }
+            }
         };
 
         if !branch_exists_tx(&tx, workspace.as_str(), &base_branch)? {
@@ -3834,6 +3864,162 @@ impl SqliteStore {
         })
     }
 
+    pub fn step_close(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        criteria_confirmed: Option<bool>,
+        tests_confirmed: Option<bool>,
+    ) -> Result<StepCloseResult, StoreError> {
+        if criteria_confirmed.is_none() && tests_confirmed.is_none() {
+            return Err(StoreError::InvalidInput("no checkpoints to verify"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        let row = tx
+            .query_row(
+                "SELECT completed, criteria_confirmed, tests_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            )
+            .optional()?;
+
+        let Some((completed, _, _)) = row else {
+            return Err(StoreError::StepNotFound);
+        };
+        if completed != 0 {
+            return Err(StoreError::InvalidInput("step already completed"));
+        }
+
+        if criteria_confirmed.is_some() && tests_confirmed.is_some() {
+            tx.execute(
+                "UPDATE steps SET criteria_confirmed=?4, tests_confirmed=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![
+                    workspace.as_str(),
+                    task_id,
+                    step_id,
+                    if criteria_confirmed.unwrap() { 1i64 } else { 0i64 },
+                    if tests_confirmed.unwrap() { 1i64 } else { 0i64 },
+                    now_ms
+                ],
+            )?;
+        } else if let Some(v) = criteria_confirmed {
+            tx.execute(
+                "UPDATE steps SET criteria_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        } else if let Some(v) = tests_confirmed {
+            tx.execute(
+                "UPDATE steps SET tests_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
+
+        let (criteria_now, tests_now) = tx
+            .query_row(
+                "SELECT criteria_confirmed, tests_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+            .ok_or(StoreError::StepNotFound)?;
+
+        if criteria_now == 0 || tests_now == 0 {
+            return Err(StoreError::CheckpointsNotConfirmed {
+                criteria: criteria_now == 0,
+                tests: tests_now == 0,
+            });
+        }
+
+        tx.execute(
+            "UPDATE steps SET completed=1, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            params![workspace.as_str(), task_id, step_id, now_ms],
+        )?;
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let verify_payload_json =
+            build_step_verified_payload(task_id, &step_ref, criteria_confirmed, tests_confirmed);
+        let verify_event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_verified",
+            &verify_payload_json,
+        )?;
+        let done_payload_json = build_step_done_payload(task_id, &step_ref);
+        let done_event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_done",
+            &done_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &verify_event,
+        )?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &done_event,
+        )?;
+
+        let (snapshot_title, snapshot_completed) =
+            step_snapshot_tx(&tx, workspace.as_str(), task_id, &step_ref.step_id)?;
+        let graph_touched = Self::project_task_graph_step_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &done_event,
+            task_id,
+            &step_ref,
+            &snapshot_title,
+            snapshot_completed,
+            now_ms,
+        )?;
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(StepCloseResult {
+            task_revision,
+            step: step_ref,
+            events: vec![verify_event, done_event],
+        })
+    }
+
     pub fn step_done(
         &mut self,
         workspace: &WorkspaceId,
@@ -3902,6 +4088,29 @@ impl SqliteStore {
             &reasoning_ref.trace_doc,
             &event,
         )?;
+
+        let (snapshot_title, snapshot_completed) =
+            step_snapshot_tx(&tx, workspace.as_str(), task_id, &step_ref.step_id)?;
+        let graph_touched = Self::project_task_graph_step_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &event,
+            task_id,
+            &step_ref,
+            &snapshot_title,
+            snapshot_completed,
+            now_ms,
+        )?;
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
 
         tx.commit()?;
         Ok(StepOpResult {
@@ -4386,6 +4595,10 @@ fn branch_sources_tx(
         let Some((base_branch, base_seq)) = row else {
             break;
         };
+
+        if base_branch == current {
+            break;
+        }
 
         if seen.contains(&base_branch) {
             return Err(StoreError::BranchCycle);
@@ -6137,6 +6350,112 @@ fn ensure_workspace_tx(
         params![workspace.as_str(), now_ms],
     )?;
     Ok(())
+}
+
+fn branch_checkout_get_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+) -> Result<Option<String>, StoreError> {
+    Ok(tx
+        .query_row(
+            "SELECT branch FROM branch_checkout WHERE workspace=?1",
+            params![workspace],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+fn branch_checkout_set_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    tx.execute(
+        r#"
+        INSERT INTO branch_checkout(workspace, branch, updated_at_ms)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(workspace) DO UPDATE SET branch=excluded.branch, updated_at_ms=excluded.updated_at_ms
+        "#,
+        params![workspace, branch, now_ms],
+    )?;
+    Ok(())
+}
+
+fn workspace_has_branch_data_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+) -> Result<bool, StoreError> {
+    if tx
+        .query_row(
+            "SELECT 1 FROM branches WHERE workspace=?1 LIMIT 1",
+            params![workspace],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    if tx
+        .query_row(
+            "SELECT 1 FROM reasoning_refs WHERE workspace=?1 LIMIT 1",
+            params![workspace],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    if tx
+        .query_row(
+            "SELECT 1 FROM doc_entries WHERE workspace=?1 LIMIT 1",
+            params![workspace],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn bootstrap_default_branch_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    now_ms: i64,
+) -> Result<bool, StoreError> {
+    if workspace_has_branch_data_tx(tx, workspace)? {
+        return Ok(false);
+    }
+    let base_seq = doc_entries_head_seq_tx(tx, workspace)?.unwrap_or(0);
+    tx.execute(
+        r#"
+        INSERT OR IGNORE INTO branches(workspace, name, base_branch, base_seq, created_at_ms)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+        params![workspace, DEFAULT_BRANCH, DEFAULT_BRANCH, base_seq, now_ms],
+    )?;
+    branch_checkout_set_tx(tx, workspace, DEFAULT_BRANCH, now_ms)?;
+    Ok(true)
+}
+
+fn ensure_checkout_branch_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    now_ms: i64,
+) -> Result<bool, StoreError> {
+    if branch_checkout_get_tx(tx, workspace)?.is_some() {
+        return Ok(false);
+    }
+    if !branch_exists_tx(tx, workspace, branch)? {
+        return Ok(false);
+    }
+    branch_checkout_set_tx(tx, workspace, branch, now_ms)?;
+    Ok(true)
 }
 
 fn bump_task_revision_tx(

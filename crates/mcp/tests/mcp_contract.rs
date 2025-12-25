@@ -159,6 +159,7 @@ fn mcp_requires_notifications_initialized() {
             "branchmind_think_context",
             "branchmind_think_template",
             "storage",
+            "tasks_close_step",
             "tasks_context",
             "tasks_create",
             "tasks_decompose",
@@ -319,6 +320,94 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         .and_then(|v| v.as_u64())
         .unwrap_or(9999);
     assert!(used <= 400, "budget.used_chars must not exceed max_chars");
+}
+
+#[test]
+fn branchmind_bootstrap_defaults() {
+    let mut server = Server::start("branchmind_bootstrap_defaults");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let init = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "branchmind_init", "arguments": { "workspace": "ws_boot" } }
+    }));
+    let init_text = extract_tool_text(&init);
+    assert_eq!(
+        init_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let branch_list = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "branchmind_branch_list", "arguments": { "workspace": "ws_boot", "limit": 50 } }
+    }));
+    let branch_list_text = extract_tool_text(&branch_list);
+    let branches = branch_list_text
+        .get("result")
+        .and_then(|v| v.get("branches"))
+        .and_then(|v| v.as_array())
+        .expect("branches");
+    let has_main = branches.iter().any(|b| {
+        b.get("name")
+            .and_then(|v| v.as_str())
+            == Some("main")
+    });
+    assert!(has_main, "default branch main should exist");
+
+    let note = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "branchmind_notes_commit", "arguments": { "workspace": "ws_boot", "content": "hello" } }
+    }));
+    let note_text = extract_tool_text(&note);
+    assert_eq!(
+        note_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        note_text
+            .get("result")
+            .and_then(|v| v.get("entry"))
+            .and_then(|v| v.get("branch"))
+            .and_then(|v| v.as_str()),
+        Some("main")
+    );
+    assert_eq!(
+        note_text
+            .get("result")
+            .and_then(|v| v.get("entry"))
+            .and_then(|v| v.get("doc"))
+            .and_then(|v| v.as_str()),
+        Some("notes")
+    );
+
+    let show = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "branchmind_show", "arguments": { "workspace": "ws_boot", "doc_kind": "notes", "limit": 10 } }
+    }));
+    let show_text = extract_tool_text(&show);
+    assert_eq!(
+        show_text.get("result").and_then(|v| v.get("branch")).and_then(|v| v.as_str()),
+        Some("main")
+    );
+    assert_eq!(
+        show_text.get("result").and_then(|v| v.get("doc")).and_then(|v| v.as_str()),
+        Some("notes")
+    );
 }
 
 #[test]
@@ -1397,6 +1486,135 @@ fn tasks_graph_projection_smoke() {
             && e.get("to").and_then(|v| v.as_str()) == Some(step_node.as_str())
     });
     assert!(edge.is_some(), "expected contains edge task -> step");
+
+    let verify = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": { "name": "tasks_verify", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } } } }
+    }));
+    let verify_text = extract_tool_text(&verify);
+    assert_eq!(
+        verify_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let done = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": { "name": "tasks_done", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone(), "step_id": step_id.clone() } }
+    }));
+    let done_text = extract_tool_text(&done);
+    assert_eq!(
+        done_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let query_done = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": { "name": "branchmind_graph_query", "arguments": { "workspace": "ws_graph_proj", "branch": branch.clone(), "doc": graph_doc.clone(), "ids": [step_node.clone()], "include_edges": false, "limit": 10 } }
+    }));
+    let query_done_text = extract_tool_text(&query_done);
+    let done_nodes = query_done_text
+        .get("result")
+        .and_then(|v| v.get("nodes"))
+        .and_then(|v| v.as_array())
+        .expect("nodes");
+    let done_node = done_nodes
+        .iter()
+        .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(step_node.as_str()))
+        .expect("step node");
+    assert_eq!(
+        done_node.get("status").and_then(|v| v.as_str()),
+        Some("done")
+    );
+}
+
+#[test]
+fn tasks_close_step_smoke() {
+    let mut server = Server::start("tasks_close_step_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_close", "kind": "plan", "title": "Plan A" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let created_task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_close", "kind": "task", "parent": plan_id, "title": "Task A" } }
+    }));
+    let created_task_text = extract_tool_text(&created_task);
+    let task_id = created_task_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let decompose = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_close", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+    }));
+    let decompose_text = extract_tool_text(&decompose);
+    let step_id = decompose_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|v| v.first())
+        .and_then(|v| v.get("step_id"))
+        .and_then(|v| v.as_str())
+        .expect("step id")
+        .to_string();
+
+    let close = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks_close_step", "arguments": { "workspace": "ws_close", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } } } }
+    }));
+    let close_text = extract_tool_text(&close);
+    assert_eq!(
+        close_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let events = close_text
+        .get("result")
+        .and_then(|v| v.get("events"))
+        .and_then(|v| v.as_array())
+        .expect("events");
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events.first().and_then(|v| v.get("type")).and_then(|v| v.as_str()),
+        Some("step_verified")
+    );
+    assert_eq!(
+        events.last().and_then(|v| v.get("type")).and_then(|v| v.as_str()),
+        Some("step_done")
+    );
 }
 
 #[test]
@@ -1480,7 +1698,25 @@ fn branchmind_think_card_and_context_smoke() {
         Some(true)
     );
 
-    let card_id = "CARD-1";
+    let auto_card = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 55,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_card", "arguments": { "workspace": "ws_think", "target": task_id.clone(), "card": "Quick note" } }
+    }));
+    let auto_card_text = extract_tool_text(&auto_card);
+    assert_eq!(
+        auto_card_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let auto_id = auto_card_text
+        .get("result")
+        .and_then(|v| v.get("card_id"))
+        .and_then(|v| v.as_str())
+        .expect("auto card id");
+    assert!(auto_id.starts_with("CARD-"), "auto id must be generated");
+
+    let card_id = "CARD-EXPLICIT-1";
     let title = "Hypothesis";
     let text = "It should improve UX";
     let think_card = server.request(json!({

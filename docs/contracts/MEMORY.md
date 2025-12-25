@@ -63,17 +63,26 @@ This produces a snapshot-like experience without copying logs.
 
 ### `branchmind_init`
 
-Ensures the workspace storage is initialized.
+Ensures the workspace storage is initialized and bootstraps a default branch.
 
 Input: `{ workspace }`  
 Output: `{ workspace, storage_dir, schema_version }`
+
+Bootstrap behavior:
+
+- Creates the default branch `main` when the workspace has no branches.
+- Sets the workspace checkout to `main` when it is empty.
 
 ### `branchmind_status`
 
 Fast storage and workspace snapshot.
 
 Input: `{ workspace }`  
-Output: `{ workspace, schema_version, last_event_id?, last_event_ts? }`
+Output:
+
+- `{ workspace, schema_version, workspace_exists, last_event?, last_doc_entry? }`
+- `last_event` shape: `{ event_id, ts, ts_ms }`
+- `last_doc_entry` shape: `{ seq, ts, ts_ms, branch, doc, kind }`
 
 ### `branchmind_notes_commit`
 
@@ -83,6 +92,11 @@ Input (one of):
 
 - `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta? }`
 - `{ workspace, branch, doc, content, title?, format?, meta? }`
+
+Defaults:
+
+- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `doc` is omitted in that mode, it defaults to `notes`.
 
 Output:
 
@@ -96,6 +110,13 @@ Input (one of):
 
 - `{ workspace, target, doc_kind:"notes"|"trace"?, cursor?, limit?, max_chars? }`
 - `{ workspace, branch, doc, cursor?, limit?, max_chars? }`
+
+Defaults:
+
+- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `doc` is omitted in that mode, it defaults to:
+  - `notes` when `doc_kind="notes"`
+  - `trace` when `doc_kind="trace"` (default)
 
 Output:
 
@@ -225,6 +246,11 @@ Input (one of):
 - `{ workspace, target: "PLAN-###"|"TASK-###", ops:[...]}`
 - `{ workspace, branch, doc, ops:[...] }`
 
+Defaults:
+
+- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `doc` is omitted in that mode, it defaults to `graph`.
+
 Where `ops[]` is an array of operations:
 
 - `{"op":"node_upsert","id","type","title"?,"text"?,"status"?,"tags"?,"meta"?}`
@@ -256,6 +282,8 @@ Defaults:
 - `include_edges=true`
 - `limit=50` (nodes)
 - `edges_limit=200`
+- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `doc` is omitted in that mode, it defaults to `graph`.
 
 Output:
 
@@ -277,6 +305,11 @@ Input (one of):
 - `{ workspace, target, max_errors?, max_chars? }`
 - `{ workspace, branch, doc, max_errors?, max_chars? }`
 
+Defaults:
+
+- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `doc` is omitted in that mode, it defaults to `graph`.
+
 Output:
 
 - `{ branch, doc, ok, stats:{ nodes, edges }, errors:[...], truncated? }`
@@ -292,6 +325,7 @@ Directional diff between two branches for a single graph document (patch-style).
 
 Input: `{ workspace, from, to, doc?, cursor?, limit?, max_chars? }`
 
+- `doc` defaults to `"graph"`.
 - `cursor`/`limit` follow the same semantics as `branchmind_show` (tail pagination by `seq`).
 
 Output:
@@ -318,6 +352,10 @@ Merge graph changes from a derived branch back into its base branch.
 
 Input: `{ workspace, from, into, doc?, cursor?, limit?, dry_run? }`
 
+Defaults:
+
+- `doc` defaults to `"graph"`.
+
 Rules:
 
 - v0 merge supports only **merge-back into base**: `from.base_branch == into`.
@@ -338,6 +376,10 @@ Semantics:
 List conflicts for a target merge destination.
 
 Input: `{ workspace, into, doc?, status?, cursor?, limit?, max_chars? }`
+
+Defaults:
+
+- `doc` defaults to `"graph"`.
 
 Output:
 
@@ -375,6 +417,7 @@ Creates a new branch ref from an existing branch snapshot (no copy).
 Input: `{ workspace, name, from? }`
 
 - If `from` is omitted, it defaults to the workspace checkout branch.
+- If the workspace has no branches and no checkout, the server bootstraps `main` and uses it as the base.
 
 Output: `{ workspace, branch: { name, base_branch, base_seq } }`
 
@@ -448,14 +491,21 @@ Where:
 - `card` is either a JSON object or a string:
   - JSON object string (`"{...}"`) is accepted.
   - DSL string is accepted in v0: `key: value` lines (unknown keys preserved under `card.meta`).
-- Required normalized fields:
-  - `card.id` (aka `card_id`) — stable identifier (non-empty),
-  - `card.type` — one of `supported_types` (non-empty),
-  - at least one of `card.title` or `card.text` must be non-empty.
+  - Plain text string is accepted and treated as `text` with `type="note"`.
+- Normalization:
+  - `card.id` (aka `card_id`) is optional; when omitted the server auto-generates `CARD-<seq>`.
+  - `card.type` defaults to `"note"` when omitted.
+  - At least one of `card.title` or `card.text` must be non-empty.
 - Optional:
   - `card.status` (default: `"open"`),
   - `card.tags` (default: `[]`),
   - `supports[]` / `blocks[]` — arrays of other card ids (graph edges from `card.id`).
+
+Defaults:
+
+- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `trace_doc` is omitted in that mode, it defaults to `trace`.
+- If `graph_doc` is omitted in that mode, it defaults to `graph`.
 
 Output:
 
@@ -480,6 +530,8 @@ Input (one of):
 Defaults:
 
 - `limit_cards=30`
+- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `graph_doc` is omitted in that mode, it defaults to `graph`.
 
 Output:
 
