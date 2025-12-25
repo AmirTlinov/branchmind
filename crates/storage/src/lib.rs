@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bm_core::ids::WorkspaceId;
-use bm_core::model::TaskKind;
+use bm_core::model::{ReasoningRef, TaskKind};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::{Path, PathBuf};
 
@@ -62,6 +62,14 @@ pub struct TaskRow {
     pub description: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReasoningRefRow {
+    pub branch: String,
+    pub notes_doc: String,
+    pub graph_doc: String,
+    pub trace_doc: String,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +164,24 @@ impl SqliteStore {
               path TEXT,
               type TEXT NOT NULL,
               payload_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS focus (
+              workspace TEXT PRIMARY KEY,
+              focus_id TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS reasoning_refs (
+              workspace TEXT NOT NULL,
+              id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              notes_doc TEXT NOT NULL,
+              graph_doc TEXT NOT NULL,
+              trace_doc TEXT NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_events_workspace_seq ON events(workspace, seq);
@@ -405,6 +431,176 @@ impl SqliteStore {
 
         tx.commit()?;
         Ok((new_revision, event))
+    }
+
+    pub fn get_plan(&self, workspace: &WorkspaceId, id: &str) -> Result<Option<PlanRow>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                r#"
+                SELECT id, revision, title, contract, contract_json, created_at_ms, updated_at_ms
+                FROM plans
+                WHERE workspace = ?1 AND id = ?2
+                "#,
+                params![workspace.as_str(), id],
+                |row| {
+                    Ok(PlanRow {
+                        id: row.get(0)?,
+                        revision: row.get(1)?,
+                        title: row.get(2)?,
+                        contract: row.get(3)?,
+                        contract_json: row.get(4)?,
+                        created_at_ms: row.get(5)?,
+                        updated_at_ms: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn get_task(&self, workspace: &WorkspaceId, id: &str) -> Result<Option<TaskRow>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                r#"
+                SELECT id, revision, parent_plan_id, title, description, created_at_ms, updated_at_ms
+                FROM tasks
+                WHERE workspace = ?1 AND id = ?2
+                "#,
+                params![workspace.as_str(), id],
+                |row| {
+                    Ok(TaskRow {
+                        id: row.get(0)?,
+                        revision: row.get(1)?,
+                        parent_plan_id: row.get(2)?,
+                        title: row.get(3)?,
+                        description: row.get(4)?,
+                        created_at_ms: row.get(5)?,
+                        updated_at_ms: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn focus_set(&mut self, workspace: &WorkspaceId, focus_id: &str) -> Result<(), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        tx.execute(
+            r#"
+            INSERT INTO focus(workspace, focus_id, updated_at_ms)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(workspace) DO UPDATE SET focus_id=excluded.focus_id, updated_at_ms=excluded.updated_at_ms
+            "#,
+            params![workspace.as_str(), focus_id, now_ms],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn focus_get(&self, workspace: &WorkspaceId) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT focus_id FROM focus WHERE workspace = ?1",
+                params![workspace.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    pub fn focus_clear(&mut self, workspace: &WorkspaceId) -> Result<bool, StoreError> {
+        let tx = self.conn.transaction()?;
+        let deleted = tx.execute("DELETE FROM focus WHERE workspace = ?1", params![workspace.as_str()])?;
+        tx.commit()?;
+        Ok(deleted > 0)
+    }
+
+    pub fn ensure_reasoning_ref(
+        &mut self,
+        workspace: &WorkspaceId,
+        id: &str,
+        kind: TaskKind,
+    ) -> Result<ReasoningRefRow, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let exists = match kind {
+            TaskKind::Plan => tx
+                .query_row(
+                    "SELECT 1 FROM plans WHERE workspace=?1 AND id=?2",
+                    params![workspace.as_str(), id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some(),
+            TaskKind::Task => tx
+                .query_row(
+                    "SELECT 1 FROM tasks WHERE workspace=?1 AND id=?2",
+                    params![workspace.as_str(), id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some(),
+        };
+
+        if !exists {
+            return Err(StoreError::UnknownId);
+        }
+
+        if let Some(row) = tx
+            .query_row(
+                r#"
+                SELECT branch, notes_doc, graph_doc, trace_doc
+                FROM reasoning_refs
+                WHERE workspace=?1 AND id=?2
+                "#,
+                params![workspace.as_str(), id],
+                |row| {
+                    Ok(ReasoningRefRow {
+                        branch: row.get(0)?,
+                        notes_doc: row.get(1)?,
+                        graph_doc: row.get(2)?,
+                        trace_doc: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?
+        {
+            tx.commit()?;
+            return Ok(row);
+        }
+
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        let reference = ReasoningRef::for_entity(kind, id);
+        tx.execute(
+            r#"
+            INSERT INTO reasoning_refs(workspace, id, kind, branch, notes_doc, graph_doc, trace_doc, created_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                workspace.as_str(),
+                id,
+                kind.as_str(),
+                reference.branch,
+                reference.notes_doc,
+                reference.graph_doc,
+                reference.trace_doc,
+                now_ms
+            ],
+        )?;
+
+        let row = ReasoningRefRow {
+            branch: reference.branch,
+            notes_doc: reference.notes_doc,
+            graph_doc: reference.graph_doc,
+            trace_doc: reference.trace_doc,
+        };
+
+        tx.commit()?;
+        Ok(row)
     }
 
     pub fn list_plans(&self, workspace: &WorkspaceId, limit: usize, offset: usize) -> Result<Vec<PlanRow>, StoreError> {

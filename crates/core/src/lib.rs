@@ -66,4 +66,27 @@ pub mod model {
             }
         }
     }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct ReasoningRef {
+        pub branch: String,
+        pub notes_doc: String,
+        pub graph_doc: String,
+        pub trace_doc: String,
+    }
+
+    impl ReasoningRef {
+        pub fn for_entity(kind: TaskKind, id: &str) -> Self {
+            let branch_prefix = match kind {
+                TaskKind::Plan => "plan",
+                TaskKind::Task => "task",
+            };
+            Self {
+                branch: format!("{branch_prefix}/{id}"),
+                notes_doc: "notes".to_string(),
+                graph_doc: format!("{id}-graph"),
+                trace_doc: format!("{id}-trace"),
+            }
+        }
+    }
 }

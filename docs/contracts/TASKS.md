@@ -32,7 +32,9 @@ All stateful tools in this family operate inside an explicit `workspace` (a stab
 Minimum required tools (v0 MVP):
 
 - `tasks_create` (plan/task)
+- `tasks_context` (list)
 - `tasks_edit` (plan/task meta)
+- `tasks_focus_get` / `tasks_focus_set` / `tasks_focus_clear` (convenience focus, workspace-scoped)
 - `tasks_decompose` (add steps)
 - `tasks_define` (define step title/criteria/tests/blockers)
 - `tasks_note` (progress notes)

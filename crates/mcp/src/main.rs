@@ -7,6 +7,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 const MCP_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "branchmind-rust-mcp";
@@ -120,6 +122,10 @@ impl McpServer {
             "tasks_edit" => self.tool_tasks_edit(args),
             "tasks_context" => self.tool_tasks_context(args),
             "tasks_delta" => self.tool_tasks_delta(args),
+            "tasks_focus_get" => self.tool_tasks_focus_get(args),
+            "tasks_focus_set" => self.tool_tasks_focus_set(args),
+            "tasks_focus_clear" => self.tool_tasks_focus_clear(args),
+            "tasks_radar" => self.tool_tasks_radar(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
         }
@@ -192,6 +198,7 @@ impl McpServer {
                     "revision": revision,
                     "event": {
                         "event_id": event.event_id(),
+                        "ts": ts_ms_to_rfc3339(event.ts_ms),
                         "ts_ms": event.ts_ms,
                         "task_id": event.task_id,
                         "path": event.path,
@@ -348,6 +355,7 @@ impl McpServer {
                     "revision": revision,
                     "event": {
                         "event_id": event.event_id(),
+                        "ts": ts_ms_to_rfc3339(event.ts_ms),
                         "ts_ms": event.ts_ms,
                         "task_id": event.task_id,
                         "path": event.path,
@@ -359,7 +367,17 @@ impl McpServer {
             Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown id"),
             Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
             Err(StoreError::RevisionMismatch { expected, actual }) => {
-                ai_error("REVISION_MISMATCH", &format!("expected={expected} actual={actual}"))
+                ai_error_with(
+                    "REVISION_MISMATCH",
+                    &format!("expected={expected} actual={actual}"),
+                    Some("Refresh the current revision and retry with expected_revision."),
+                    vec![suggest_call(
+                        "tasks_context",
+                        "Refresh current revisions for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                )
             }
             Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
         }
@@ -435,6 +453,7 @@ impl McpServer {
                 "workspace": workspace.as_str(),
                 "events": events.into_iter().map(|e| json!({
                     "event_id": e.event_id(),
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
                     "ts_ms": e.ts_ms,
                     "task": e.task_id,
                     "path": e.path,
@@ -443,6 +462,220 @@ impl McpServer {
                 })).collect::<Vec<_>>()
             }),
         )
+    }
+
+    fn tool_tasks_focus_get(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        match self.store.focus_get(&workspace) {
+            Ok(focus) => ai_ok(
+                "focus_get",
+                json!({
+                    "workspace": workspace.as_str(),
+                    "focus": focus
+                }),
+            ),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_focus_set(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if !task_id.starts_with("PLAN-") && !task_id.starts_with("TASK-") {
+            return ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-");
+        }
+
+        let prev = match self.store.focus_get(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        if let Err(err) = self.store.focus_set(&workspace, &task_id) {
+            return ai_error("STORE_ERROR", &format_store_error(err));
+        }
+
+        ai_ok(
+            "focus_set",
+            json!({
+                "workspace": workspace.as_str(),
+                "previous": prev,
+                "focus": task_id
+            }),
+        )
+    }
+
+    fn tool_tasks_focus_clear(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let prev = match self.store.focus_get(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let cleared = match self.store.focus_clear(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "focus_clear",
+            json!({
+                "workspace": workspace.as_str(),
+                "previous": prev,
+                "cleared": cleared
+            }),
+        )
+    }
+
+    fn tool_tasks_radar(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let requested_task = args_obj.get("task").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let focus = match self.store.focus_get(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let target_id = requested_task.or(focus.clone());
+        let Some(target_id) = target_id else {
+            return ai_error_with(
+                "INVALID_INPUT",
+                "No target: provide task or set focus",
+                Some("Call tasks_context to list ids, then set focus with tasks_focus_set."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "List plans and tasks for this workspace to choose a focus target.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        };
+
+        let kind = if target_id.starts_with("PLAN-") {
+            TaskKind::Plan
+        } else if target_id.starts_with("TASK-") {
+            TaskKind::Task
+        } else {
+            return ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-");
+        };
+
+        let target = match kind {
+            TaskKind::Plan => match self.store.get_plan(&workspace, &target_id) {
+                Ok(Some(p)) => json!({
+                    "id": p.id,
+                    "kind": "plan",
+                    "revision": p.revision,
+                    "title": p.title,
+                    "contract": p.contract,
+                    "contract_data": parse_json_or_null(p.contract_json),
+                    "created_at_ms": p.created_at_ms,
+                    "updated_at_ms": p.updated_at_ms
+                }),
+                Ok(None) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            },
+            TaskKind::Task => match self.store.get_task(&workspace, &target_id) {
+                Ok(Some(t)) => json!({
+                    "id": t.id,
+                    "kind": "task",
+                    "revision": t.revision,
+                    "parent": t.parent_plan_id,
+                    "title": t.title,
+                    "description": t.description,
+                    "created_at_ms": t.created_at_ms,
+                    "updated_at_ms": t.updated_at_ms
+                }),
+                Ok(None) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            },
+        };
+
+        let reasoning_ref = match self.store.ensure_reasoning_ref(&workspace, &target_id, kind) {
+            Ok(r) => json!({
+                "branch": r.branch,
+                "notes_doc": r.notes_doc,
+                "graph_doc": r.graph_doc,
+                "trace_doc": r.trace_doc
+            }),
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let now = match kind {
+            TaskKind::Plan => format!("Plan {}: {}", target_id, target.get("title").and_then(|v| v.as_str()).unwrap_or("")),
+            TaskKind::Task => format!("Task {}: {}", target_id, target.get("title").and_then(|v| v.as_str()).unwrap_or("")),
+        };
+
+        let why = match kind {
+            TaskKind::Plan => target
+                .get("contract")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            TaskKind::Task => target
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        };
+
+        let verify = Vec::<String>::new();
+        let blockers = Vec::<String>::new();
+        let next = Vec::<String>::new();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "requested": { "task": args_obj.get("task").cloned().unwrap_or(Value::Null) },
+            "focus": focus,
+            "target": target,
+            "reasoning_ref": reasoning_ref,
+            "radar": {
+                "now": now,
+                "why": why,
+                "verify": verify,
+                "next": next,
+                "blockers": blockers
+            }
+        });
+
+        if let Some(limit) = max_chars {
+            let (used, truncated) = enforce_max_chars_budget(&mut result, limit);
+            attach_budget(&mut result, limit, used, truncated);
+        }
+
+        ai_ok("radar", result)
     }
 }
 
@@ -510,6 +743,49 @@ fn tool_definitions() -> Vec<Value> {
                 "required": ["workspace"]
             }
         }),
+        json!({
+            "name": "tasks_focus_get",
+            "description": "Get current focus (workspace-scoped).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "workspace": { "type": "string" } },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_focus_set",
+            "description": "Set current focus (workspace-scoped).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" }
+                },
+                "required": ["workspace", "task"]
+            }
+        }),
+        json!({
+            "name": "tasks_focus_clear",
+            "description": "Clear current focus (workspace-scoped).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "workspace": { "type": "string" } },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_radar",
+            "description": "Radar View: compact snapshot (Now/Why/Verify/Next/Blockers).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
     ]
 }
 
@@ -555,6 +831,24 @@ fn optional_i64(args: &serde_json::Map<String, Value>, key: &str) -> Result<Opti
             .map(Some)
             .ok_or_else(|| ai_error("INVALID_INPUT", &format!("{key} must be an integer"))),
         _ => Err(ai_error("INVALID_INPUT", &format!("{key} must be an integer"))),
+    }
+}
+
+fn optional_usize(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<usize>, Value> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::Number(n) => n
+            .as_u64()
+            .map(|v| v as usize)
+            .map(Some)
+            .ok_or_else(|| ai_error("INVALID_INPUT", &format!("{key} must be a positive integer"))),
+        _ => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{key} must be a positive integer"),
+        )),
     }
 }
 
@@ -625,38 +919,139 @@ fn format_store_error(err: StoreError) -> String {
     }
 }
 
-fn ai_ok(intent: &str, result: Value) -> Value {
+fn suggest_call(target: &str, reason: &str, priority: &str, params: Value) -> Value {
+    json!({
+        "action": "call_tool",
+        "target": target,
+        "reason": reason,
+        "priority": priority,
+        "validated": true,
+        "params": params
+    })
+}
+
+fn ai_ok_with(intent: &str, result: Value, suggestions: Vec<Value>) -> Value {
     json!({
         "success": true,
         "intent": intent,
         "result": result,
         "warnings": [],
-        "suggestions": [],
+        "suggestions": suggestions,
         "context": {},
         "error": null,
-        "timestamp": now_rfc3339_fallback_ms(),
+        "timestamp": now_rfc3339(),
     })
 }
 
-fn ai_error(code: &str, message: &str) -> Value {
+fn ai_error_with(code: &str, message: &str, recovery: Option<&str>, suggestions: Vec<Value>) -> Value {
+    let error = match recovery {
+        None => json!({ "code": code, "message": message }),
+        Some(recovery) => json!({ "code": code, "message": message, "recovery": recovery }),
+    };
     json!({
         "success": false,
         "intent": "error",
         "result": {},
         "warnings": [],
-        "suggestions": [],
+        "suggestions": suggestions,
         "context": {},
-        "error": { "code": code, "message": message },
-        "timestamp": now_rfc3339_fallback_ms(),
+        "error": error,
+        "timestamp": now_rfc3339(),
     })
 }
 
-fn now_rfc3339_fallback_ms() -> Value {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    // v0 skeleton: use a numeric timestamp to avoid pulling time formatting deps early.
-    Value::Number(serde_json::Number::from(now.as_millis() as u64))
+fn ai_ok(intent: &str, result: Value) -> Value {
+    ai_ok_with(intent, result, Vec::new())
+}
+
+fn ai_error(code: &str, message: &str) -> Value {
+    ai_error_with(code, message, None, Vec::new())
+}
+
+fn now_rfc3339() -> Value {
+    Value::String(
+        OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
+    )
+}
+
+fn ts_ms_to_rfc3339(ts_ms: i64) -> String {
+    let nanos = (ts_ms as i128) * 1_000_000i128;
+    let dt = OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    dt.format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn json_len_chars(value: &Value) -> usize {
+    serde_json::to_string(value).map(|s| s.len()).unwrap_or(0)
+}
+
+fn truncate_string(value: &str, max_chars: usize) -> String {
+    if value.len() <= max_chars {
+        return value.to_string();
+    }
+    let mut out = value.chars().take(max_chars).collect::<String>();
+    out.push_str("...");
+    out
+}
+
+fn enforce_max_chars_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
+    if max_chars == 0 {
+        return (json_len_chars(value), false);
+    }
+
+    let mut used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, false);
+    }
+
+    let mut truncated = false;
+
+    if let Some(why) = value
+        .get_mut("radar")
+        .and_then(|v| v.get_mut("why"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+    {
+        let shorter = truncate_string(&why, 256);
+        if let Some(radar) = value.get_mut("radar") {
+            if let Some(obj) = radar.as_object_mut() {
+                obj.insert("why".to_string(), Value::String(shorter));
+            }
+        }
+        truncated = true;
+        used = json_len_chars(value);
+        if used <= max_chars {
+            return (used, truncated);
+        }
+    }
+
+    if let Some(target) = value.get_mut("target").and_then(|v| v.as_object_mut()) {
+        target.remove("contract_data");
+        target.remove("contract");
+        target.remove("description");
+        truncated = true;
+        used = json_len_chars(value);
+        if used <= max_chars {
+            return (used, truncated);
+        }
+    }
+
+    (used, truncated)
+}
+
+fn attach_budget(value: &mut Value, max_chars: usize, used_chars: usize, truncated: bool) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "budget".to_string(),
+            json!({
+                "max_chars": max_chars,
+                "used_chars": used_chars,
+                "truncated": truncated
+            }),
+        );
+    }
 }
 
 fn parse_storage_dir() -> PathBuf {

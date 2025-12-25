@@ -16,7 +16,7 @@ The long-term goal is a low-dependency, high-performance Rust MCP server suitabl
 - Allow small, widely-audited crates for:
   - JSON (schema + serialization),
   - SQLite bindings (if an embedded DB is chosen),
+  - RFC3339 time formatting (agent-facing timestamps),
   - MCP stdio protocol helpers.
 
 If “0 deps strict” is required, replace these with in-house minimal implementations and document the trade-offs.
-

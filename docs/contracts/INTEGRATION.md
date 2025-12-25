@@ -39,6 +39,7 @@ Every mutating `tasks_*` response must include an append-only list of events:
     {
       "event_id": "evt_...",
       "ts": "2025-12-25T00:00:00Z",
+      "ts_ms": 1735084800000,
       "workspace": "acme/repo",
       "task": "TASK-001",
       "path": "s:0.t:1.s:2",
@@ -63,4 +64,3 @@ When a merge conflict exists, it must be discoverable via a query:
 - conflict entities present in the graph with `status="conflict"`.
 
 When resolved, the conflict must disappear from that listing/query.
-

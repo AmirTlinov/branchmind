@@ -12,7 +12,8 @@ This plan is intentionally staged to keep the system verifiable at every step.
 
 - `tasks_create` (plan/task) + `tasks_context` (list) + `tasks_edit` (meta) + `tasks_delta` (event stream)
 - Revisions (`expected_revision`) and strict targeting semantics
-- `tasks_radar` (one-screen) for a single active target
+- Focus pointer (`tasks_focus_get/set/clear`) for fast resumption (convenience only)
+- `tasks_radar` (one-screen) for a single active target (includes reasoning_ref)
 
 ## Milestone 2 — Reasoning memory MVP (durable log)
 
