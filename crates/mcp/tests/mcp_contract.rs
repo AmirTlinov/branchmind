@@ -1100,6 +1100,133 @@ fn branchmind_graph_conflicts_and_resolution_smoke() {
 }
 
 #[test]
+fn tasks_graph_projection_smoke() {
+    let mut server = Server::start("tasks_graph_projection_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_proj", "kind": "plan", "title": "Plan A" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let created_task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_proj", "kind": "task", "parent": plan_id, "title": "Task A" } }
+    }));
+    let created_task_text = extract_tool_text(&created_task);
+    let task_id = created_task_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let decompose = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+    }));
+    let decompose_text = extract_tool_text(&decompose);
+    let step_id = decompose_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|v| v.first())
+        .and_then(|v| v.get("step_id"))
+        .and_then(|v| v.as_str())
+        .expect("step id")
+        .to_string();
+
+    let radar = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone() } }
+    }));
+    let radar_text = extract_tool_text(&radar);
+    let branch = radar_text
+        .get("result")
+        .and_then(|v| v.get("reasoning_ref"))
+        .and_then(|v| v.get("branch"))
+        .and_then(|v| v.as_str())
+        .expect("reasoning_ref.branch")
+        .to_string();
+    let graph_doc = radar_text
+        .get("result")
+        .and_then(|v| v.get("reasoning_ref"))
+        .and_then(|v| v.get("graph_doc"))
+        .and_then(|v| v.as_str())
+        .expect("reasoning_ref.graph_doc")
+        .to_string();
+
+    let task_node = format!("task:{task_id}");
+    let step_node = format!("step:{step_id}");
+    let query = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "branchmind_graph_query", "arguments": { "workspace": "ws_graph_proj", "branch": branch, "doc": graph_doc, "ids": [task_node.clone(), step_node.clone()], "include_edges": true, "edges_limit": 10, "limit": 10 } }
+    }));
+    let query_text = extract_tool_text(&query);
+    assert_eq!(
+        query_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let nodes = query_text
+        .get("result")
+        .and_then(|v| v.get("nodes"))
+        .and_then(|v| v.as_array())
+        .expect("nodes");
+    let task_node_entry = nodes
+        .iter()
+        .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(task_node.as_str()))
+        .expect("task node");
+    assert_eq!(
+        task_node_entry.get("type").and_then(|v| v.as_str()),
+        Some("task")
+    );
+    let step_node_entry = nodes
+        .iter()
+        .find(|n| n.get("id").and_then(|v| v.as_str()) == Some(step_node.as_str()))
+        .expect("step node");
+    assert_eq!(
+        step_node_entry.get("type").and_then(|v| v.as_str()),
+        Some("step")
+    );
+
+    let edges = query_text
+        .get("result")
+        .and_then(|v| v.get("edges"))
+        .and_then(|v| v.as_array())
+        .expect("edges");
+    let edge = edges.iter().find(|e| {
+        e.get("from").and_then(|v| v.as_str()) == Some(task_node.as_str())
+            && e.get("rel").and_then(|v| v.as_str()) == Some("contains")
+            && e.get("to").and_then(|v| v.as_str()) == Some(step_node.as_str())
+    });
+    assert!(edge.is_some(), "expected contains edge task -> step");
+}
+
+#[test]
 fn branchmind_think_card_and_context_smoke() {
     let mut server = Server::start("branchmind_think_card_and_context_smoke");
 

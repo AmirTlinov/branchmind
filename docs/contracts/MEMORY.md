@@ -214,6 +214,7 @@ Although MCP inputs/outputs are JSON strings, the server treats graph keys as ty
 - Node IDs (`GraphNodeId`) and edge keys (`from`, `rel`, `to`) are strictly validated.
 - `type` and `rel` are free-form strings, but must pass validation (no control chars; bounded length; `|` reserved).
 - `tags` are normalized (lowercased, deduplicated, stable ordering).
+- Reserved namespaces: task projection uses `task:` and `step:` node id prefixes.
 
 ### `branchmind_graph_apply`
 

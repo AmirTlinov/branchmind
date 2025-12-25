@@ -50,6 +50,31 @@ Properties:
 - Survives server restarts.
 - Returned in `tasks_radar` and `tasks_resume`-like payloads.
 
+## Task → graph projection (v0)
+
+To make the system a **single organism**, task mutations project into the task's `graph_doc`
+atomically and deterministically.
+
+### Namespace (reserved)
+
+- Task node id: `task:<TASK-###>`
+- Step node id: `step:<STEP-XXXXXXXX>`
+
+### Node types
+
+- `task`
+- `step`
+
+### Edges
+
+- `contains` — structural containment (task → step, parent step → child step)
+
+### Guarantees
+
+- Projection is written in the **same transaction** as the task event.
+- `source_event_id` is derived from the task event id + graph key to ensure idempotency.
+- MCP inputs/outputs are unchanged; this is an internal consistency rule.
+
 ## Sync event stream
 
 Every mutating `tasks_*` response must include an append-only list of events:

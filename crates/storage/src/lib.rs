@@ -885,6 +885,27 @@ impl SqliteStore {
             &event,
         )?;
 
+        if matches!(kind, TaskKind::Task) {
+            let touched = Self::project_task_graph_task_node_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref,
+                &event,
+                &id,
+                &title,
+                now_ms,
+            )?;
+            if touched {
+                touch_document_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &reasoning_ref.branch,
+                    &reasoning_ref.graph_doc,
+                    now_ms,
+                )?;
+            }
+        }
+
         tx.commit()?;
         Ok((id, 0i64, event))
     }
@@ -1070,6 +1091,25 @@ impl SqliteStore {
             &reasoning_ref.trace_doc,
             &event,
         )?;
+
+        let touched = Self::project_task_graph_task_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &event,
+            id,
+            &new_title,
+            now_ms,
+        )?;
+        if touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
 
         tx.commit()?;
         Ok((new_revision, event))
@@ -1815,6 +1855,115 @@ impl SqliteStore {
             last_seq,
             last_ts_ms: now_ms,
         })
+    }
+
+    fn project_task_graph_task_node_tx(
+        tx: &Transaction<'_>,
+        workspace: &str,
+        reasoning: &ReasoningRefRow,
+        event: &EventRow,
+        task_id: &str,
+        title: &str,
+        now_ms: i64,
+    ) -> Result<bool, StoreError> {
+        ensure_document_tx(
+            tx,
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            DocumentKind::Graph.as_str(),
+            now_ms,
+        )?;
+        let node_id = task_graph_node_id(task_id);
+        let meta_json = build_task_graph_meta_json(task_id);
+        let source_event_id = format!("task_graph:{}:node:{node_id}", event.event_id());
+        graph_upsert_node_tx(
+            tx,
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            now_ms,
+            &node_id,
+            "task",
+            Some(title),
+            None,
+            Some(meta_json.as_str()),
+            &source_event_id,
+        )
+    }
+
+    fn project_task_graph_step_node_tx(
+        tx: &Transaction<'_>,
+        workspace: &str,
+        reasoning: &ReasoningRefRow,
+        event: &EventRow,
+        task_id: &str,
+        step: &StepRef,
+        title: &str,
+        completed: bool,
+        now_ms: i64,
+    ) -> Result<bool, StoreError> {
+        ensure_document_tx(
+            tx,
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            DocumentKind::Graph.as_str(),
+            now_ms,
+        )?;
+        let node_id = step_graph_node_id(&step.step_id);
+        let meta_json = build_step_graph_meta_json(task_id, step);
+        let status = if completed {
+            Some("done")
+        } else {
+            Some("open")
+        };
+        let source_event_id = format!("task_graph:{}:node:{node_id}", event.event_id());
+        graph_upsert_node_tx(
+            tx,
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            now_ms,
+            &node_id,
+            "step",
+            Some(title),
+            status,
+            Some(meta_json.as_str()),
+            &source_event_id,
+        )
+    }
+
+    fn project_task_graph_contains_edge_tx(
+        tx: &Transaction<'_>,
+        workspace: &str,
+        reasoning: &ReasoningRefRow,
+        event: &EventRow,
+        from: &str,
+        to: &str,
+        now_ms: i64,
+    ) -> Result<bool, StoreError> {
+        ensure_document_tx(
+            tx,
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            DocumentKind::Graph.as_str(),
+            now_ms,
+        )?;
+        let source_event_id = format!("task_graph:{}:edge:{from}:contains:{to}", event.event_id());
+        graph_upsert_edge_tx(
+            tx,
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            now_ms,
+            from,
+            "contains",
+            to,
+            None,
+            &source_event_id,
+        )
     }
 
     pub fn think_card_commit(
@@ -3267,6 +3416,80 @@ impl SqliteStore {
             &event,
         )?;
 
+        let mut graph_touched = false;
+        let task_title = task_title_tx(&tx, workspace.as_str(), task_id)?;
+        graph_touched |= Self::project_task_graph_task_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &event,
+            task_id,
+            &task_title,
+            now_ms,
+        )?;
+
+        let parent_node_id = if let Some(parent_step_id) = parent_step_id.clone() {
+            let parent_path = parent_path
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "s:?".to_string());
+            let parent_ref = StepRef {
+                step_id: parent_step_id,
+                path: parent_path,
+            };
+            let (parent_title, parent_completed) =
+                step_snapshot_tx(&tx, workspace.as_str(), task_id, &parent_ref.step_id)?;
+            graph_touched |= Self::project_task_graph_step_node_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref,
+                &event,
+                task_id,
+                &parent_ref,
+                &parent_title,
+                parent_completed,
+                now_ms,
+            )?;
+            step_graph_node_id(&parent_ref.step_id)
+        } else {
+            task_graph_node_id(task_id)
+        };
+
+        for step in created_steps.iter() {
+            let (title, completed) =
+                step_snapshot_tx(&tx, workspace.as_str(), task_id, &step.step_id)?;
+            graph_touched |= Self::project_task_graph_step_node_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref,
+                &event,
+                task_id,
+                step,
+                &title,
+                completed,
+                now_ms,
+            )?;
+
+            let step_node_id = step_graph_node_id(&step.step_id);
+            graph_touched |= Self::project_task_graph_contains_edge_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref,
+                &event,
+                &parent_node_id,
+                &step_node_id,
+                now_ms,
+            )?;
+        }
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
+
         tx.commit()?;
         Ok(DecomposeResult {
             task_revision,
@@ -3383,6 +3606,29 @@ impl SqliteStore {
             &reasoning_ref.trace_doc,
             &event,
         )?;
+
+        let (snapshot_title, snapshot_completed) =
+            step_snapshot_tx(&tx, workspace.as_str(), task_id, &step_ref.step_id)?;
+        let graph_touched = Self::project_task_graph_step_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &event,
+            task_id,
+            &step_ref,
+            &snapshot_title,
+            snapshot_completed,
+            now_ms,
+        )?;
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
 
         tx.commit()?;
         Ok(StepOpResult {
@@ -3556,6 +3802,29 @@ impl SqliteStore {
             &reasoning_ref.trace_doc,
             &event,
         )?;
+
+        let (snapshot_title, snapshot_completed) =
+            step_snapshot_tx(&tx, workspace.as_str(), task_id, &step_ref.step_id)?;
+        let graph_touched = Self::project_task_graph_step_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &event,
+            task_id,
+            &step_ref,
+            &snapshot_title,
+            snapshot_completed,
+            now_ms,
+        )?;
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
 
         tx.commit()?;
         Ok(StepOpResult {
@@ -4528,6 +4797,161 @@ fn insert_graph_edge_version_tx(
         ],
     )?;
     Ok(())
+}
+
+fn task_graph_node_id(task_id: &str) -> String {
+    format!("task:{task_id}")
+}
+
+fn step_graph_node_id(step_id: &str) -> String {
+    format!("step:{step_id}")
+}
+
+fn build_task_graph_meta_json(task_id: &str) -> String {
+    format!(
+        "{{\"source\":\"tasks\",\"task_id\":\"{}\"}}",
+        json_escape(task_id)
+    )
+}
+
+fn build_step_graph_meta_json(task_id: &str, step: &StepRef) -> String {
+    format!(
+        "{{\"source\":\"tasks\",\"task_id\":\"{}\",\"step_id\":\"{}\",\"path\":\"{}\"}}",
+        json_escape(task_id),
+        json_escape(&step.step_id),
+        json_escape(&step.path)
+    )
+}
+
+fn task_title_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+) -> Result<String, StoreError> {
+    tx.query_row(
+        "SELECT title FROM tasks WHERE workspace=?1 AND id=?2",
+        params![workspace, task_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .ok_or(StoreError::UnknownId)
+}
+
+fn step_snapshot_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    step_id: &str,
+) -> Result<(String, bool), StoreError> {
+    let row = tx
+        .query_row(
+            "SELECT title, completed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            params![workspace, task_id, step_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((title, completed)) = row else {
+        return Err(StoreError::StepNotFound);
+    };
+    Ok((title, completed != 0))
+}
+
+fn graph_upsert_node_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    now_ms: i64,
+    node_id: &str,
+    node_type: &str,
+    title: Option<&str>,
+    status: Option<&str>,
+    meta_json: Option<&str>,
+    source_event_id: &str,
+) -> Result<bool, StoreError> {
+    validate_graph_node_id(node_id)?;
+    validate_graph_type(node_type)?;
+
+    let op = GraphOp::NodeUpsert(GraphNodeUpsert {
+        id: node_id.to_string(),
+        node_type: node_type.to_string(),
+        title: title.map(|v| v.to_string()),
+        text: None,
+        tags: Vec::new(),
+        status: status.map(|v| v.to_string()),
+        meta_json: meta_json.map(|v| v.to_string()),
+    });
+    let (_payload, seq_opt) = insert_graph_doc_entry_tx(
+        tx,
+        workspace,
+        branch,
+        doc,
+        now_ms,
+        &op,
+        Some(source_event_id),
+    )?;
+    let Some(seq) = seq_opt else {
+        return Ok(false);
+    };
+
+    insert_graph_node_version_tx(
+        tx,
+        workspace,
+        branch,
+        doc,
+        seq,
+        now_ms,
+        node_id,
+        Some(node_type),
+        title,
+        None,
+        &[],
+        status,
+        meta_json,
+        false,
+    )?;
+    Ok(true)
+}
+
+fn graph_upsert_edge_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    now_ms: i64,
+    from: &str,
+    rel: &str,
+    to: &str,
+    meta_json: Option<&str>,
+    source_event_id: &str,
+) -> Result<bool, StoreError> {
+    validate_graph_node_id(from)?;
+    validate_graph_node_id(to)?;
+    validate_graph_rel(rel)?;
+
+    let op = GraphOp::EdgeUpsert(GraphEdgeUpsert {
+        from: from.to_string(),
+        rel: rel.to_string(),
+        to: to.to_string(),
+        meta_json: meta_json.map(|v| v.to_string()),
+    });
+    let (_payload, seq_opt) = insert_graph_doc_entry_tx(
+        tx,
+        workspace,
+        branch,
+        doc,
+        now_ms,
+        &op,
+        Some(source_event_id),
+    )?;
+    let Some(seq) = seq_opt else {
+        return Ok(false);
+    };
+
+    insert_graph_edge_version_tx(
+        tx, workspace, branch, doc, seq, now_ms, from, rel, to, meta_json, false,
+    )?;
+    Ok(true)
 }
 
 fn graph_node_semantic_eq(left: Option<&GraphNodeRow>, right: Option<&GraphNodeRow>) -> bool {
