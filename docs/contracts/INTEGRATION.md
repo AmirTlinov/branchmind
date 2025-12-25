@@ -14,6 +14,23 @@ Branching note:
 
 - Task mutations always ingest into the **canonical** `reasoning_ref.branch` (and its `trace_doc`), regardless of any reasoning checkout/what-if branches.
 
+## Human-authored note mirroring (tasks_note → notes_doc)
+
+Some task operations carry meaningful human-authored text (progress notes).
+
+To avoid losing that meaning between sessions, `tasks_note` must be mirrored into reasoning memory:
+
+- The note content is appended as a `doc_entries.kind="note"` entry into the target's `notes_doc`.
+- The mirror is written atomically with the task event (same transaction).
+- The mirror always targets the **canonical** `reasoning_ref.branch` (never the checkout branch).
+
+Recommended metadata (stored in `meta_json`) for the mirrored note:
+
+- `source="tasks_note"`
+- `task_id`, `step_id`, `path`
+- `note_seq` (step note seq)
+- `event_id` (the corresponding task event id)
+
 ## Reasoning reference
 
 Each task/plan must be associated with a stable “reasoning reference”:

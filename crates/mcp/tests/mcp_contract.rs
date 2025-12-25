@@ -619,6 +619,115 @@ fn branchmind_export_smoke() {
 }
 
 #[test]
+fn tasks_note_is_mirrored_into_reasoning_notes() {
+    let mut server = Server::start("tasks_note_mirrored_into_reasoning_notes");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let created_task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+    }));
+    let created_task_text = extract_tool_text(&created_task);
+    let task_id = created_task_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let decompose = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws1", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+    }));
+    let decompose_text = extract_tool_text(&decompose);
+    let step_path = decompose_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.get("path"))
+        .and_then(|v| v.as_str())
+        .expect("step path")
+        .to_string();
+
+    let note_content = "progress note via tasks_note";
+    let noted = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks_note", "arguments": { "workspace": "ws1", "task": task_id.clone(), "path": step_path, "note": note_content } }
+    }));
+    let noted_text = extract_tool_text(&noted);
+    assert_eq!(
+        noted_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let show_notes = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "branchmind_show", "arguments": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "notes", "limit": 50 } }
+    }));
+    let show_notes_text = extract_tool_text(&show_notes);
+    let entries = show_notes_text
+        .get("result")
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .expect("entries");
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.get("content").and_then(|v| v.as_str()) == Some(note_content)),
+        "expected tasks_note content to be mirrored into reasoning notes"
+    );
+
+    let export = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": { "name": "branchmind_export", "arguments": { "workspace": "ws1", "target": task_id, "notes_limit": 50, "trace_limit": 50 } }
+    }));
+    let export_text = extract_tool_text(&export);
+    let export_notes_entries = export_text
+        .get("result")
+        .and_then(|v| v.get("notes"))
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .expect("notes.entries");
+    assert!(
+        export_notes_entries
+            .iter()
+            .any(|e| e.get("content").and_then(|v| v.as_str()) == Some(note_content)),
+        "expected branchmind_export to include mirrored tasks_note content"
+    );
+}
+
+#[test]
 fn tasks_create_context_delta_smoke() {
     let mut server = Server::start("tasks_smoke");
 
