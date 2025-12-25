@@ -15,6 +15,9 @@ pub enum StoreError {
     RevisionMismatch { expected: i64, actual: i64 },
     UnknownId,
     UnknownBranch,
+    UnknownConflict,
+    ConflictAlreadyResolved,
+    MergeNotSupported,
     BranchAlreadyExists,
     BranchCycle,
     BranchDepthExceeded,
@@ -36,6 +39,9 @@ impl std::fmt::Display for StoreError {
             }
             Self::UnknownId => write!(f, "unknown id"),
             Self::UnknownBranch => write!(f, "unknown branch"),
+            Self::UnknownConflict => write!(f, "unknown conflict"),
+            Self::ConflictAlreadyResolved => write!(f, "conflict already resolved"),
+            Self::MergeNotSupported => write!(f, "merge not supported"),
             Self::BranchAlreadyExists => write!(f, "branch already exists"),
             Self::BranchCycle => write!(f, "branch base cycle"),
             Self::BranchDepthExceeded => write!(f, "branch base depth exceeded"),
@@ -106,6 +112,7 @@ pub struct BranchInfo {
 pub enum DocumentKind {
     Notes,
     Trace,
+    Graph,
 }
 
 impl DocumentKind {
@@ -113,6 +120,7 @@ impl DocumentKind {
         match self {
             Self::Notes => "notes",
             Self::Trace => "trace",
+            Self::Graph => "graph",
         }
     }
 }
@@ -164,6 +172,390 @@ pub struct MergeNotesResult {
     pub count: usize,
     pub next_cursor: Option<i64>,
     pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphNodeRow {
+    pub id: String,
+    pub node_type: String,
+    pub title: Option<String>,
+    pub text: Option<String>,
+    pub tags: Vec<String>,
+    pub status: Option<String>,
+    pub meta_json: Option<String>,
+    pub deleted: bool,
+    pub last_seq: i64,
+    pub last_ts_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphEdgeRow {
+    pub from: String,
+    pub rel: String,
+    pub to: String,
+    pub meta_json: Option<String>,
+    pub deleted: bool,
+    pub last_seq: i64,
+    pub last_ts_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct GraphEdgeKey {
+    from: String,
+    rel: String,
+    to: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum GraphOp {
+    NodeUpsert(GraphNodeUpsert),
+    NodeDelete {
+        id: String,
+    },
+    EdgeUpsert(GraphEdgeUpsert),
+    EdgeDelete {
+        from: String,
+        rel: String,
+        to: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphNodeUpsert {
+    pub id: String,
+    pub node_type: String,
+    pub title: Option<String>,
+    pub text: Option<String>,
+    pub tags: Vec<String>,
+    pub status: Option<String>,
+    pub meta_json: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphEdgeUpsert {
+    pub from: String,
+    pub rel: String,
+    pub to: String,
+    pub meta_json: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphApplyResult {
+    pub nodes_upserted: usize,
+    pub nodes_deleted: usize,
+    pub edges_upserted: usize,
+    pub edges_deleted: usize,
+    pub last_seq: i64,
+    pub last_ts_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphQuerySlice {
+    pub nodes: Vec<GraphNodeRow>,
+    pub edges: Vec<GraphEdgeRow>,
+    pub next_cursor: Option<i64>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphQueryRequest {
+    pub ids: Option<Vec<String>>,
+    pub types: Option<Vec<String>>,
+    pub status: Option<String>,
+    pub tags_any: Option<Vec<String>>,
+    pub tags_all: Option<Vec<String>>,
+    pub text: Option<String>,
+    pub cursor: Option<i64>,
+    pub limit: usize,
+    pub include_edges: bool,
+    pub edges_limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphValidateError {
+    pub code: &'static str,
+    pub message: String,
+    pub kind: &'static str,
+    pub key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphValidateResult {
+    pub ok: bool,
+    pub nodes: usize,
+    pub edges: usize,
+    pub errors: Vec<GraphValidateError>,
+}
+
+#[derive(Clone, Debug)]
+pub enum GraphDiffChange {
+    Node { to: GraphNodeRow },
+    Edge { to: GraphEdgeRow },
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphDiffSlice {
+    pub changes: Vec<GraphDiffChange>,
+    pub next_cursor: Option<i64>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
+enum GraphDiffCandidate {
+    Node { to: GraphNodeRow },
+    Edge { key: GraphEdgeKey, to: GraphEdgeRow },
+}
+
+impl GraphDiffCandidate {
+    fn last_seq(&self) -> i64 {
+        match self {
+            Self::Node { to } => to.last_seq,
+            Self::Edge { to, .. } => to.last_seq,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphMergeResult {
+    pub merged: usize,
+    pub skipped: usize,
+    pub conflicts_created: usize,
+    pub conflict_ids: Vec<String>,
+    pub count: usize,
+    pub next_cursor: Option<i64>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
+enum GraphMergeCandidate {
+    Node { theirs: GraphNodeRow },
+    Edge { theirs: GraphEdgeRow },
+}
+
+impl GraphMergeCandidate {
+    fn last_seq(&self) -> i64 {
+        match self {
+            Self::Node { theirs } => theirs.last_seq,
+            Self::Edge { theirs } => theirs.last_seq,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphConflictSummary {
+    pub conflict_id: String,
+    pub kind: String,
+    pub key: String,
+    pub status: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphConflictDetail {
+    pub conflict_id: String,
+    pub kind: String,
+    pub key: String,
+    pub from_branch: String,
+    pub into_branch: String,
+    pub doc: String,
+    pub status: String,
+    pub created_at_ms: i64,
+    pub resolved_at_ms: Option<i64>,
+    pub base_node: Option<GraphNodeRow>,
+    pub theirs_node: Option<GraphNodeRow>,
+    pub ours_node: Option<GraphNodeRow>,
+    pub base_edge: Option<GraphEdgeRow>,
+    pub theirs_edge: Option<GraphEdgeRow>,
+    pub ours_edge: Option<GraphEdgeRow>,
+}
+
+#[derive(Clone, Debug)]
+struct GraphConflictDetailRow {
+    kind: String,
+    key: String,
+    from_branch: String,
+    into_branch: String,
+    doc: String,
+    status: String,
+    created_at_ms: i64,
+    resolved_at_ms: Option<i64>,
+
+    base_seq: Option<i64>,
+    base_ts_ms: Option<i64>,
+    base_deleted: Option<i64>,
+    base_node_type: Option<String>,
+    base_title: Option<String>,
+    base_text: Option<String>,
+    base_tags: Option<String>,
+    base_status: Option<String>,
+    base_meta_json: Option<String>,
+    base_from_id: Option<String>,
+    base_rel: Option<String>,
+    base_to_id: Option<String>,
+    base_edge_meta_json: Option<String>,
+
+    theirs_seq: Option<i64>,
+    theirs_ts_ms: Option<i64>,
+    theirs_deleted: Option<i64>,
+    theirs_node_type: Option<String>,
+    theirs_title: Option<String>,
+    theirs_text: Option<String>,
+    theirs_tags: Option<String>,
+    theirs_status: Option<String>,
+    theirs_meta_json: Option<String>,
+    theirs_from_id: Option<String>,
+    theirs_rel: Option<String>,
+    theirs_to_id: Option<String>,
+    theirs_edge_meta_json: Option<String>,
+
+    ours_seq: Option<i64>,
+    ours_ts_ms: Option<i64>,
+    ours_deleted: Option<i64>,
+    ours_node_type: Option<String>,
+    ours_title: Option<String>,
+    ours_text: Option<String>,
+    ours_tags: Option<String>,
+    ours_status: Option<String>,
+    ours_meta_json: Option<String>,
+    ours_from_id: Option<String>,
+    ours_rel: Option<String>,
+    ours_to_id: Option<String>,
+    ours_edge_meta_json: Option<String>,
+}
+
+impl GraphConflictDetailRow {
+    fn into_detail(self, conflict_id: &str) -> GraphConflictDetail {
+        let kind = self.kind.clone();
+        let key = self.key.clone();
+
+        let base_node = if kind == "node" && self.base_seq.is_some() {
+            Some(GraphNodeRow {
+                id: key.clone(),
+                node_type: self.base_node_type.unwrap_or_default(),
+                title: self.base_title,
+                text: self.base_text,
+                tags: decode_tags(self.base_tags.as_deref()),
+                status: self.base_status,
+                meta_json: self.base_meta_json,
+                deleted: self.base_deleted.unwrap_or(0) != 0,
+                last_seq: self.base_seq.unwrap_or(0),
+                last_ts_ms: self.base_ts_ms.unwrap_or(0),
+            })
+        } else {
+            None
+        };
+
+        let theirs_node = if kind == "node" && self.theirs_seq.unwrap_or(0) != 0 {
+            Some(GraphNodeRow {
+                id: key.clone(),
+                node_type: self.theirs_node_type.unwrap_or_default(),
+                title: self.theirs_title,
+                text: self.theirs_text,
+                tags: decode_tags(self.theirs_tags.as_deref()),
+                status: self.theirs_status,
+                meta_json: self.theirs_meta_json,
+                deleted: self.theirs_deleted.unwrap_or(0) != 0,
+                last_seq: self.theirs_seq.unwrap_or(0),
+                last_ts_ms: self.theirs_ts_ms.unwrap_or(0),
+            })
+        } else {
+            None
+        };
+
+        let ours_node = if kind == "node" && self.ours_seq.unwrap_or(0) != 0 {
+            Some(GraphNodeRow {
+                id: key.clone(),
+                node_type: self.ours_node_type.unwrap_or_default(),
+                title: self.ours_title,
+                text: self.ours_text,
+                tags: decode_tags(self.ours_tags.as_deref()),
+                status: self.ours_status,
+                meta_json: self.ours_meta_json,
+                deleted: self.ours_deleted.unwrap_or(0) != 0,
+                last_seq: self.ours_seq.unwrap_or(0),
+                last_ts_ms: self.ours_ts_ms.unwrap_or(0),
+            })
+        } else {
+            None
+        };
+
+        let base_edge = if kind == "edge" && self.base_seq.is_some() {
+            match (self.base_from_id, self.base_rel, self.base_to_id) {
+                (Some(from), Some(rel), Some(to)) => Some(GraphEdgeRow {
+                    from,
+                    rel,
+                    to,
+                    meta_json: self.base_edge_meta_json,
+                    deleted: self.base_deleted.unwrap_or(0) != 0,
+                    last_seq: self.base_seq.unwrap_or(0),
+                    last_ts_ms: self.base_ts_ms.unwrap_or(0),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let theirs_edge = if kind == "edge" && self.theirs_seq.unwrap_or(0) != 0 {
+            match (self.theirs_from_id, self.theirs_rel, self.theirs_to_id) {
+                (Some(from), Some(rel), Some(to)) => Some(GraphEdgeRow {
+                    from,
+                    rel,
+                    to,
+                    meta_json: self.theirs_edge_meta_json,
+                    deleted: self.theirs_deleted.unwrap_or(0) != 0,
+                    last_seq: self.theirs_seq.unwrap_or(0),
+                    last_ts_ms: self.theirs_ts_ms.unwrap_or(0),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let ours_edge = if kind == "edge" && self.ours_seq.unwrap_or(0) != 0 {
+            match (self.ours_from_id, self.ours_rel, self.ours_to_id) {
+                (Some(from), Some(rel), Some(to)) => Some(GraphEdgeRow {
+                    from,
+                    rel,
+                    to,
+                    meta_json: self.ours_edge_meta_json,
+                    deleted: self.ours_deleted.unwrap_or(0) != 0,
+                    last_seq: self.ours_seq.unwrap_or(0),
+                    last_ts_ms: self.ours_ts_ms.unwrap_or(0),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        GraphConflictDetail {
+            conflict_id: conflict_id.to_string(),
+            kind,
+            key,
+            from_branch: self.from_branch,
+            into_branch: self.into_branch,
+            doc: self.doc,
+            status: self.status,
+            created_at_ms: self.created_at_ms,
+            resolved_at_ms: self.resolved_at_ms,
+            base_node,
+            theirs_node,
+            ours_node,
+            base_edge,
+            theirs_edge,
+            ours_edge,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphConflictResolveResult {
+    pub conflict_id: String,
+    pub status: String,
+    pub applied: bool,
+    pub applied_seq: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -423,10 +815,108 @@ impl SqliteStore {
               note TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS graph_node_versions (
+              workspace TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              seq INTEGER NOT NULL,
+              ts_ms INTEGER NOT NULL,
+              node_id TEXT NOT NULL,
+              node_type TEXT,
+              title TEXT,
+              text TEXT,
+              tags TEXT,
+              status TEXT,
+              meta_json TEXT,
+              deleted INTEGER NOT NULL,
+              PRIMARY KEY (workspace, branch, doc, node_id, seq)
+            );
+
+            CREATE TABLE IF NOT EXISTS graph_edge_versions (
+              workspace TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              seq INTEGER NOT NULL,
+              ts_ms INTEGER NOT NULL,
+              from_id TEXT NOT NULL,
+              rel TEXT NOT NULL,
+              to_id TEXT NOT NULL,
+              meta_json TEXT,
+              deleted INTEGER NOT NULL,
+              PRIMARY KEY (workspace, branch, doc, from_id, rel, to_id, seq)
+            );
+
+            CREATE TABLE IF NOT EXISTS graph_conflicts (
+              workspace TEXT NOT NULL,
+              conflict_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              key TEXT NOT NULL,
+              from_branch TEXT NOT NULL,
+              into_branch TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              base_cutoff_seq INTEGER NOT NULL,
+
+              base_seq INTEGER,
+              base_ts_ms INTEGER,
+              base_deleted INTEGER,
+              base_node_type TEXT,
+              base_title TEXT,
+              base_text TEXT,
+              base_tags TEXT,
+              base_status TEXT,
+              base_meta_json TEXT,
+              base_from_id TEXT,
+              base_rel TEXT,
+              base_to_id TEXT,
+              base_edge_meta_json TEXT,
+
+              theirs_seq INTEGER,
+              theirs_ts_ms INTEGER,
+              theirs_deleted INTEGER,
+              theirs_node_type TEXT,
+              theirs_title TEXT,
+              theirs_text TEXT,
+              theirs_tags TEXT,
+              theirs_status TEXT,
+              theirs_meta_json TEXT,
+              theirs_from_id TEXT,
+              theirs_rel TEXT,
+              theirs_to_id TEXT,
+              theirs_edge_meta_json TEXT,
+
+              ours_seq INTEGER,
+              ours_ts_ms INTEGER,
+              ours_deleted INTEGER,
+              ours_node_type TEXT,
+              ours_title TEXT,
+              ours_text TEXT,
+              ours_tags TEXT,
+              ours_status TEXT,
+              ours_meta_json TEXT,
+              ours_from_id TEXT,
+              ours_rel TEXT,
+              ours_to_id TEXT,
+              ours_edge_meta_json TEXT,
+
+              status TEXT NOT NULL,
+              resolution TEXT,
+              created_at_ms INTEGER NOT NULL,
+              resolved_at_ms INTEGER,
+
+              PRIMARY KEY (workspace, conflict_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_events_workspace_seq ON events(workspace, seq);
             CREATE INDEX IF NOT EXISTS idx_doc_entries_lookup ON doc_entries(workspace, branch, doc, seq);
             CREATE INDEX IF NOT EXISTS idx_doc_entries_workspace_seq ON doc_entries(workspace, seq);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_entries_event_dedup ON doc_entries(workspace, branch, doc, source_event_id) WHERE source_event_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_graph_node_versions_seq ON graph_node_versions(workspace, branch, doc, seq);
+            CREATE INDEX IF NOT EXISTS idx_graph_node_versions_key ON graph_node_versions(workspace, branch, doc, node_id, seq);
+            CREATE INDEX IF NOT EXISTS idx_graph_edge_versions_seq ON graph_edge_versions(workspace, branch, doc, seq);
+            CREATE INDEX IF NOT EXISTS idx_graph_edge_versions_key ON graph_edge_versions(workspace, branch, doc, from_id, rel, to_id, seq);
+            CREATE INDEX IF NOT EXISTS idx_graph_conflicts_lookup ON graph_conflicts(workspace, into_branch, doc, status, created_at_ms);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_conflicts_dedup
+              ON graph_conflicts(workspace, from_branch, into_branch, doc, kind, key, base_cutoff_seq, theirs_seq, ours_seq);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_root_unique ON steps(workspace, task_id, ordinal) WHERE parent_step_id IS NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_child_unique ON steps(workspace, task_id, parent_step_id, ordinal) WHERE parent_step_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_steps_lookup ON steps(workspace, task_id, parent_step_id, ordinal);
@@ -1245,6 +1735,1013 @@ impl SqliteStore {
             count: diff.entries.len(),
             next_cursor: diff.next_cursor,
             has_more: diff.has_more,
+        })
+    }
+
+    pub fn graph_apply_ops(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        ops: Vec<GraphOp>,
+    ) -> Result<GraphApplyResult, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+        if ops.is_empty() {
+            return Err(StoreError::InvalidInput("ops must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            branch,
+            doc,
+            DocumentKind::Graph.as_str(),
+            now_ms,
+        )?;
+
+        let mut nodes_upserted = 0usize;
+        let mut nodes_deleted = 0usize;
+        let mut edges_upserted = 0usize;
+        let mut edges_deleted = 0usize;
+        let mut last_seq = 0i64;
+
+        for op in ops {
+            let (content, seq_opt) =
+                insert_graph_doc_entry_tx(&tx, workspace.as_str(), branch, doc, now_ms, &op, None)?;
+            let Some(seq) = seq_opt else {
+                // No dedup key was provided, so this should be unreachable.
+                return Err(StoreError::Sql(rusqlite::Error::QueryReturnedNoRows));
+            };
+            last_seq = seq;
+
+            match op {
+                GraphOp::NodeUpsert(upsert) => {
+                    validate_graph_node_id(&upsert.id)?;
+                    validate_graph_type(&upsert.node_type)?;
+                    let tags = normalize_tags(&upsert.tags)?;
+                    insert_graph_node_version_tx(
+                        &tx,
+                        workspace.as_str(),
+                        branch,
+                        doc,
+                        seq,
+                        now_ms,
+                        &upsert.id,
+                        Some(&upsert.node_type),
+                        upsert.title.as_deref(),
+                        upsert.text.as_deref(),
+                        &tags,
+                        upsert.status.as_deref(),
+                        upsert.meta_json.as_deref(),
+                        false,
+                    )?;
+                    nodes_upserted += 1;
+                }
+                GraphOp::NodeDelete { id } => {
+                    validate_graph_node_id(&id)?;
+                    let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+                    let Some(existing) =
+                        graph_node_get_tx(&tx, workspace.as_str(), &sources, doc, &id)?
+                    else {
+                        return Err(StoreError::InvalidInput("node not found"));
+                    };
+                    if existing.deleted {
+                        return Err(StoreError::InvalidInput("node already deleted"));
+                    }
+
+                    insert_graph_node_version_tx(
+                        &tx,
+                        workspace.as_str(),
+                        branch,
+                        doc,
+                        seq,
+                        now_ms,
+                        &id,
+                        Some(existing.node_type.as_str()),
+                        existing.title.as_deref(),
+                        existing.text.as_deref(),
+                        &existing.tags,
+                        existing.status.as_deref(),
+                        existing.meta_json.as_deref(),
+                        true,
+                    )?;
+                    nodes_deleted += 1;
+
+                    // Cascade-delete edges connected to this node in the current effective view.
+                    let edge_keys =
+                        graph_edge_keys_for_node_tx(&tx, workspace.as_str(), &sources, doc, &id)?;
+                    for key in edge_keys {
+                        insert_graph_edge_version_tx(
+                            &tx,
+                            workspace.as_str(),
+                            branch,
+                            doc,
+                            seq,
+                            now_ms,
+                            &key.from,
+                            &key.rel,
+                            &key.to,
+                            None,
+                            true,
+                        )?;
+                        edges_deleted += 1;
+                    }
+                }
+                GraphOp::EdgeUpsert(upsert) => {
+                    validate_graph_node_id(&upsert.from)?;
+                    validate_graph_node_id(&upsert.to)?;
+                    validate_graph_rel(&upsert.rel)?;
+
+                    // Require endpoints to exist in the effective view (avoid dangling edges).
+                    let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+                    let Some(from_node) =
+                        graph_node_get_tx(&tx, workspace.as_str(), &sources, doc, &upsert.from)?
+                    else {
+                        return Err(StoreError::InvalidInput("edge.from node not found"));
+                    };
+                    if from_node.deleted {
+                        return Err(StoreError::InvalidInput("edge.from node is deleted"));
+                    }
+                    let Some(to_node) =
+                        graph_node_get_tx(&tx, workspace.as_str(), &sources, doc, &upsert.to)?
+                    else {
+                        return Err(StoreError::InvalidInput("edge.to node not found"));
+                    };
+                    if to_node.deleted {
+                        return Err(StoreError::InvalidInput("edge.to node is deleted"));
+                    }
+
+                    insert_graph_edge_version_tx(
+                        &tx,
+                        workspace.as_str(),
+                        branch,
+                        doc,
+                        seq,
+                        now_ms,
+                        &upsert.from,
+                        &upsert.rel,
+                        &upsert.to,
+                        upsert.meta_json.as_deref(),
+                        false,
+                    )?;
+                    edges_upserted += 1;
+                }
+                GraphOp::EdgeDelete { from, rel, to } => {
+                    validate_graph_node_id(&from)?;
+                    validate_graph_node_id(&to)?;
+                    validate_graph_rel(&rel)?;
+
+                    let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+                    let key = GraphEdgeKey {
+                        from: from.clone(),
+                        rel: rel.clone(),
+                        to: to.clone(),
+                    };
+                    let Some(existing) =
+                        graph_edge_get_tx(&tx, workspace.as_str(), &sources, doc, &key)?
+                    else {
+                        return Err(StoreError::InvalidInput("edge not found"));
+                    };
+                    if existing.deleted {
+                        return Err(StoreError::InvalidInput("edge already deleted"));
+                    }
+
+                    insert_graph_edge_version_tx(
+                        &tx,
+                        workspace.as_str(),
+                        branch,
+                        doc,
+                        seq,
+                        now_ms,
+                        &from,
+                        &rel,
+                        &to,
+                        existing.meta_json.as_deref(),
+                        true,
+                    )?;
+                    edges_deleted += 1;
+                }
+            }
+
+            let _ = content;
+        }
+
+        touch_document_tx(&tx, workspace.as_str(), branch, doc, now_ms)?;
+        tx.commit()?;
+
+        Ok(GraphApplyResult {
+            nodes_upserted,
+            nodes_deleted,
+            edges_upserted,
+            edges_deleted,
+            last_seq,
+            last_ts_ms: now_ms,
+        })
+    }
+
+    pub fn graph_query(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        request: GraphQueryRequest,
+    ) -> Result<GraphQuerySlice, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let cursor = request.cursor.unwrap_or(i64::MAX);
+        let limit = request.limit.clamp(1, 200) as i64;
+        let edges_limit = request.edges_limit.clamp(0, 1000) as i64;
+        let tx = self.conn.transaction()?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+
+        let mut nodes = graph_nodes_query_tx(
+            &tx,
+            workspace.as_str(),
+            &sources,
+            doc,
+            cursor,
+            limit,
+            &request,
+        )?;
+
+        let has_more = nodes.len() as i64 > limit;
+        if has_more {
+            nodes.truncate(limit as usize);
+        }
+        let next_cursor = if has_more {
+            nodes.last().map(|n| n.last_seq)
+        } else {
+            None
+        };
+
+        let mut edges = Vec::new();
+        if request.include_edges && !nodes.is_empty() && edges_limit > 0 {
+            let node_ids = nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>();
+            edges = graph_edges_for_nodes_tx(
+                &tx,
+                workspace.as_str(),
+                &sources,
+                doc,
+                &node_ids,
+                edges_limit,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(GraphQuerySlice {
+            nodes,
+            edges,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    pub fn graph_validate(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        max_errors: usize,
+    ) -> Result<GraphValidateResult, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let max_errors = max_errors.clamp(1, 500);
+        let tx = self.conn.transaction()?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+        let nodes = graph_nodes_all_tx(&tx, workspace.as_str(), &sources, doc, false)?;
+        let edges = graph_edges_all_tx(&tx, workspace.as_str(), &sources, doc, false)?;
+
+        use std::collections::HashSet;
+        let mut node_set = HashSet::new();
+        for node in nodes.iter() {
+            if !node.deleted {
+                node_set.insert(node.id.as_str());
+            }
+        }
+
+        let mut errors = Vec::new();
+        for edge in edges.iter() {
+            if edge.deleted {
+                continue;
+            }
+            if !node_set.contains(edge.from.as_str()) || !node_set.contains(edge.to.as_str()) {
+                let key = format!("{}|{}|{}", edge.from, edge.rel, edge.to);
+                errors.push(GraphValidateError {
+                    code: "EDGE_ENDPOINT_MISSING",
+                    message: "edge endpoint is missing or deleted".to_string(),
+                    kind: "edge",
+                    key,
+                });
+                if errors.len() >= max_errors {
+                    break;
+                }
+            }
+        }
+
+        tx.commit()?;
+        Ok(GraphValidateResult {
+            ok: errors.is_empty(),
+            nodes: nodes.into_iter().filter(|n| !n.deleted).count(),
+            edges: edges.into_iter().filter(|e| !e.deleted).count(),
+            errors,
+        })
+    }
+
+    pub fn graph_diff(
+        &mut self,
+        workspace: &WorkspaceId,
+        from_branch: &str,
+        to_branch: &str,
+        doc: &str,
+        cursor: Option<i64>,
+        limit: usize,
+    ) -> Result<GraphDiffSlice, StoreError> {
+        if from_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("from_branch must not be empty"));
+        }
+        if to_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("to_branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let before_seq = cursor.unwrap_or(i64::MAX);
+        let limit = limit.clamp(1, 200) as i64;
+        let scan_limit = (limit * 5).clamp(limit, 1000);
+        let tx = self.conn.transaction()?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), from_branch)?
+            || !branch_exists_tx(&tx, workspace.as_str(), to_branch)?
+        {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let from_sources = branch_sources_tx(&tx, workspace.as_str(), from_branch)?;
+        let to_sources = branch_sources_tx(&tx, workspace.as_str(), to_branch)?;
+
+        let candidates = graph_diff_candidates_tx(
+            &tx,
+            workspace.as_str(),
+            &to_sources,
+            doc,
+            before_seq,
+            scan_limit + 1,
+        )?;
+
+        let mut changes = Vec::new();
+        let mut scanned = 0usize;
+
+        let mut node_ids = Vec::new();
+        let mut edge_keys = Vec::new();
+        for candidate in candidates.iter().take(scan_limit as usize) {
+            match candidate {
+                GraphDiffCandidate::Node { to, .. } => node_ids.push(to.id.clone()),
+                GraphDiffCandidate::Edge { key, .. } => edge_keys.push(key.clone()),
+            }
+        }
+
+        let from_nodes =
+            graph_nodes_get_map_tx(&tx, workspace.as_str(), &from_sources, doc, &node_ids, true)?;
+        let from_edges = graph_edges_get_map_tx(
+            &tx,
+            workspace.as_str(),
+            &from_sources,
+            doc,
+            &edge_keys,
+            true,
+        )?;
+
+        for candidate in candidates.iter().take(scan_limit as usize) {
+            if changes.len() as i64 >= limit {
+                break;
+            }
+            scanned += 1;
+            match candidate {
+                GraphDiffCandidate::Node { to, .. } => {
+                    let from = from_nodes.get(&to.id);
+                    if !graph_node_semantic_eq(from, Some(to)) {
+                        changes.push(GraphDiffChange::Node { to: to.clone() });
+                    }
+                }
+                GraphDiffCandidate::Edge { key, to, .. } => {
+                    let from = from_edges.get(key);
+                    if !graph_edge_semantic_eq(from, Some(to)) {
+                        changes.push(GraphDiffChange::Edge { to: to.clone() });
+                    }
+                }
+            }
+        }
+
+        let has_more = candidates.len() > scanned;
+        let next_cursor = if has_more {
+            candidates
+                .get(scanned.saturating_sub(1))
+                .map(|c| c.last_seq())
+        } else {
+            None
+        };
+
+        tx.commit()?;
+        Ok(GraphDiffSlice {
+            changes,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    pub fn graph_merge_back(
+        &mut self,
+        workspace: &WorkspaceId,
+        from_branch: &str,
+        into_branch: &str,
+        doc: &str,
+        cursor: Option<i64>,
+        limit: usize,
+        dry_run: bool,
+    ) -> Result<GraphMergeResult, StoreError> {
+        if from_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("from_branch must not be empty"));
+        }
+        if into_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("into_branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let before_seq = cursor.unwrap_or(i64::MAX);
+        let limit = limit.clamp(1, 200) as i64;
+        let scan_limit = (limit * 5).clamp(limit, 1000);
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), from_branch)?
+            || !branch_exists_tx(&tx, workspace.as_str(), into_branch)?
+        {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let Some((base_branch, base_cutoff_seq)) =
+            branch_base_info_tx(&tx, workspace.as_str(), from_branch)?
+        else {
+            return Err(StoreError::MergeNotSupported);
+        };
+        if base_branch != into_branch {
+            return Err(StoreError::MergeNotSupported);
+        }
+
+        if !dry_run {
+            ensure_workspace_tx(&tx, workspace, now_ms)?;
+            ensure_document_tx(
+                &tx,
+                workspace.as_str(),
+                into_branch,
+                doc,
+                DocumentKind::Graph.as_str(),
+                now_ms,
+            )?;
+        }
+
+        let base_sources = base_sources_for_branch_tx(&tx, workspace.as_str(), from_branch)?;
+        let into_sources = branch_sources_tx(&tx, workspace.as_str(), into_branch)?;
+
+        let candidates = graph_merge_candidates_tx(
+            &tx,
+            workspace.as_str(),
+            from_branch,
+            doc,
+            base_cutoff_seq,
+            before_seq,
+            scan_limit + 1,
+        )?;
+
+        let mut merged = 0usize;
+        let mut skipped = 0usize;
+        let mut conflicts_created = 0usize;
+        let mut conflict_ids = Vec::new();
+        let mut processed = 0usize;
+
+        for candidate in candidates.iter().take(scan_limit as usize) {
+            if merged as i64 + skipped as i64 + conflicts_created as i64 >= limit {
+                break;
+            }
+            processed += 1;
+
+            match candidate {
+                GraphMergeCandidate::Node { theirs, .. } => {
+                    let key = theirs.id.clone();
+                    let base =
+                        graph_node_get_tx(&tx, workspace.as_str(), &base_sources, doc, &key)?;
+                    let ours =
+                        graph_node_get_tx(&tx, workspace.as_str(), &into_sources, doc, &key)?;
+
+                    if graph_node_semantic_eq(base.as_ref(), Some(theirs))
+                        || graph_node_semantic_eq(ours.as_ref(), Some(theirs))
+                    {
+                        skipped += 1;
+                        continue;
+                    }
+                    if graph_node_semantic_eq(base.as_ref(), ours.as_ref()) {
+                        if dry_run {
+                            merged += 1;
+                            continue;
+                        }
+                        let merge_key =
+                            format!("graph_merge:{from_branch}:{}:node:{key}", theirs.last_seq);
+                        if let Some(seq) = insert_graph_doc_entry_tx(
+                            &tx,
+                            workspace.as_str(),
+                            into_branch,
+                            doc,
+                            now_ms,
+                            &GraphOp::NodeUpsert(GraphNodeUpsert {
+                                id: key.clone(),
+                                node_type: theirs.node_type.clone(),
+                                title: theirs.title.clone(),
+                                text: theirs.text.clone(),
+                                tags: theirs.tags.clone(),
+                                status: theirs.status.clone(),
+                                meta_json: theirs.meta_json.clone(),
+                            }),
+                            Some(&merge_key),
+                        )?
+                        .1
+                        {
+                            let meta_json = merge_meta_json(
+                                theirs.meta_json.as_deref(),
+                                from_branch,
+                                theirs.last_seq,
+                                theirs.last_ts_ms,
+                            );
+                            insert_graph_node_version_tx(
+                                &tx,
+                                workspace.as_str(),
+                                into_branch,
+                                doc,
+                                seq,
+                                now_ms,
+                                &key,
+                                Some(theirs.node_type.as_str()),
+                                theirs.title.as_deref(),
+                                theirs.text.as_deref(),
+                                &theirs.tags,
+                                theirs.status.as_deref(),
+                                Some(&meta_json),
+                                theirs.deleted,
+                            )?;
+                            merged += 1;
+                        } else {
+                            skipped += 1;
+                        }
+                        continue;
+                    }
+
+                    // Diverged: create conflict.
+                    if dry_run {
+                        conflicts_created += 1;
+                        continue;
+                    }
+                    let conflict_id = graph_conflict_create_node_tx(
+                        &tx,
+                        workspace.as_str(),
+                        from_branch,
+                        into_branch,
+                        doc,
+                        base_cutoff_seq,
+                        &key,
+                        base.as_ref(),
+                        Some(theirs),
+                        ours.as_ref(),
+                        now_ms,
+                    )?;
+                    conflicts_created += 1;
+                    conflict_ids.push(conflict_id);
+                }
+                GraphMergeCandidate::Edge { theirs, .. } => {
+                    let key = GraphEdgeKey {
+                        from: theirs.from.clone(),
+                        rel: theirs.rel.clone(),
+                        to: theirs.to.clone(),
+                    };
+                    let base =
+                        graph_edge_get_tx(&tx, workspace.as_str(), &base_sources, doc, &key)?;
+                    let ours =
+                        graph_edge_get_tx(&tx, workspace.as_str(), &into_sources, doc, &key)?;
+
+                    if graph_edge_semantic_eq(base.as_ref(), Some(theirs))
+                        || graph_edge_semantic_eq(ours.as_ref(), Some(theirs))
+                    {
+                        skipped += 1;
+                        continue;
+                    }
+                    if graph_edge_semantic_eq(base.as_ref(), ours.as_ref()) {
+                        if dry_run {
+                            merged += 1;
+                            continue;
+                        }
+                        let key_str = format!("{}|{}|{}", key.from, key.rel, key.to);
+                        let merge_key = format!(
+                            "graph_merge:{from_branch}:{}:edge:{key_str}",
+                            theirs.last_seq
+                        );
+                        if let Some(seq) = insert_graph_doc_entry_tx(
+                            &tx,
+                            workspace.as_str(),
+                            into_branch,
+                            doc,
+                            now_ms,
+                            &GraphOp::EdgeUpsert(GraphEdgeUpsert {
+                                from: key.from.clone(),
+                                rel: key.rel.clone(),
+                                to: key.to.clone(),
+                                meta_json: theirs.meta_json.clone(),
+                            }),
+                            Some(&merge_key),
+                        )?
+                        .1
+                        {
+                            let meta_json = merge_meta_json(
+                                theirs.meta_json.as_deref(),
+                                from_branch,
+                                theirs.last_seq,
+                                theirs.last_ts_ms,
+                            );
+                            insert_graph_edge_version_tx(
+                                &tx,
+                                workspace.as_str(),
+                                into_branch,
+                                doc,
+                                seq,
+                                now_ms,
+                                &key.from,
+                                &key.rel,
+                                &key.to,
+                                Some(&meta_json),
+                                theirs.deleted,
+                            )?;
+                            merged += 1;
+                        } else {
+                            skipped += 1;
+                        }
+                        continue;
+                    }
+
+                    if dry_run {
+                        conflicts_created += 1;
+                        continue;
+                    }
+                    let conflict_id = graph_conflict_create_edge_tx(
+                        &tx,
+                        workspace.as_str(),
+                        from_branch,
+                        into_branch,
+                        doc,
+                        base_cutoff_seq,
+                        &key,
+                        base.as_ref(),
+                        Some(theirs),
+                        ours.as_ref(),
+                        now_ms,
+                    )?;
+                    conflicts_created += 1;
+                    conflict_ids.push(conflict_id);
+                }
+            }
+        }
+
+        if !dry_run && (merged > 0) {
+            touch_document_tx(&tx, workspace.as_str(), into_branch, doc, now_ms)?;
+        }
+
+        let has_more = candidates.len() > processed;
+        let next_cursor = if has_more {
+            candidates
+                .get(processed.saturating_sub(1))
+                .map(|c| c.last_seq())
+        } else {
+            None
+        };
+
+        tx.commit()?;
+        Ok(GraphMergeResult {
+            merged,
+            skipped,
+            conflicts_created,
+            conflict_ids,
+            count: processed,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    pub fn graph_conflicts_list(
+        &mut self,
+        workspace: &WorkspaceId,
+        into_branch: &str,
+        doc: &str,
+        status: Option<&str>,
+        cursor: Option<i64>,
+        limit: usize,
+    ) -> Result<(Vec<GraphConflictSummary>, Option<i64>, bool), StoreError> {
+        if into_branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("into_branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let before_created_at = cursor.unwrap_or(i64::MAX);
+        let limit = limit.clamp(1, 200) as i64;
+        let status = status.unwrap_or("open");
+        let tx = self.conn.transaction()?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), into_branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let mut out = Vec::new();
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT conflict_id, kind, key, status, created_at_ms
+                FROM graph_conflicts
+                WHERE workspace=?1 AND into_branch=?2 AND doc=?3 AND status=?4 AND created_at_ms < ?5
+                ORDER BY created_at_ms DESC
+                LIMIT ?6
+                "#,
+            )?;
+
+            let mut rows = stmt.query(params![
+                workspace.as_str(),
+                into_branch,
+                doc,
+                status,
+                before_created_at,
+                limit + 1
+            ])?;
+
+            while let Some(row) = rows.next()? {
+                out.push(GraphConflictSummary {
+                    conflict_id: row.get(0)?,
+                    kind: row.get(1)?,
+                    key: row.get(2)?,
+                    status: row.get(3)?,
+                    created_at_ms: row.get(4)?,
+                });
+            }
+        }
+
+        let has_more = out.len() as i64 > limit;
+        if has_more {
+            out.truncate(limit as usize);
+        }
+        let next_cursor = if has_more {
+            out.last().map(|c| c.created_at_ms)
+        } else {
+            None
+        };
+
+        tx.commit()?;
+        Ok((out, next_cursor, has_more))
+    }
+
+    pub fn graph_conflict_show(
+        &mut self,
+        workspace: &WorkspaceId,
+        conflict_id: &str,
+    ) -> Result<GraphConflictDetail, StoreError> {
+        if conflict_id.trim().is_empty() {
+            return Err(StoreError::InvalidInput("conflict_id must not be empty"));
+        }
+
+        let tx = self.conn.transaction()?;
+        let row = graph_conflict_detail_row_tx(&tx, workspace.as_str(), conflict_id)?
+            .ok_or(StoreError::UnknownConflict)?;
+        tx.commit()?;
+
+        Ok(row.into_detail(conflict_id))
+    }
+
+    pub fn graph_conflict_resolve(
+        &mut self,
+        workspace: &WorkspaceId,
+        conflict_id: &str,
+        resolution: &str,
+    ) -> Result<GraphConflictResolveResult, StoreError> {
+        if conflict_id.trim().is_empty() {
+            return Err(StoreError::InvalidInput("conflict_id must not be empty"));
+        }
+        if resolution.trim().is_empty() {
+            return Err(StoreError::InvalidInput("resolution must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let row = graph_conflict_detail_row_tx(&tx, workspace.as_str(), conflict_id)?
+            .ok_or(StoreError::UnknownConflict)?;
+        let detail = row.into_detail(conflict_id);
+        if detail.status != "open" {
+            return Err(StoreError::ConflictAlreadyResolved);
+        }
+
+        match resolution {
+            "use_into" => {
+                tx.execute(
+                    "UPDATE graph_conflicts SET status='resolved', resolution=?3, resolved_at_ms=?4 WHERE workspace=?1 AND conflict_id=?2",
+                    params![workspace.as_str(), conflict_id, resolution, now_ms],
+                )?;
+                tx.commit()?;
+                return Ok(GraphConflictResolveResult {
+                    conflict_id: conflict_id.to_string(),
+                    status: "resolved".to_string(),
+                    applied: false,
+                    applied_seq: None,
+                });
+            }
+            "use_from" => {}
+            _ => {
+                return Err(StoreError::InvalidInput(
+                    "resolution must be use_from|use_into",
+                ));
+            }
+        }
+
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            &detail.into_branch,
+            &detail.doc,
+            DocumentKind::Graph.as_str(),
+            now_ms,
+        )?;
+
+        let source_event_id = format!("graph_conflict_resolve:{conflict_id}");
+
+        let (applied, applied_seq) = match detail.kind.as_str() {
+            "node" => {
+                let Some(theirs) = detail.theirs_node.as_ref() else {
+                    return Err(StoreError::InvalidInput(
+                        "conflict has no theirs node snapshot",
+                    ));
+                };
+                let op = GraphOp::NodeUpsert(GraphNodeUpsert {
+                    id: theirs.id.clone(),
+                    node_type: theirs.node_type.clone(),
+                    title: theirs.title.clone(),
+                    text: theirs.text.clone(),
+                    tags: theirs.tags.clone(),
+                    status: theirs.status.clone(),
+                    meta_json: theirs.meta_json.clone(),
+                });
+                let inserted = insert_graph_doc_entry_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &detail.into_branch,
+                    &detail.doc,
+                    now_ms,
+                    &op,
+                    Some(&source_event_id),
+                )?;
+                match inserted.1 {
+                    None => (false, None),
+                    Some(seq) => {
+                        let meta_json = merge_meta_json(
+                            theirs.meta_json.as_deref(),
+                            &detail.from_branch,
+                            theirs.last_seq,
+                            theirs.last_ts_ms,
+                        );
+                        insert_graph_node_version_tx(
+                            &tx,
+                            workspace.as_str(),
+                            &detail.into_branch,
+                            &detail.doc,
+                            seq,
+                            now_ms,
+                            &theirs.id,
+                            Some(theirs.node_type.as_str()),
+                            theirs.title.as_deref(),
+                            theirs.text.as_deref(),
+                            &theirs.tags,
+                            theirs.status.as_deref(),
+                            Some(&meta_json),
+                            theirs.deleted,
+                        )?;
+                        touch_document_tx(
+                            &tx,
+                            workspace.as_str(),
+                            &detail.into_branch,
+                            &detail.doc,
+                            now_ms,
+                        )?;
+                        (true, Some(seq))
+                    }
+                }
+            }
+            "edge" => {
+                let Some(theirs) = detail.theirs_edge.as_ref() else {
+                    return Err(StoreError::InvalidInput(
+                        "conflict has no theirs edge snapshot",
+                    ));
+                };
+                let op = GraphOp::EdgeUpsert(GraphEdgeUpsert {
+                    from: theirs.from.clone(),
+                    rel: theirs.rel.clone(),
+                    to: theirs.to.clone(),
+                    meta_json: theirs.meta_json.clone(),
+                });
+                let inserted = insert_graph_doc_entry_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &detail.into_branch,
+                    &detail.doc,
+                    now_ms,
+                    &op,
+                    Some(&source_event_id),
+                )?;
+                match inserted.1 {
+                    None => (false, None),
+                    Some(seq) => {
+                        let meta_json = merge_meta_json(
+                            theirs.meta_json.as_deref(),
+                            &detail.from_branch,
+                            theirs.last_seq,
+                            theirs.last_ts_ms,
+                        );
+                        insert_graph_edge_version_tx(
+                            &tx,
+                            workspace.as_str(),
+                            &detail.into_branch,
+                            &detail.doc,
+                            seq,
+                            now_ms,
+                            &theirs.from,
+                            &theirs.rel,
+                            &theirs.to,
+                            Some(&meta_json),
+                            theirs.deleted,
+                        )?;
+                        touch_document_tx(
+                            &tx,
+                            workspace.as_str(),
+                            &detail.into_branch,
+                            &detail.doc,
+                            now_ms,
+                        )?;
+                        (true, Some(seq))
+                    }
+                }
+            }
+            _ => return Err(StoreError::InvalidInput("unknown conflict kind")),
+        };
+
+        tx.execute(
+            "UPDATE graph_conflicts SET status='resolved', resolution=?3, resolved_at_ms=?4 WHERE workspace=?1 AND conflict_id=?2",
+            params![workspace.as_str(), conflict_id, resolution, now_ms],
+        )?;
+
+        tx.commit()?;
+        Ok(GraphConflictResolveResult {
+            conflict_id: conflict_id.to_string(),
+            status: "resolved".to_string(),
+            applied,
+            applied_seq,
         })
     }
 
@@ -2577,6 +4074,1448 @@ fn append_sources_clause(sql: &mut String, params: &mut Vec<SqlValue>, sources: 
         sql.push(')');
     }
     sql.push(')');
+}
+
+fn validate_graph_node_id(value: &str) -> Result<(), StoreError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(StoreError::InvalidInput("node id must not be empty"));
+    }
+    if trimmed.len() > 256 {
+        return Err(StoreError::InvalidInput("node id is too long"));
+    }
+    if trimmed.contains('|') {
+        return Err(StoreError::InvalidInput("node id must not contain '|'"));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(StoreError::InvalidInput(
+            "node id contains control characters",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_graph_type(value: &str) -> Result<(), StoreError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(StoreError::InvalidInput("node type must not be empty"));
+    }
+    if trimmed.len() > 128 {
+        return Err(StoreError::InvalidInput("node type is too long"));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(StoreError::InvalidInput(
+            "node type contains control characters",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_graph_rel(value: &str) -> Result<(), StoreError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(StoreError::InvalidInput("edge rel must not be empty"));
+    }
+    if trimmed.len() > 128 {
+        return Err(StoreError::InvalidInput("edge rel is too long"));
+    }
+    if trimmed.contains('|') {
+        return Err(StoreError::InvalidInput("edge rel must not contain '|'"));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(StoreError::InvalidInput(
+            "edge rel contains control characters",
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_tags(tags: &[String]) -> Result<Vec<String>, StoreError> {
+    use std::collections::BTreeSet;
+
+    let mut out = BTreeSet::new();
+    for tag in tags {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.chars().any(|c| c.is_control()) {
+            return Err(StoreError::InvalidInput("tag contains control characters"));
+        }
+        if trimmed.contains('|') {
+            return Err(StoreError::InvalidInput("tag must not contain '|'"));
+        }
+        out.insert(trimmed.to_lowercase());
+    }
+    Ok(out.into_iter().collect())
+}
+
+fn encode_tags(tags: &[String]) -> Option<String> {
+    if tags.is_empty() {
+        return None;
+    }
+    Some(format!("\n{}\n", tags.join("\n")))
+}
+
+fn decode_tags(raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    raw.split('\n')
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+        .collect()
+}
+
+fn build_graph_op_event(op: &GraphOp) -> (&'static str, String) {
+    fn push_opt_str(out: &mut String, key: &str, value: Option<&str>) {
+        let Some(value) = value else {
+            return;
+        };
+        out.push_str(",\"");
+        out.push_str(key);
+        out.push_str("\":\"");
+        out.push_str(&json_escape(value));
+        out.push('"');
+    }
+
+    fn push_opt_meta(out: &mut String, meta_json: Option<&str>) {
+        let Some(meta_json) = meta_json else {
+            return;
+        };
+        let trimmed = meta_json.trim();
+        if looks_like_json_object(trimmed) {
+            out.push_str(",\"meta\":");
+            out.push_str(trimmed);
+        } else {
+            out.push_str(",\"meta_raw\":\"");
+            out.push_str(&json_escape(trimmed));
+            out.push('"');
+        }
+    }
+
+    fn push_tags(out: &mut String, tags: &[String]) {
+        if tags.is_empty() {
+            return;
+        }
+        out.push_str(",\"tags\":[");
+        for (i, tag) in tags.iter().enumerate() {
+            if i != 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&json_escape(tag));
+            out.push('"');
+        }
+        out.push(']');
+    }
+
+    match op {
+        GraphOp::NodeUpsert(upsert) => {
+            let mut out = String::new();
+            out.push_str("{\"op\":\"node_upsert\",\"id\":\"");
+            out.push_str(&json_escape(&upsert.id));
+            out.push_str("\",\"type\":\"");
+            out.push_str(&json_escape(&upsert.node_type));
+            out.push('"');
+            push_opt_str(&mut out, "title", upsert.title.as_deref());
+            push_opt_str(&mut out, "text", upsert.text.as_deref());
+            push_opt_str(&mut out, "status", upsert.status.as_deref());
+            push_tags(&mut out, &upsert.tags);
+            push_opt_meta(&mut out, upsert.meta_json.as_deref());
+            out.push('}');
+            ("graph_node_upsert", out)
+        }
+        GraphOp::NodeDelete { id } => (
+            "graph_node_delete",
+            format!("{{\"op\":\"node_delete\",\"id\":\"{}\"}}", json_escape(id)),
+        ),
+        GraphOp::EdgeUpsert(upsert) => {
+            let mut out = String::new();
+            out.push_str("{\"op\":\"edge_upsert\",\"from\":\"");
+            out.push_str(&json_escape(&upsert.from));
+            out.push_str("\",\"rel\":\"");
+            out.push_str(&json_escape(&upsert.rel));
+            out.push_str("\",\"to\":\"");
+            out.push_str(&json_escape(&upsert.to));
+            out.push('"');
+            push_opt_meta(&mut out, upsert.meta_json.as_deref());
+            out.push('}');
+            ("graph_edge_upsert", out)
+        }
+        GraphOp::EdgeDelete { from, rel, to } => (
+            "graph_edge_delete",
+            format!(
+                "{{\"op\":\"edge_delete\",\"from\":\"{}\",\"rel\":\"{}\",\"to\":\"{}\"}}",
+                json_escape(from),
+                json_escape(rel),
+                json_escape(to)
+            ),
+        ),
+    }
+}
+
+fn insert_graph_doc_entry_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    ts_ms: i64,
+    op: &GraphOp,
+    source_event_id: Option<&str>,
+) -> Result<(String, Option<i64>), StoreError> {
+    let (event_type, payload_json) = build_graph_op_event(op);
+    let inserted = tx.execute(
+        r#"
+        INSERT OR IGNORE INTO doc_entries(workspace, branch, doc, ts_ms, kind, source_event_id, event_type, payload_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "#,
+        params![
+            workspace,
+            branch,
+            doc,
+            ts_ms,
+            DocEntryKind::Event.as_str(),
+            source_event_id,
+            event_type,
+            &payload_json
+        ],
+    )?;
+
+    if inserted > 0 {
+        Ok((payload_json, Some(tx.last_insert_rowid())))
+    } else {
+        Ok((payload_json, None))
+    }
+}
+
+fn insert_graph_node_version_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    seq: i64,
+    ts_ms: i64,
+    node_id: &str,
+    node_type: Option<&str>,
+    title: Option<&str>,
+    text: Option<&str>,
+    tags: &[String],
+    status: Option<&str>,
+    meta_json: Option<&str>,
+    deleted: bool,
+) -> Result<(), StoreError> {
+    let tags = encode_tags(tags);
+    tx.execute(
+        r#"
+        INSERT INTO graph_node_versions(
+          workspace, branch, doc, seq, ts_ms, node_id, node_type, title, text, tags, status, meta_json, deleted
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "#,
+        params![
+            workspace,
+            branch,
+            doc,
+            seq,
+            ts_ms,
+            node_id,
+            node_type,
+            title,
+            text,
+            tags,
+            status,
+            meta_json,
+            if deleted { 1i64 } else { 0i64 }
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_graph_edge_version_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    seq: i64,
+    ts_ms: i64,
+    from_id: &str,
+    rel: &str,
+    to_id: &str,
+    meta_json: Option<&str>,
+    deleted: bool,
+) -> Result<(), StoreError> {
+    tx.execute(
+        r#"
+        INSERT INTO graph_edge_versions(
+          workspace, branch, doc, seq, ts_ms, from_id, rel, to_id, meta_json, deleted
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "#,
+        params![
+            workspace,
+            branch,
+            doc,
+            seq,
+            ts_ms,
+            from_id,
+            rel,
+            to_id,
+            meta_json,
+            if deleted { 1i64 } else { 0i64 }
+        ],
+    )?;
+    Ok(())
+}
+
+fn graph_node_semantic_eq(left: Option<&GraphNodeRow>, right: Option<&GraphNodeRow>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+        (Some(a), Some(b)) => {
+            a.id == b.id
+                && a.deleted == b.deleted
+                && a.node_type == b.node_type
+                && a.title == b.title
+                && a.text == b.text
+                && a.tags == b.tags
+                && a.status == b.status
+                && a.meta_json.as_deref().map(str::trim) == b.meta_json.as_deref().map(str::trim)
+        }
+    }
+}
+
+fn graph_edge_semantic_eq(left: Option<&GraphEdgeRow>, right: Option<&GraphEdgeRow>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+        (Some(a), Some(b)) => {
+            a.from == b.from
+                && a.rel == b.rel
+                && a.to == b.to
+                && a.deleted == b.deleted
+                && a.meta_json.as_deref().map(str::trim) == b.meta_json.as_deref().map(str::trim)
+        }
+    }
+}
+
+fn branch_base_info_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+) -> Result<Option<(String, i64)>, StoreError> {
+    Ok(tx
+        .query_row(
+            "SELECT base_branch, base_seq FROM branches WHERE workspace=?1 AND name=?2",
+            params![workspace, branch],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?)
+}
+
+fn base_sources_for_branch_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+) -> Result<Vec<BranchSource>, StoreError> {
+    let sources = branch_sources_tx(tx, workspace, branch)?;
+    Ok(sources.into_iter().skip(1).collect())
+}
+
+fn graph_conflict_detail_row_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    conflict_id: &str,
+) -> Result<Option<GraphConflictDetailRow>, StoreError> {
+    Ok(tx
+        .query_row(
+            r#"
+            SELECT kind, key, from_branch, into_branch, doc, status, created_at_ms, resolved_at_ms,
+                   base_seq, base_ts_ms, base_deleted, base_node_type, base_title, base_text, base_tags, base_status, base_meta_json,
+                   base_from_id, base_rel, base_to_id, base_edge_meta_json,
+                   theirs_seq, theirs_ts_ms, theirs_deleted, theirs_node_type, theirs_title, theirs_text, theirs_tags, theirs_status, theirs_meta_json,
+                   theirs_from_id, theirs_rel, theirs_to_id, theirs_edge_meta_json,
+                   ours_seq, ours_ts_ms, ours_deleted, ours_node_type, ours_title, ours_text, ours_tags, ours_status, ours_meta_json,
+                   ours_from_id, ours_rel, ours_to_id, ours_edge_meta_json
+            FROM graph_conflicts
+            WHERE workspace=?1 AND conflict_id=?2
+            "#,
+            params![workspace, conflict_id],
+            |row| {
+                Ok(GraphConflictDetailRow {
+                    kind: row.get(0)?,
+                    key: row.get(1)?,
+                    from_branch: row.get(2)?,
+                    into_branch: row.get(3)?,
+                    doc: row.get(4)?,
+                    status: row.get(5)?,
+                    created_at_ms: row.get(6)?,
+                    resolved_at_ms: row.get(7)?,
+                    base_seq: row.get(8)?,
+                    base_ts_ms: row.get(9)?,
+                    base_deleted: row.get(10)?,
+                    base_node_type: row.get(11)?,
+                    base_title: row.get(12)?,
+                    base_text: row.get(13)?,
+                    base_tags: row.get(14)?,
+                    base_status: row.get(15)?,
+                    base_meta_json: row.get(16)?,
+                    base_from_id: row.get(17)?,
+                    base_rel: row.get(18)?,
+                    base_to_id: row.get(19)?,
+                    base_edge_meta_json: row.get(20)?,
+                    theirs_seq: row.get(21)?,
+                    theirs_ts_ms: row.get(22)?,
+                    theirs_deleted: row.get(23)?,
+                    theirs_node_type: row.get(24)?,
+                    theirs_title: row.get(25)?,
+                    theirs_text: row.get(26)?,
+                    theirs_tags: row.get(27)?,
+                    theirs_status: row.get(28)?,
+                    theirs_meta_json: row.get(29)?,
+                    theirs_from_id: row.get(30)?,
+                    theirs_rel: row.get(31)?,
+                    theirs_to_id: row.get(32)?,
+                    theirs_edge_meta_json: row.get(33)?,
+                    ours_seq: row.get(34)?,
+                    ours_ts_ms: row.get(35)?,
+                    ours_deleted: row.get(36)?,
+                    ours_node_type: row.get(37)?,
+                    ours_title: row.get(38)?,
+                    ours_text: row.get(39)?,
+                    ours_tags: row.get(40)?,
+                    ours_status: row.get(41)?,
+                    ours_meta_json: row.get(42)?,
+                    ours_from_id: row.get(43)?,
+                    ours_rel: row.get(44)?,
+                    ours_to_id: row.get(45)?,
+                    ours_edge_meta_json: row.get(46)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn graph_nodes_tail_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    before_seq: i64,
+    limit: i64,
+    include_deleted: bool,
+) -> Result<Vec<GraphNodeRow>, StoreError> {
+    let limit = limit.clamp(1, 1000);
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT node_id, node_type, title, text, tags, status, meta_json, deleted, seq, ts_ms \
+         FROM graph_node_versions WHERE workspace=? AND doc=? AND seq < ? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    params.push(SqlValue::Integer(before_seq));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(
+        "), latest AS (SELECT node_id, MAX(seq) AS max_seq FROM candidates GROUP BY node_id) \
+         SELECT c.node_id, c.node_type, c.title, c.text, c.tags, c.status, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.node_id=l.node_id AND c.seq=l.max_seq",
+    );
+    if !include_deleted {
+        sql.push_str(" WHERE c.deleted=0");
+    }
+    sql.push_str(" ORDER BY c.seq DESC LIMIT ?");
+    params.push(SqlValue::Integer(limit));
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw_tags: Option<String> = row.get(4)?;
+        let deleted: i64 = row.get(7)?;
+        out.push(GraphNodeRow {
+            id: row.get(0)?,
+            node_type: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            title: row.get(2)?,
+            text: row.get(3)?,
+            tags: decode_tags(raw_tags.as_deref()),
+            status: row.get(5)?,
+            meta_json: row.get(6)?,
+            deleted: deleted != 0,
+            last_seq: row.get(8)?,
+            last_ts_ms: row.get(9)?,
+        });
+    }
+    Ok(out)
+}
+
+fn graph_edges_tail_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    before_seq: i64,
+    limit: i64,
+    include_deleted: bool,
+) -> Result<Vec<GraphEdgeRow>, StoreError> {
+    let limit = limit.clamp(1, 2000);
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT from_id, rel, to_id, meta_json, deleted, seq, ts_ms \
+         FROM graph_edge_versions WHERE workspace=? AND doc=? AND seq < ? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    params.push(SqlValue::Integer(before_seq));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(
+        "), latest AS (SELECT from_id, rel, to_id, MAX(seq) AS max_seq FROM candidates GROUP BY from_id, rel, to_id) \
+         SELECT c.from_id, c.rel, c.to_id, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.from_id=l.from_id AND c.rel=l.rel AND c.to_id=l.to_id AND c.seq=l.max_seq",
+    );
+    if !include_deleted {
+        sql.push_str(" WHERE c.deleted=0");
+    }
+    sql.push_str(" ORDER BY c.seq DESC LIMIT ?");
+    params.push(SqlValue::Integer(limit));
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let deleted: i64 = row.get(4)?;
+        out.push(GraphEdgeRow {
+            from: row.get(0)?,
+            rel: row.get(1)?,
+            to: row.get(2)?,
+            meta_json: row.get(3)?,
+            deleted: deleted != 0,
+            last_seq: row.get(5)?,
+            last_ts_ms: row.get(6)?,
+        });
+    }
+    Ok(out)
+}
+
+fn graph_nodes_all_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    include_deleted: bool,
+) -> Result<Vec<GraphNodeRow>, StoreError> {
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT node_id, node_type, title, text, tags, status, meta_json, deleted, seq, ts_ms \
+         FROM graph_node_versions WHERE workspace=? AND doc=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(
+        "), latest AS (SELECT node_id, MAX(seq) AS max_seq FROM candidates GROUP BY node_id) \
+         SELECT c.node_id, c.node_type, c.title, c.text, c.tags, c.status, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.node_id=l.node_id AND c.seq=l.max_seq",
+    );
+    if !include_deleted {
+        sql.push_str(" WHERE c.deleted=0");
+    }
+    sql.push_str(" ORDER BY c.seq DESC");
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw_tags: Option<String> = row.get(4)?;
+        let deleted: i64 = row.get(7)?;
+        out.push(GraphNodeRow {
+            id: row.get(0)?,
+            node_type: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            title: row.get(2)?,
+            text: row.get(3)?,
+            tags: decode_tags(raw_tags.as_deref()),
+            status: row.get(5)?,
+            meta_json: row.get(6)?,
+            deleted: deleted != 0,
+            last_seq: row.get(8)?,
+            last_ts_ms: row.get(9)?,
+        });
+    }
+    Ok(out)
+}
+
+fn graph_edges_all_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    include_deleted: bool,
+) -> Result<Vec<GraphEdgeRow>, StoreError> {
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT from_id, rel, to_id, meta_json, deleted, seq, ts_ms \
+         FROM graph_edge_versions WHERE workspace=? AND doc=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(
+        "), latest AS (SELECT from_id, rel, to_id, MAX(seq) AS max_seq FROM candidates GROUP BY from_id, rel, to_id) \
+         SELECT c.from_id, c.rel, c.to_id, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.from_id=l.from_id AND c.rel=l.rel AND c.to_id=l.to_id AND c.seq=l.max_seq",
+    );
+    if !include_deleted {
+        sql.push_str(" WHERE c.deleted=0");
+    }
+    sql.push_str(" ORDER BY c.seq DESC");
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let deleted: i64 = row.get(4)?;
+        out.push(GraphEdgeRow {
+            from: row.get(0)?,
+            rel: row.get(1)?,
+            to: row.get(2)?,
+            meta_json: row.get(3)?,
+            deleted: deleted != 0,
+            last_seq: row.get(5)?,
+            last_ts_ms: row.get(6)?,
+        });
+    }
+    Ok(out)
+}
+
+fn graph_node_get_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    node_id: &str,
+) -> Result<Option<GraphNodeRow>, StoreError> {
+    let mut sql = String::from(
+        "SELECT node_type, title, text, tags, status, meta_json, deleted, seq, ts_ms \
+         FROM graph_node_versions WHERE workspace=? AND doc=? AND node_id=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    params.push(SqlValue::Text(node_id.to_string()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(" ORDER BY seq DESC LIMIT 1");
+
+    let mut stmt = tx.prepare(&sql)?;
+    let row = stmt
+        .query_row(params_from_iter(params.iter()), |row| {
+            let raw_tags: Option<String> = row.get(3)?;
+            let deleted: i64 = row.get(6)?;
+            Ok(GraphNodeRow {
+                id: node_id.to_string(),
+                node_type: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                title: row.get(1)?,
+                text: row.get(2)?,
+                tags: decode_tags(raw_tags.as_deref()),
+                status: row.get(4)?,
+                meta_json: row.get(5)?,
+                deleted: deleted != 0,
+                last_seq: row.get(7)?,
+                last_ts_ms: row.get(8)?,
+            })
+        })
+        .optional()?;
+    Ok(row)
+}
+
+fn graph_edge_get_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    key: &GraphEdgeKey,
+) -> Result<Option<GraphEdgeRow>, StoreError> {
+    let mut sql = String::from(
+        "SELECT meta_json, deleted, seq, ts_ms \
+         FROM graph_edge_versions WHERE workspace=? AND doc=? AND from_id=? AND rel=? AND to_id=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    params.push(SqlValue::Text(key.from.clone()));
+    params.push(SqlValue::Text(key.rel.clone()));
+    params.push(SqlValue::Text(key.to.clone()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(" ORDER BY seq DESC LIMIT 1");
+
+    let mut stmt = tx.prepare(&sql)?;
+    let row = stmt
+        .query_row(params_from_iter(params.iter()), |row| {
+            let deleted: i64 = row.get(1)?;
+            Ok(GraphEdgeRow {
+                from: key.from.clone(),
+                rel: key.rel.clone(),
+                to: key.to.clone(),
+                meta_json: row.get(0)?,
+                deleted: deleted != 0,
+                last_seq: row.get(2)?,
+                last_ts_ms: row.get(3)?,
+            })
+        })
+        .optional()?;
+    Ok(row)
+}
+
+fn graph_nodes_get_map_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    node_ids: &[String],
+    include_deleted: bool,
+) -> Result<std::collections::HashMap<String, GraphNodeRow>, StoreError> {
+    use std::collections::HashMap;
+
+    if node_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT node_id, node_type, title, text, tags, status, meta_json, deleted, seq, ts_ms \
+         FROM graph_node_versions WHERE workspace=? AND doc=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(" AND node_id IN (");
+    for (i, id) in node_ids.iter().enumerate() {
+        if i != 0 {
+            sql.push(',');
+        }
+        sql.push('?');
+        params.push(SqlValue::Text(id.clone()));
+    }
+    sql.push_str("))");
+    sql.push_str(
+        ", latest AS (SELECT node_id, MAX(seq) AS max_seq FROM candidates GROUP BY node_id) \
+         SELECT c.node_id, c.node_type, c.title, c.text, c.tags, c.status, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.node_id=l.node_id AND c.seq=l.max_seq",
+    );
+    if !include_deleted {
+        sql.push_str(" WHERE c.deleted=0");
+    }
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let raw_tags: Option<String> = row.get(4)?;
+        let deleted: i64 = row.get(7)?;
+        out.insert(
+            id.clone(),
+            GraphNodeRow {
+                id,
+                node_type: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                title: row.get(2)?,
+                text: row.get(3)?,
+                tags: decode_tags(raw_tags.as_deref()),
+                status: row.get(5)?,
+                meta_json: row.get(6)?,
+                deleted: deleted != 0,
+                last_seq: row.get(8)?,
+                last_ts_ms: row.get(9)?,
+            },
+        );
+    }
+    Ok(out)
+}
+
+fn graph_edges_get_map_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    edge_keys: &[GraphEdgeKey],
+    include_deleted: bool,
+) -> Result<std::collections::HashMap<GraphEdgeKey, GraphEdgeRow>, StoreError> {
+    use std::collections::HashMap;
+
+    if edge_keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT from_id, rel, to_id, meta_json, deleted, seq, ts_ms \
+         FROM graph_edge_versions WHERE workspace=? AND doc=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(" AND (");
+    for (i, key) in edge_keys.iter().enumerate() {
+        if i != 0 {
+            sql.push_str(" OR ");
+        }
+        sql.push_str("(from_id=? AND rel=? AND to_id=?)");
+        params.push(SqlValue::Text(key.from.clone()));
+        params.push(SqlValue::Text(key.rel.clone()));
+        params.push(SqlValue::Text(key.to.clone()));
+    }
+    sql.push_str("))");
+    sql.push_str(
+        ", latest AS (SELECT from_id, rel, to_id, MAX(seq) AS max_seq FROM candidates GROUP BY from_id, rel, to_id) \
+         SELECT c.from_id, c.rel, c.to_id, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.from_id=l.from_id AND c.rel=l.rel AND c.to_id=l.to_id AND c.seq=l.max_seq",
+    );
+    if !include_deleted {
+        sql.push_str(" WHERE c.deleted=0");
+    }
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let from: String = row.get(0)?;
+        let rel: String = row.get(1)?;
+        let to: String = row.get(2)?;
+        let deleted: i64 = row.get(4)?;
+        let key = GraphEdgeKey {
+            from: from.clone(),
+            rel: rel.clone(),
+            to: to.clone(),
+        };
+        out.insert(
+            key,
+            GraphEdgeRow {
+                from,
+                rel,
+                to,
+                meta_json: row.get(3)?,
+                deleted: deleted != 0,
+                last_seq: row.get(5)?,
+                last_ts_ms: row.get(6)?,
+            },
+        );
+    }
+    Ok(out)
+}
+
+fn graph_edge_keys_for_node_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    node_id: &str,
+) -> Result<Vec<GraphEdgeKey>, StoreError> {
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT from_id, rel, to_id, deleted, seq \
+         FROM graph_edge_versions WHERE workspace=? AND doc=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(" AND (from_id=? OR to_id=?))");
+    params.push(SqlValue::Text(node_id.to_string()));
+    params.push(SqlValue::Text(node_id.to_string()));
+    sql.push_str(
+        ", latest AS (SELECT from_id, rel, to_id, MAX(seq) AS max_seq FROM candidates GROUP BY from_id, rel, to_id) \
+         SELECT c.from_id, c.rel, c.to_id, c.deleted \
+         FROM candidates c JOIN latest l ON c.from_id=l.from_id AND c.rel=l.rel AND c.to_id=l.to_id AND c.seq=l.max_seq \
+         WHERE c.deleted=0",
+    );
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let deleted: i64 = row.get(3)?;
+        if deleted != 0 {
+            continue;
+        }
+        out.push(GraphEdgeKey {
+            from: row.get(0)?,
+            rel: row.get(1)?,
+            to: row.get(2)?,
+        });
+    }
+    Ok(out)
+}
+
+fn graph_nodes_query_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    before_seq: i64,
+    limit: i64,
+    request: &GraphQueryRequest,
+) -> Result<Vec<GraphNodeRow>, StoreError> {
+    let limit = limit.clamp(1, 200);
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT node_id, node_type, title, text, tags, status, meta_json, deleted, seq, ts_ms \
+         FROM graph_node_versions WHERE workspace=? AND doc=? AND seq < ? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    params.push(SqlValue::Integer(before_seq));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(
+        "), latest AS (SELECT node_id, MAX(seq) AS max_seq FROM candidates GROUP BY node_id) \
+         SELECT c.node_id, c.node_type, c.title, c.text, c.tags, c.status, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.node_id=l.node_id AND c.seq=l.max_seq WHERE 1=1",
+    );
+
+    if let Some(ids) = request.ids.as_ref().filter(|v| !v.is_empty()) {
+        sql.push_str(" AND c.node_id IN (");
+        for (i, id) in ids.iter().enumerate() {
+            if i != 0 {
+                sql.push(',');
+            }
+            sql.push('?');
+            params.push(SqlValue::Text(id.clone()));
+        }
+        sql.push(')');
+    }
+
+    if let Some(types) = request.types.as_ref().filter(|v| !v.is_empty()) {
+        sql.push_str(" AND c.node_type IN (");
+        for (i, ty) in types.iter().enumerate() {
+            if i != 0 {
+                sql.push(',');
+            }
+            sql.push('?');
+            params.push(SqlValue::Text(ty.clone()));
+        }
+        sql.push(')');
+    }
+
+    if let Some(status) = request
+        .status
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        sql.push_str(" AND c.status=?");
+        params.push(SqlValue::Text(status.to_string()));
+    }
+
+    if let Some(tags_any) = request.tags_any.as_ref().filter(|v| !v.is_empty()) {
+        let tags_any = normalize_tags(tags_any)?;
+        if !tags_any.is_empty() {
+            sql.push_str(" AND (");
+            for (i, tag) in tags_any.iter().enumerate() {
+                if i != 0 {
+                    sql.push_str(" OR ");
+                }
+                sql.push_str("COALESCE(c.tags,'') LIKE ?");
+                params.push(SqlValue::Text(format!("%\n{}\n%", tag)));
+            }
+            sql.push(')');
+        }
+    }
+
+    if let Some(tags_all) = request.tags_all.as_ref().filter(|v| !v.is_empty()) {
+        let tags_all = normalize_tags(tags_all)?;
+        for tag in tags_all {
+            sql.push_str(" AND COALESCE(c.tags,'') LIKE ?");
+            params.push(SqlValue::Text(format!("%\n{}\n%", tag)));
+        }
+    }
+
+    if let Some(text) = request
+        .text
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        sql.push_str(
+            " AND instr(lower(COALESCE(c.title,'') || '\n' || COALESCE(c.text,'')), lower(?)) > 0",
+        );
+        params.push(SqlValue::Text(text.to_string()));
+    }
+
+    sql.push_str(" ORDER BY c.seq DESC LIMIT ?");
+    params.push(SqlValue::Integer(limit + 1));
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw_tags: Option<String> = row.get(4)?;
+        let deleted: i64 = row.get(7)?;
+        out.push(GraphNodeRow {
+            id: row.get(0)?,
+            node_type: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            title: row.get(2)?,
+            text: row.get(3)?,
+            tags: decode_tags(raw_tags.as_deref()),
+            status: row.get(5)?,
+            meta_json: row.get(6)?,
+            deleted: deleted != 0,
+            last_seq: row.get(8)?,
+            last_ts_ms: row.get(9)?,
+        });
+    }
+    Ok(out)
+}
+
+fn graph_edges_for_nodes_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    node_ids: &[String],
+    limit: i64,
+) -> Result<Vec<GraphEdgeRow>, StoreError> {
+    if node_ids.is_empty() || limit <= 0 {
+        return Ok(Vec::new());
+    }
+    let limit = limit.clamp(1, 5000);
+
+    let mut sql = String::from(
+        "WITH candidates AS (SELECT from_id, rel, to_id, meta_json, deleted, seq, ts_ms \
+         FROM graph_edge_versions WHERE workspace=? AND doc=? AND ",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+    append_sources_clause(&mut sql, &mut params, sources);
+    sql.push_str(" AND from_id IN (");
+    for (i, id) in node_ids.iter().enumerate() {
+        if i != 0 {
+            sql.push(',');
+        }
+        sql.push('?');
+        params.push(SqlValue::Text(id.clone()));
+    }
+    sql.push_str(") AND to_id IN (");
+    for (i, id) in node_ids.iter().enumerate() {
+        if i != 0 {
+            sql.push(',');
+        }
+        sql.push('?');
+        params.push(SqlValue::Text(id.clone()));
+    }
+    sql.push_str("))");
+    sql.push_str(
+        ", latest AS (SELECT from_id, rel, to_id, MAX(seq) AS max_seq FROM candidates GROUP BY from_id, rel, to_id) \
+         SELECT c.from_id, c.rel, c.to_id, c.meta_json, c.deleted, c.seq, c.ts_ms \
+         FROM candidates c JOIN latest l ON c.from_id=l.from_id AND c.rel=l.rel AND c.to_id=l.to_id AND c.seq=l.max_seq \
+         ORDER BY c.seq DESC LIMIT ?",
+    );
+    params.push(SqlValue::Integer(limit));
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let deleted: i64 = row.get(4)?;
+        out.push(GraphEdgeRow {
+            from: row.get(0)?,
+            rel: row.get(1)?,
+            to: row.get(2)?,
+            meta_json: row.get(3)?,
+            deleted: deleted != 0,
+            last_seq: row.get(5)?,
+            last_ts_ms: row.get(6)?,
+        });
+    }
+    Ok(out)
+}
+
+fn graph_diff_candidates_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    sources: &[BranchSource],
+    doc: &str,
+    before_seq: i64,
+    limit: i64,
+) -> Result<Vec<GraphDiffCandidate>, StoreError> {
+    let nodes = graph_nodes_tail_tx(tx, workspace, sources, doc, before_seq, limit, true)?;
+    let edges = graph_edges_tail_tx(tx, workspace, sources, doc, before_seq, limit, true)?;
+
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while out.len() < limit as usize && (i < nodes.len() || j < edges.len()) {
+        let take_node = match (nodes.get(i), edges.get(j)) {
+            (Some(n), Some(e)) => n.last_seq >= e.last_seq,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => false,
+        };
+
+        if take_node {
+            let node = nodes[i].clone();
+            out.push(GraphDiffCandidate::Node { to: node });
+            i += 1;
+        } else {
+            let edge = edges[j].clone();
+            out.push(GraphDiffCandidate::Edge {
+                key: GraphEdgeKey {
+                    from: edge.from.clone(),
+                    rel: edge.rel.clone(),
+                    to: edge.to.clone(),
+                },
+                to: edge,
+            });
+            j += 1;
+        }
+    }
+    Ok(out)
+}
+
+fn graph_merge_candidates_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    from_branch: &str,
+    doc: &str,
+    base_cutoff_seq: i64,
+    before_seq: i64,
+    limit: i64,
+) -> Result<Vec<GraphMergeCandidate>, StoreError> {
+    let limit = limit.clamp(1, 1000);
+
+    let mut node_stmt = tx.prepare(
+        r#"
+        WITH latest AS (
+          SELECT node_id, MAX(seq) AS max_seq
+          FROM graph_node_versions
+          WHERE workspace=?1 AND branch=?2 AND doc=?3 AND seq > ?4 AND seq < ?5
+          GROUP BY node_id
+        )
+        SELECT v.node_id, v.node_type, v.title, v.text, v.tags, v.status, v.meta_json, v.deleted, v.seq, v.ts_ms
+        FROM graph_node_versions v
+        JOIN latest l ON v.node_id=l.node_id AND v.seq=l.max_seq
+        ORDER BY v.seq DESC
+        LIMIT ?6
+        "#,
+    )?;
+    let mut node_rows = node_stmt.query(params![
+        workspace,
+        from_branch,
+        doc,
+        base_cutoff_seq,
+        before_seq,
+        limit
+    ])?;
+    let mut nodes = Vec::new();
+    while let Some(row) = node_rows.next()? {
+        let raw_tags: Option<String> = row.get(4)?;
+        let deleted: i64 = row.get(7)?;
+        nodes.push(GraphNodeRow {
+            id: row.get(0)?,
+            node_type: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            title: row.get(2)?,
+            text: row.get(3)?,
+            tags: decode_tags(raw_tags.as_deref()),
+            status: row.get(5)?,
+            meta_json: row.get(6)?,
+            deleted: deleted != 0,
+            last_seq: row.get(8)?,
+            last_ts_ms: row.get(9)?,
+        });
+    }
+
+    let mut edge_stmt = tx.prepare(
+        r#"
+        WITH latest AS (
+          SELECT from_id, rel, to_id, MAX(seq) AS max_seq
+          FROM graph_edge_versions
+          WHERE workspace=?1 AND branch=?2 AND doc=?3 AND seq > ?4 AND seq < ?5
+          GROUP BY from_id, rel, to_id
+        )
+        SELECT v.from_id, v.rel, v.to_id, v.meta_json, v.deleted, v.seq, v.ts_ms
+        FROM graph_edge_versions v
+        JOIN latest l ON v.from_id=l.from_id AND v.rel=l.rel AND v.to_id=l.to_id AND v.seq=l.max_seq
+        ORDER BY v.seq DESC
+        LIMIT ?6
+        "#,
+    )?;
+    let mut edge_rows = edge_stmt.query(params![
+        workspace,
+        from_branch,
+        doc,
+        base_cutoff_seq,
+        before_seq,
+        limit
+    ])?;
+    let mut edges = Vec::new();
+    while let Some(row) = edge_rows.next()? {
+        let deleted: i64 = row.get(4)?;
+        edges.push(GraphEdgeRow {
+            from: row.get(0)?,
+            rel: row.get(1)?,
+            to: row.get(2)?,
+            meta_json: row.get(3)?,
+            deleted: deleted != 0,
+            last_seq: row.get(5)?,
+            last_ts_ms: row.get(6)?,
+        });
+    }
+
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while out.len() < limit as usize && (i < nodes.len() || j < edges.len()) {
+        let take_node = match (nodes.get(i), edges.get(j)) {
+            (Some(n), Some(e)) => n.last_seq >= e.last_seq,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => false,
+        };
+
+        if take_node {
+            out.push(GraphMergeCandidate::Node {
+                theirs: nodes[i].clone(),
+            });
+            i += 1;
+        } else {
+            out.push(GraphMergeCandidate::Edge {
+                theirs: edges[j].clone(),
+            });
+            j += 1;
+        }
+    }
+    Ok(out)
+}
+
+fn graph_conflict_id(
+    workspace: &str,
+    from_branch: &str,
+    into_branch: &str,
+    doc: &str,
+    kind: &str,
+    key: &str,
+    base_cutoff_seq: i64,
+    theirs_seq: i64,
+    ours_seq: i64,
+) -> String {
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+
+    fn update_str(hash: &mut u64, value: &str) {
+        for b in value.as_bytes() {
+            *hash ^= *b as u64;
+            *hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        *hash ^= 0xff;
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    fn update_i64(hash: &mut u64, value: i64) {
+        for b in value.to_le_bytes() {
+            *hash ^= b as u64;
+            *hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        *hash ^= 0xff;
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    let mut h1 = FNV_OFFSET;
+    let mut h2 = FNV_OFFSET ^ 0x9e3779b97f4a7c15;
+
+    for (hash, offset) in [(&mut h1, 0u8), (&mut h2, 1u8)] {
+        update_str(hash, workspace);
+        update_str(hash, from_branch);
+        update_str(hash, into_branch);
+        update_str(hash, doc);
+        update_str(hash, kind);
+        update_str(hash, key);
+        update_i64(hash, base_cutoff_seq);
+        update_i64(hash, theirs_seq);
+        update_i64(hash, ours_seq);
+        *hash ^= offset as u64;
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    format!("CONFLICT-{h1:016x}{h2:016x}")
+}
+
+fn graph_conflict_create_node_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    from_branch: &str,
+    into_branch: &str,
+    doc: &str,
+    base_cutoff_seq: i64,
+    key: &str,
+    base: Option<&GraphNodeRow>,
+    theirs: Option<&GraphNodeRow>,
+    ours: Option<&GraphNodeRow>,
+    now_ms: i64,
+) -> Result<String, StoreError> {
+    let theirs_seq = theirs.map(|n| n.last_seq).unwrap_or(0);
+    let ours_seq = ours.map(|n| n.last_seq).unwrap_or(0);
+    let conflict_id = graph_conflict_id(
+        workspace,
+        from_branch,
+        into_branch,
+        doc,
+        "node",
+        key,
+        base_cutoff_seq,
+        theirs_seq,
+        ours_seq,
+    );
+
+    let base_tags = base.and_then(|n| encode_tags(&n.tags));
+    let theirs_tags = theirs.and_then(|n| encode_tags(&n.tags));
+    let ours_tags = ours.and_then(|n| encode_tags(&n.tags));
+
+    let inserted = tx.execute(
+        r#"
+        INSERT OR IGNORE INTO graph_conflicts(
+          workspace, conflict_id, kind, key, from_branch, into_branch, doc, base_cutoff_seq,
+          base_seq, base_ts_ms, base_deleted, base_node_type, base_title, base_text, base_tags, base_status, base_meta_json,
+          base_from_id, base_rel, base_to_id, base_edge_meta_json,
+          theirs_seq, theirs_ts_ms, theirs_deleted, theirs_node_type, theirs_title, theirs_text, theirs_tags, theirs_status, theirs_meta_json,
+          theirs_from_id, theirs_rel, theirs_to_id, theirs_edge_meta_json,
+          ours_seq, ours_ts_ms, ours_deleted, ours_node_type, ours_title, ours_text, ours_tags, ours_status, ours_meta_json,
+          ours_from_id, ours_rel, ours_to_id, ours_edge_meta_json,
+          status, created_at_ms
+        )
+        VALUES (
+          ?1, ?2, 'node', ?3, ?4, ?5, ?6, ?7,
+          ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+          NULL, NULL, NULL, NULL,
+          ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25,
+          NULL, NULL, NULL, NULL,
+          ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34,
+          NULL, NULL, NULL, NULL,
+          'open', ?35
+        )
+        "#,
+        params![
+            workspace,
+            &conflict_id,
+            key,
+            from_branch,
+            into_branch,
+            doc,
+            base_cutoff_seq,
+            base.map(|n| n.last_seq),
+            base.map(|n| n.last_ts_ms),
+            base.map(|n| if n.deleted { 1i64 } else { 0i64 }),
+            base.map(|n| n.node_type.as_str()),
+            base.and_then(|n| n.title.as_deref()),
+            base.and_then(|n| n.text.as_deref()),
+            base_tags,
+            base.and_then(|n| n.status.as_deref()),
+            base.and_then(|n| n.meta_json.as_deref()),
+            theirs_seq,
+            theirs.map(|n| n.last_ts_ms),
+            theirs.map(|n| if n.deleted { 1i64 } else { 0i64 }),
+            theirs.map(|n| n.node_type.as_str()),
+            theirs.and_then(|n| n.title.as_deref()),
+            theirs.and_then(|n| n.text.as_deref()),
+            theirs_tags,
+            theirs.and_then(|n| n.status.as_deref()),
+            theirs.and_then(|n| n.meta_json.as_deref()),
+            ours_seq,
+            ours.map(|n| n.last_ts_ms),
+            ours.map(|n| if n.deleted { 1i64 } else { 0i64 }),
+            ours.map(|n| n.node_type.as_str()),
+            ours.and_then(|n| n.title.as_deref()),
+            ours.and_then(|n| n.text.as_deref()),
+            ours_tags,
+            ours.and_then(|n| n.status.as_deref()),
+            ours.and_then(|n| n.meta_json.as_deref()),
+            now_ms
+        ],
+    )?;
+    let _ = inserted;
+    Ok(conflict_id)
+}
+
+fn graph_conflict_create_edge_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    from_branch: &str,
+    into_branch: &str,
+    doc: &str,
+    base_cutoff_seq: i64,
+    key: &GraphEdgeKey,
+    base: Option<&GraphEdgeRow>,
+    theirs: Option<&GraphEdgeRow>,
+    ours: Option<&GraphEdgeRow>,
+    now_ms: i64,
+) -> Result<String, StoreError> {
+    let key_str = format!("{}|{}|{}", key.from, key.rel, key.to);
+    let theirs_seq = theirs.map(|e| e.last_seq).unwrap_or(0);
+    let ours_seq = ours.map(|e| e.last_seq).unwrap_or(0);
+    let conflict_id = graph_conflict_id(
+        workspace,
+        from_branch,
+        into_branch,
+        doc,
+        "edge",
+        &key_str,
+        base_cutoff_seq,
+        theirs_seq,
+        ours_seq,
+    );
+
+    let inserted = tx.execute(
+        r#"
+        INSERT OR IGNORE INTO graph_conflicts(
+          workspace, conflict_id, kind, key, from_branch, into_branch, doc, base_cutoff_seq,
+          base_seq, base_ts_ms, base_deleted, base_node_type, base_title, base_text, base_tags, base_status, base_meta_json,
+          base_from_id, base_rel, base_to_id, base_edge_meta_json,
+          theirs_seq, theirs_ts_ms, theirs_deleted, theirs_node_type, theirs_title, theirs_text, theirs_tags, theirs_status, theirs_meta_json,
+          theirs_from_id, theirs_rel, theirs_to_id, theirs_edge_meta_json,
+          ours_seq, ours_ts_ms, ours_deleted, ours_node_type, ours_title, ours_text, ours_tags, ours_status, ours_meta_json,
+          ours_from_id, ours_rel, ours_to_id, ours_edge_meta_json,
+          status, created_at_ms
+        )
+        VALUES (
+          ?1, ?2, 'edge', ?3, ?4, ?5, ?6, ?7,
+          ?8, ?9, ?10, NULL, NULL, NULL, NULL, NULL, NULL,
+          ?11, ?12, ?13, ?14,
+          ?15, ?16, ?17, NULL, NULL, NULL, NULL, NULL, NULL,
+          ?18, ?19, ?20, ?21,
+          ?22, ?23, ?24, NULL, NULL, NULL, NULL, NULL, NULL,
+          ?25, ?26, ?27, ?28,
+          'open', ?29
+        )
+        "#,
+        params![
+            workspace,
+            &conflict_id,
+            &key_str,
+            from_branch,
+            into_branch,
+            doc,
+            base_cutoff_seq,
+            base.map(|e| e.last_seq),
+            base.map(|e| e.last_ts_ms),
+            base.map(|e| if e.deleted { 1i64 } else { 0i64 }),
+            base.map(|e| e.from.as_str()),
+            base.map(|e| e.rel.as_str()),
+            base.map(|e| e.to.as_str()),
+            base.and_then(|e| e.meta_json.as_deref()),
+            theirs_seq,
+            theirs.map(|e| e.last_ts_ms),
+            theirs.map(|e| if e.deleted { 1i64 } else { 0i64 }),
+            theirs.map(|e| e.from.as_str()),
+            theirs.map(|e| e.rel.as_str()),
+            theirs.map(|e| e.to.as_str()),
+            theirs.and_then(|e| e.meta_json.as_deref()),
+            ours_seq,
+            ours.map(|e| e.last_ts_ms),
+            ours.map(|e| if e.deleted { 1i64 } else { 0i64 }),
+            ours.map(|e| e.from.as_str()),
+            ours.map(|e| e.rel.as_str()),
+            ours.map(|e| e.to.as_str()),
+            ours.and_then(|e| e.meta_json.as_deref()),
+            now_ms
+        ],
+    )?;
+    let _ = inserted;
+    Ok(conflict_id)
 }
 
 fn merge_meta_json(

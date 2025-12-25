@@ -164,6 +164,16 @@ impl McpServer {
             "branchmind_show" => self.tool_branchmind_show(args),
             "branchmind_diff" => self.tool_branchmind_diff(args),
             "branchmind_merge" => self.tool_branchmind_merge(args),
+            "branchmind_graph_apply" => self.tool_branchmind_graph_apply(args),
+            "branchmind_graph_query" => self.tool_branchmind_graph_query(args),
+            "branchmind_graph_validate" => self.tool_branchmind_graph_validate(args),
+            "branchmind_graph_diff" => self.tool_branchmind_graph_diff(args),
+            "branchmind_graph_merge" => self.tool_branchmind_graph_merge(args),
+            "branchmind_graph_conflicts" => self.tool_branchmind_graph_conflicts(args),
+            "branchmind_graph_conflict_show" => self.tool_branchmind_graph_conflict_show(args),
+            "branchmind_graph_conflict_resolve" => {
+                self.tool_branchmind_graph_conflict_resolve(args)
+            }
             "branchmind_export" => self.tool_branchmind_export(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
@@ -2053,6 +2063,1245 @@ impl McpServer {
         )
     }
 
+    fn tool_branchmind_graph_apply(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if target.is_some() && (branch.is_some() || doc.is_some()) {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide either target or (branch, doc), not both",
+            );
+        }
+
+        let (branch, doc) = match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
+                    }
+                };
+                let reasoning = match self
+                    .store
+                    .ensure_reasoning_ref(&workspace, &target_id, kind)
+                {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Unknown target id");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                (reasoning.branch, reasoning.graph_doc)
+            }
+            None => {
+                let Some(branch) = branch else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "branch is required when target is not provided",
+                    );
+                };
+                let Some(doc) = doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "doc is required when target is not provided",
+                    );
+                };
+                (branch, doc)
+            }
+        };
+
+        let ops_value = args_obj.get("ops").cloned().unwrap_or(Value::Null);
+        let Some(ops_array) = ops_value.as_array() else {
+            return ai_error("INVALID_INPUT", "ops must be an array");
+        };
+        if ops_array.is_empty() {
+            return ai_error("INVALID_INPUT", "ops must not be empty");
+        }
+        let mut ops = Vec::with_capacity(ops_array.len());
+        for op_value in ops_array {
+            let Some(op_obj) = op_value.as_object() else {
+                return ai_error("INVALID_INPUT", "ops[] must be an array of objects");
+            };
+            let op_name = op_obj.get("op").and_then(|v| v.as_str()).unwrap_or("");
+            match op_name {
+                "node_upsert" => {
+                    let id = match require_string(op_obj, "id") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let node_type = match require_string(op_obj, "type") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let title = match optional_string(op_obj, "title") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let text = match optional_string(op_obj, "text") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let status = match optional_string(op_obj, "status") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let tags = match optional_string_array(op_obj, "tags") {
+                        Ok(v) => v.unwrap_or_default(),
+                        Err(resp) => return resp,
+                    };
+                    let meta_json = match optional_object_as_json_string(op_obj, "meta") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    ops.push(bm_storage::GraphOp::NodeUpsert(
+                        bm_storage::GraphNodeUpsert {
+                            id,
+                            node_type,
+                            title,
+                            text,
+                            tags,
+                            status,
+                            meta_json,
+                        },
+                    ));
+                }
+                "node_delete" => {
+                    let id = match require_string(op_obj, "id") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    ops.push(bm_storage::GraphOp::NodeDelete { id });
+                }
+                "edge_upsert" => {
+                    let from = match require_string(op_obj, "from") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let rel = match require_string(op_obj, "rel") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let to = match require_string(op_obj, "to") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let meta_json = match optional_object_as_json_string(op_obj, "meta") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    ops.push(bm_storage::GraphOp::EdgeUpsert(
+                        bm_storage::GraphEdgeUpsert {
+                            from,
+                            rel,
+                            to,
+                            meta_json,
+                        },
+                    ));
+                }
+                "edge_delete" => {
+                    let from = match require_string(op_obj, "from") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let rel = match require_string(op_obj, "rel") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let to = match require_string(op_obj, "to") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    ops.push(bm_storage::GraphOp::EdgeDelete { from, rel, to });
+                }
+                _ => {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "ops[].op must be one of: node_upsert|node_delete|edge_upsert|edge_delete",
+                    );
+                }
+            }
+        }
+
+        let applied = match self.store.graph_apply_ops(&workspace, &branch, &doc, ops) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_graph_apply",
+            json!({
+                "workspace": workspace.as_str(),
+                "branch": branch,
+                "doc": doc,
+                "applied": {
+                    "nodes_upserted": applied.nodes_upserted,
+                    "nodes_deleted": applied.nodes_deleted,
+                    "edges_upserted": applied.edges_upserted,
+                    "edges_deleted": applied.edges_deleted
+                },
+                "last_seq": applied.last_seq,
+                "last_ts_ms": applied.last_ts_ms
+            }),
+        )
+    }
+
+    fn tool_branchmind_graph_query(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if target.is_some() && (branch.is_some() || doc.is_some()) {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide either target or (branch, doc), not both",
+            );
+        }
+
+        let (branch, doc) = match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
+                    }
+                };
+                let reasoning = match self
+                    .store
+                    .ensure_reasoning_ref(&workspace, &target_id, kind)
+                {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Unknown target id");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                (reasoning.branch, reasoning.graph_doc)
+            }
+            None => {
+                let Some(branch) = branch else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "branch is required when target is not provided",
+                    );
+                };
+                let Some(doc) = doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "doc is required when target is not provided",
+                    );
+                };
+                (branch, doc)
+            }
+        };
+
+        let ids = match optional_string_array(args_obj, "ids") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let types = match optional_string_array(args_obj, "types") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let status = match optional_string(args_obj, "status") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let tags_any = match optional_string_array(args_obj, "tags_any") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let tags_all = match optional_string_array(args_obj, "tags_all") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let text = match optional_string(args_obj, "text") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let cursor = match optional_i64(args_obj, "cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(50),
+            Err(resp) => return resp,
+        };
+        let include_edges = match optional_bool(args_obj, "include_edges") {
+            Ok(v) => v.unwrap_or(true),
+            Err(resp) => return resp,
+        };
+        let edges_limit = match optional_usize(args_obj, "edges_limit") {
+            Ok(v) => v.unwrap_or(200),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let request = bm_storage::GraphQueryRequest {
+            ids,
+            types,
+            status,
+            tags_any,
+            tags_all,
+            text,
+            cursor,
+            limit,
+            include_edges,
+            edges_limit,
+        };
+
+        let slice = match self.store.graph_query(&workspace, &branch, &doc, request) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let nodes = slice
+            .nodes
+            .into_iter()
+            .map(|n| {
+                json!({
+                    "id": n.id,
+                    "type": n.node_type,
+                    "title": n.title,
+                    "text": n.text,
+                    "status": n.status,
+                    "tags": n.tags,
+                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": n.deleted,
+                    "last_seq": n.last_seq,
+                    "last_ts_ms": n.last_ts_ms
+                })
+            })
+            .collect::<Vec<_>>();
+        let edges = slice
+            .edges
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "from": e.from,
+                    "rel": e.rel,
+                    "to": e.to,
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": e.deleted,
+                    "last_seq": e.last_seq,
+                    "last_ts_ms": e.last_ts_ms
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let node_count = nodes.len();
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branch": branch,
+            "doc": doc,
+            "nodes": nodes,
+            "edges": edges,
+            "pagination": {
+                "cursor": cursor,
+                "next_cursor": slice.next_cursor,
+                "has_more": slice.has_more,
+                "limit": limit,
+                "count": node_count
+            },
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let before_nodes = result
+                .get("nodes")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let (_used, truncated) = enforce_graph_query_budget(&mut result, limit);
+            let after_nodes = result
+                .get("nodes")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            if after_nodes < before_nodes {
+                if let Some(next_cursor) = result
+                    .get("nodes")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.last())
+                    .and_then(|v| v.get("last_seq"))
+                    .and_then(|v| v.as_i64())
+                {
+                    if let Some(pagination) =
+                        result.get_mut("pagination").and_then(|v| v.as_object_mut())
+                    {
+                        pagination.insert(
+                            "next_cursor".to_string(),
+                            Value::Number(serde_json::Number::from(next_cursor)),
+                        );
+                        pagination.insert("has_more".to_string(), Value::Bool(true));
+                        pagination.insert(
+                            "count".to_string(),
+                            Value::Number(serde_json::Number::from(after_nodes as u64)),
+                        );
+                    }
+                }
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_graph_query_budget(&mut result, limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_graph_query", result)
+    }
+
+    fn tool_branchmind_graph_validate(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if target.is_some() && (branch.is_some() || doc.is_some()) {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide either target or (branch, doc), not both",
+            );
+        }
+
+        let (branch, doc) = match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
+                    }
+                };
+                let reasoning = match self
+                    .store
+                    .ensure_reasoning_ref(&workspace, &target_id, kind)
+                {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Unknown target id");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                (reasoning.branch, reasoning.graph_doc)
+            }
+            None => {
+                let Some(branch) = branch else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "branch is required when target is not provided",
+                    );
+                };
+                let Some(doc) = doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "doc is required when target is not provided",
+                    );
+                };
+                (branch, doc)
+            }
+        };
+
+        let max_errors = match optional_usize(args_obj, "max_errors") {
+            Ok(v) => v.unwrap_or(50),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let validation = match self
+            .store
+            .graph_validate(&workspace, &branch, &doc, max_errors)
+        {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let errors = validation
+            .errors
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "code": e.code,
+                    "message": e.message,
+                    "kind": e.kind,
+                    "key": e.key
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branch": branch,
+            "doc": doc,
+            "ok": validation.ok,
+            "stats": { "nodes": validation.nodes, "edges": validation.edges },
+            "errors": errors,
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let (_used, truncated) = enforce_graph_list_budget(&mut result, "errors", limit);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "errors", limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_graph_validate", result)
+    }
+
+    fn tool_branchmind_graph_diff(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let from = match require_string(args_obj, "from") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let to = match require_string(args_obj, "to") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v.unwrap_or_else(|| "graph".to_string()),
+            Err(resp) => return resp,
+        };
+        let cursor = match optional_i64(args_obj, "cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(20),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let from_exists = match self.store.branch_exists(&workspace, &from) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !from_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown from-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+        let to_exists = match self.store.branch_exists(&workspace, &to) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !to_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown to-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+
+        let slice = match self
+            .store
+            .graph_diff(&workspace, &from, &to, &doc, cursor, limit)
+        {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let changes = slice
+            .changes
+            .into_iter()
+            .map(|c| match c {
+                bm_storage::GraphDiffChange::Node { to: n } => {
+                    let id = n.id.clone();
+                    json!({
+                        "kind": "node",
+                        "id": id,
+                        "to": {
+                            "id": n.id,
+                            "type": n.node_type,
+                            "title": n.title,
+                            "text": n.text,
+                            "status": n.status,
+                            "tags": n.tags,
+                            "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                            "deleted": n.deleted,
+                            "last_seq": n.last_seq,
+                            "last_ts_ms": n.last_ts_ms
+                        }
+                    })
+                }
+                bm_storage::GraphDiffChange::Edge { to: e } => {
+                    let from = e.from.clone();
+                    let rel = e.rel.clone();
+                    let to = e.to.clone();
+                    json!({
+                        "kind": "edge",
+                        "key": { "from": from, "rel": rel, "to": to },
+                        "to": {
+                            "from": e.from,
+                            "rel": e.rel,
+                            "to": e.to,
+                            "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                            "deleted": e.deleted,
+                            "last_seq": e.last_seq,
+                            "last_ts_ms": e.last_ts_ms
+                        }
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let change_count = changes.len();
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "from": from,
+            "to": to,
+            "doc": doc,
+            "changes": changes,
+            "pagination": {
+                "cursor": cursor,
+                "next_cursor": slice.next_cursor,
+                "has_more": slice.has_more,
+                "limit": limit,
+                "count": change_count
+            },
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let before = result
+                .get("changes")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let (_used, truncated) = enforce_graph_list_budget(&mut result, "changes", limit);
+            let after = result
+                .get("changes")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            if after < before {
+                if let Some(next_cursor) = result
+                    .get("changes")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.last())
+                    .and_then(|v| v.get("to"))
+                    .and_then(|v| v.get("last_seq"))
+                    .and_then(|v| v.as_i64())
+                {
+                    if let Some(pagination) =
+                        result.get_mut("pagination").and_then(|v| v.as_object_mut())
+                    {
+                        pagination.insert(
+                            "next_cursor".to_string(),
+                            Value::Number(serde_json::Number::from(next_cursor)),
+                        );
+                        pagination.insert("has_more".to_string(), Value::Bool(true));
+                        pagination.insert(
+                            "count".to_string(),
+                            Value::Number(serde_json::Number::from(after as u64)),
+                        );
+                    }
+                }
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "changes", limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_graph_diff", result)
+    }
+
+    fn tool_branchmind_graph_merge(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let from = match require_string(args_obj, "from") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let into = match require_string(args_obj, "into") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v.unwrap_or_else(|| "graph".to_string()),
+            Err(resp) => return resp,
+        };
+        let cursor = match optional_i64(args_obj, "cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(200),
+            Err(resp) => return resp,
+        };
+        let dry_run = match optional_bool(args_obj, "dry_run") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+
+        let from_exists = match self.store.branch_exists(&workspace, &from) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !from_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown from-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+        let into_exists = match self.store.branch_exists(&workspace, &into) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        if !into_exists {
+            return ai_error_with(
+                "UNKNOWN_ID",
+                "Unknown into-branch",
+                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                vec![suggest_call(
+                    "branchmind_branch_list",
+                    "List known branches for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            );
+        }
+
+        let merged = match self
+            .store
+            .graph_merge_back(&workspace, &from, &into, &doc, cursor, limit, dry_run)
+        {
+            Ok(v) => v,
+            Err(StoreError::MergeNotSupported) => {
+                return ai_error_with(
+                    "MERGE_NOT_SUPPORTED",
+                    "Merge not supported",
+                    Some("v0 supports only merge-back into base: from.base_branch == into"),
+                    vec![],
+                );
+            }
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_graph_merge",
+            json!({
+                "workspace": workspace.as_str(),
+                "from": from,
+                "into": into,
+                "doc": doc,
+                "merged": merged.merged,
+                "skipped": merged.skipped,
+                "conflicts_created": merged.conflicts_created,
+                "conflict_ids": merged.conflict_ids,
+                "pagination": {
+                    "cursor": cursor,
+                    "next_cursor": merged.next_cursor,
+                    "has_more": merged.has_more,
+                    "limit": limit,
+                    "count": merged.count
+                }
+            }),
+        )
+    }
+
+    fn tool_branchmind_graph_conflicts(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let into = match require_string(args_obj, "into") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v.unwrap_or_else(|| "graph".to_string()),
+            Err(resp) => return resp,
+        };
+        let status = match optional_string(args_obj, "status") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let cursor = match optional_i64(args_obj, "cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(50),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let (conflicts, next_cursor, has_more) = match self.store.graph_conflicts_list(
+            &workspace,
+            &into,
+            &doc,
+            status.as_deref(),
+            cursor,
+            limit,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let conflicts = conflicts
+            .into_iter()
+            .map(|c| {
+                json!({
+                    "conflict_id": c.conflict_id,
+                    "kind": c.kind,
+                    "key": c.key,
+                    "status": c.status,
+                    "created_at_ms": c.created_at_ms
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let conflict_count = conflicts.len();
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "into": into,
+            "doc": doc,
+            "conflicts": conflicts,
+            "pagination": {
+                "cursor": cursor,
+                "next_cursor": next_cursor,
+                "has_more": has_more,
+                "limit": limit,
+                "count": conflict_count
+            },
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let before = result
+                .get("conflicts")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let (_used, truncated) = enforce_graph_list_budget(&mut result, "conflicts", limit);
+            let after = result
+                .get("conflicts")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            if after < before {
+                if let Some(next_cursor) = result
+                    .get("conflicts")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.last())
+                    .and_then(|v| v.get("created_at_ms"))
+                    .and_then(|v| v.as_i64())
+                {
+                    if let Some(pagination) =
+                        result.get_mut("pagination").and_then(|v| v.as_object_mut())
+                    {
+                        pagination.insert(
+                            "next_cursor".to_string(),
+                            Value::Number(serde_json::Number::from(next_cursor)),
+                        );
+                        pagination.insert("has_more".to_string(), Value::Bool(true));
+                        pagination.insert(
+                            "count".to_string(),
+                            Value::Number(serde_json::Number::from(after as u64)),
+                        );
+                    }
+                }
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) =
+                    enforce_graph_list_budget(&mut result, "conflicts", limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_graph_conflicts", result)
+    }
+
+    fn tool_branchmind_graph_conflict_show(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let conflict_id = match require_string(args_obj, "conflict_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let detail = match self.store.graph_conflict_show(&workspace, &conflict_id) {
+            Ok(v) => v,
+            Err(StoreError::UnknownConflict) => return ai_error("UNKNOWN_ID", "Unknown conflict"),
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let base = if detail.kind == "node" {
+            detail.base_node.as_ref().map(|n| {
+                json!({
+                    "id": n.id.clone(),
+                    "type": n.node_type.clone(),
+                    "title": n.title.clone(),
+                    "text": n.text.clone(),
+                    "status": n.status.clone(),
+                    "tags": n.tags.clone(),
+                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": n.deleted,
+                    "last_seq": n.last_seq,
+                    "last_ts_ms": n.last_ts_ms
+                })
+            }).unwrap_or(Value::Null)
+        } else {
+            detail.base_edge.as_ref().map(|e| {
+                json!({
+                    "from": e.from.clone(),
+                    "rel": e.rel.clone(),
+                    "to": e.to.clone(),
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": e.deleted,
+                    "last_seq": e.last_seq,
+                    "last_ts_ms": e.last_ts_ms
+                })
+            }).unwrap_or(Value::Null)
+        };
+        let theirs = if detail.kind == "node" {
+            detail.theirs_node.as_ref().map(|n| {
+                json!({
+                    "id": n.id.clone(),
+                    "type": n.node_type.clone(),
+                    "title": n.title.clone(),
+                    "text": n.text.clone(),
+                    "status": n.status.clone(),
+                    "tags": n.tags.clone(),
+                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": n.deleted,
+                    "last_seq": n.last_seq,
+                    "last_ts_ms": n.last_ts_ms
+                })
+            }).unwrap_or(Value::Null)
+        } else {
+            detail.theirs_edge.as_ref().map(|e| {
+                json!({
+                    "from": e.from.clone(),
+                    "rel": e.rel.clone(),
+                    "to": e.to.clone(),
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": e.deleted,
+                    "last_seq": e.last_seq,
+                    "last_ts_ms": e.last_ts_ms
+                })
+            }).unwrap_or(Value::Null)
+        };
+        let ours = if detail.kind == "node" {
+            detail.ours_node.as_ref().map(|n| {
+                json!({
+                    "id": n.id.clone(),
+                    "type": n.node_type.clone(),
+                    "title": n.title.clone(),
+                    "text": n.text.clone(),
+                    "status": n.status.clone(),
+                    "tags": n.tags.clone(),
+                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": n.deleted,
+                    "last_seq": n.last_seq,
+                    "last_ts_ms": n.last_ts_ms
+                })
+            }).unwrap_or(Value::Null)
+        } else {
+            detail.ours_edge.as_ref().map(|e| {
+                json!({
+                    "from": e.from.clone(),
+                    "rel": e.rel.clone(),
+                    "to": e.to.clone(),
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": e.deleted,
+                    "last_seq": e.last_seq,
+                    "last_ts_ms": e.last_ts_ms
+                })
+            }).unwrap_or(Value::Null)
+        };
+
+        ai_ok(
+            "branchmind_graph_conflict_show",
+            json!({
+                "workspace": workspace.as_str(),
+                "conflict": {
+                    "conflict_id": detail.conflict_id,
+                    "kind": detail.kind,
+                    "key": detail.key,
+                    "from": detail.from_branch,
+                    "into": detail.into_branch,
+                    "doc": detail.doc,
+                    "status": detail.status,
+                    "created_at_ms": detail.created_at_ms,
+                    "resolved_at_ms": detail.resolved_at_ms,
+                    "base": base,
+                    "theirs": theirs,
+                    "ours": ours
+                }
+            }),
+        )
+    }
+
+    fn tool_branchmind_graph_conflict_resolve(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let conflict_id = match require_string(args_obj, "conflict_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let resolution = match require_string(args_obj, "resolution") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let resolved =
+            match self
+                .store
+                .graph_conflict_resolve(&workspace, &conflict_id, &resolution)
+            {
+                Ok(v) => v,
+                Err(StoreError::UnknownConflict) => {
+                    return ai_error("UNKNOWN_ID", "Unknown conflict");
+                }
+                Err(StoreError::ConflictAlreadyResolved) => {
+                    return ai_error("INVALID_INPUT", "Conflict already resolved");
+                }
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+
+        ai_ok(
+            "branchmind_graph_conflict_resolve",
+            json!({
+                "workspace": workspace.as_str(),
+                "conflict_id": resolved.conflict_id,
+                "status": resolved.status,
+                "applied": resolved.applied
+            }),
+        )
+    }
+
     fn tool_branchmind_export(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -2433,6 +3682,157 @@ fn tool_definitions() -> Vec<Value> {
                     "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace", "target"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_apply",
+            "description": "Apply a batch of typed graph ops to a target graph or an explicit (branch, doc).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "ops": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": { "type": "string", "enum": ["node_upsert", "node_delete", "edge_upsert", "edge_delete"] },
+                                "id": { "type": "string" },
+                                "type": { "type": "string" },
+                                "title": { "type": "string" },
+                                "text": { "type": "string" },
+                                "status": { "type": "string" },
+                                "tags": { "type": "array", "items": { "type": "string" } },
+                                "meta": { "type": "object" },
+                                "from": { "type": "string" },
+                                "rel": { "type": "string" },
+                                "to": { "type": "string" }
+                            },
+                            "required": ["op"]
+                        }
+                    }
+                },
+                "required": ["workspace", "ops"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_query",
+            "description": "Query a bounded slice of the effective graph view for a target or an explicit (branch, doc).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "ids": { "type": "array", "items": { "type": "string" } },
+                    "types": { "type": "array", "items": { "type": "string" } },
+                    "status": { "type": "string" },
+                    "tags_any": { "type": "array", "items": { "type": "string" } },
+                    "tags_all": { "type": "array", "items": { "type": "string" } },
+                    "text": { "type": "string" },
+                    "cursor": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "include_edges": { "type": "boolean" },
+                    "edges_limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_validate",
+            "description": "Validate invariants of the effective graph view for a target or an explicit (branch, doc).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "max_errors": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_diff",
+            "description": "Directional diff between two branches for a single graph document (patch-style).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "from": { "type": "string" },
+                    "to": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "cursor": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "from", "to"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_merge",
+            "description": "Merge graph changes from a derived branch back into its base branch (3-way, conflict-producing).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "from": { "type": "string" },
+                    "into": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "cursor": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "dry_run": { "type": "boolean" }
+                },
+                "required": ["workspace", "from", "into"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_conflicts",
+            "description": "List graph merge conflicts for a destination branch.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "into": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "status": { "type": "string" },
+                    "cursor": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "into"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_conflict_show",
+            "description": "Show a single conflict with base/theirs/ours snapshots.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "conflict_id": { "type": "string" }
+                },
+                "required": ["workspace", "conflict_id"]
+            }
+        }),
+        json!({
+            "name": "branchmind_graph_conflict_resolve",
+            "description": "Resolve a conflict and optionally apply the chosen snapshot into the destination branch.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "conflict_id": { "type": "string" },
+                    "resolution": { "type": "string", "enum": ["use_from", "use_into"] }
+                },
+                "required": ["workspace", "conflict_id", "resolution"]
             }
         }),
         json!({
@@ -2886,6 +4286,9 @@ fn format_store_error(err: StoreError) -> String {
         }
         StoreError::UnknownId => "Unknown id".to_string(),
         StoreError::UnknownBranch => "Unknown branch".to_string(),
+        StoreError::UnknownConflict => "Unknown conflict".to_string(),
+        StoreError::ConflictAlreadyResolved => "Conflict already resolved".to_string(),
+        StoreError::MergeNotSupported => "Merge not supported".to_string(),
         StoreError::BranchAlreadyExists => "Branch already exists".to_string(),
         StoreError::BranchCycle => "Branch base cycle".to_string(),
         StoreError::BranchDepthExceeded => "Branch base depth exceeded".to_string(),
@@ -3114,6 +4517,105 @@ fn enforce_branchmind_branch_list_budget(value: &mut Value, max_chars: usize) ->
             }
             truncated = true;
         }
+    }
+
+    (used, truncated)
+}
+
+fn enforce_graph_list_budget(value: &mut Value, list_key: &str, max_chars: usize) -> (usize, bool) {
+    if max_chars == 0 {
+        return (json_len_chars(value), false);
+    }
+
+    let mut used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, false);
+    }
+
+    let mut truncated = false;
+    if value.get(list_key).is_some() {
+        loop {
+            used = json_len_chars(value);
+            if used <= max_chars {
+                break;
+            }
+            let removed = if let Some(arr) = value.get_mut(list_key).and_then(|v| v.as_array_mut())
+            {
+                arr.pop().is_some()
+            } else {
+                false
+            };
+            if !removed {
+                break;
+            }
+            truncated = true;
+        }
+    }
+
+    (used, truncated)
+}
+
+fn enforce_graph_query_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
+    use std::collections::HashSet;
+
+    if max_chars == 0 {
+        return (json_len_chars(value), false);
+    }
+
+    let mut used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, false);
+    }
+
+    let mut truncated = false;
+
+    loop {
+        used = json_len_chars(value);
+        if used <= max_chars {
+            break;
+        }
+
+        let removed_edge =
+            if let Some(edges) = value.get_mut("edges").and_then(|v| v.as_array_mut()) {
+                edges.pop().is_some()
+            } else {
+                false
+            };
+        if removed_edge {
+            truncated = true;
+            continue;
+        }
+
+        let removed_node =
+            if let Some(nodes) = value.get_mut("nodes").and_then(|v| v.as_array_mut()) {
+                nodes.pop().is_some()
+            } else {
+                false
+            };
+        if removed_node {
+            truncated = true;
+
+            let mut node_ids = HashSet::new();
+            if let Some(nodes) = value.get("nodes").and_then(|v| v.as_array()) {
+                for node in nodes {
+                    if let Some(id) = node.get("id").and_then(|v| v.as_str()) {
+                        node_ids.insert(id.to_string());
+                    }
+                }
+            }
+
+            if let Some(edges) = value.get_mut("edges").and_then(|v| v.as_array_mut()) {
+                edges.retain(|edge| {
+                    let from = edge.get("from").and_then(|v| v.as_str()).unwrap_or("");
+                    let to = edge.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                    node_ids.contains(from) && node_ids.contains(to)
+                });
+            }
+
+            continue;
+        }
+
+        break;
     }
 
     (used, truncated)

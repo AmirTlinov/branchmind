@@ -26,11 +26,14 @@ In v0, the primary memory primitives are **documents**:
 
 - `notes` — human-authored, append-only entries (decisions, rationale, evidence links).
 - `trace` — machine-authored, append-only entries (task mutation events ingested automatically).
+- `graph` — typed knowledge graph state (Milestone 4).
 
 Documents are addressed by `(branch, doc)`:
 
 - `branch` is the stable reasoning namespace returned by `tasks_radar.reasoning_ref.branch` (e.g. `task/TASK-001`).
 - `doc` is one of the reasoning docs returned by `tasks_radar.reasoning_ref.*_doc` (e.g. `notes`, `TASK-001-trace`).
+
+For graph tools, `doc` defaults to `tasks_radar.reasoning_ref.graph_doc` when `target` is provided.
 
 ## Branching model (Milestone 3 core)
 
@@ -156,6 +159,205 @@ Semantics:
 - Merge is idempotent via `source_event_id` on inserted notes: `merge:<from_branch>:<from_seq>`.
 - A merge copies content into `into` (it does not rewrite history of `from`).
 - Pagination supports large merges: if `has_more=true`, retry with `cursor=next_cursor`.
+
+## Graph model (Milestone 4)
+
+Graph is a typed, queryable layer for linking hypotheses/questions/tests/evidence/decisions.
+
+### State model: versioned, snapshot-safe
+
+Graph state is stored as **versioned entities** (nodes and edges):
+
+- every mutation creates a new version with a monotonic `seq`,
+- deletion is a tombstone (`deleted=true`),
+- the **effective view** of a graph doc is “latest version per key” inside the branch’s effective sources:
+  - derived branches inherit a base snapshot (`base_branch` + `base_seq`) exactly like notes,
+  - view selection uses `seq <= cutoff` for inherited sources.
+
+This makes graph reads deterministic and makes branch snapshots consistent without copying.
+
+### Node
+
+Node identity key: `id`.
+
+Minimal fields:
+
+- `id` (string, stable),
+- `type` (string),
+- `title?` (string),
+- `text?` (string),
+- `status?` (string),
+- `tags?` (string array),
+- `meta?` (object),
+- `deleted` (boolean),
+- `last_seq` / `last_ts_ms` (version metadata).
+
+### Edge
+
+Edge identity key: `(from, rel, to)`.
+
+Minimal fields:
+
+- `from` (node id),
+- `rel` (string),
+- `to` (node id),
+- `meta?` (object),
+- `deleted` (boolean),
+- `last_seq` / `last_ts_ms` (version metadata).
+
+## Graph tool surface (Milestone 4)
+
+### `branchmind_graph_apply`
+
+Apply a batch of typed graph operations to a target’s graph document or an explicit `(branch, doc)`.
+
+Input (one of):
+
+- `{ workspace, target: "PLAN-###"|"TASK-###", ops:[...]}`
+- `{ workspace, branch, doc, ops:[...] }`
+
+Where `ops[]` is an array of operations:
+
+- `{"op":"node_upsert","id","type","title"?,"text"?,"status"?,"tags"?,"meta"?}`
+- `{"op":"node_delete","id"}`
+- `{"op":"edge_upsert","from","rel","to","meta"?}`
+- `{"op":"edge_delete","from","rel","to"}`
+
+Output:
+
+- `{ branch, doc, applied:{ nodes_upserted, nodes_deleted, edges_upserted, edges_deleted }, last_seq, last_ts_ms }`
+
+Semantics:
+
+- Atomic: either all ops are applied or none.
+- Each op creates a new version (`last_seq` increases monotonically).
+- IDs must be non-empty; tools must be deterministic.
+
+### `branchmind_graph_query`
+
+Query a bounded slice of the effective graph view.
+
+Input (one of):
+
+- `{ workspace, target, ids?, types?, status?, tags_any?, tags_all?, text?, cursor?, limit?, include_edges?, edges_limit?, max_chars? }`
+- `{ workspace, branch, doc, ids?, types?, status?, tags_any?, tags_all?, text?, cursor?, limit?, include_edges?, edges_limit?, max_chars? }`
+
+Defaults:
+
+- `include_edges=true`
+- `limit=50` (nodes)
+- `edges_limit=200`
+
+Output:
+
+- `{ branch, doc, nodes:[...], edges:[...], pagination:{ cursor, next_cursor?, has_more, limit, count }, truncated }`
+
+Semantics:
+
+- Nodes are ordered by `last_seq DESC` (recent-first).
+- Pagination uses a `cursor` that behaves like `branchmind_show`: `last_seq < cursor` (tail pagination by seq).
+- `edges` are limited to those connecting returned nodes and bounded by `edges_limit`.
+- `max_chars` truncates by dropping older nodes/edges first; truncation must be explicit.
+
+### `branchmind_graph_validate`
+
+Validate invariants of the effective graph view.
+
+Input (one of):
+
+- `{ workspace, target, max_errors?, max_chars? }`
+- `{ workspace, branch, doc, max_errors?, max_chars? }`
+
+Output:
+
+- `{ branch, doc, ok, stats:{ nodes, edges }, errors:[...], truncated? }`
+
+Semantics (v0):
+
+- Every edge endpoint must exist as a non-deleted node in the same effective view.
+- Errors are bounded by `max_errors` (default 50).
+
+### `branchmind_graph_diff`
+
+Directional diff between two branches for a single graph document (patch-style).
+
+Input: `{ workspace, from, to, doc?, cursor?, limit?, max_chars? }`
+
+- `cursor`/`limit` follow the same semantics as `branchmind_show` (tail pagination by `seq`).
+
+Output:
+
+- `{ from, to, doc, changes:[...], pagination:{ cursor, next_cursor?, has_more, limit, count }, truncated }`
+
+Where `changes[]` contains node/edge states from `to` that differ from `from` (including tombstones):
+
+- `{"kind":"node","id", "to":{...}}`
+- `{"kind":"edge","key":{"from","rel","to"}, "to":{...}}`
+
+Semantics:
+
+- Changes are ordered by `to.last_seq DESC` and paginated by `seq`.
+- A deletion is represented by `to.deleted=true` (tombstone), not by “absence”.
+
+## Conflicts & merge back (Milestone 4)
+
+Graph merges are 3-way and conflicts are first-class entities.
+
+### `branchmind_graph_merge`
+
+Merge graph changes from a derived branch back into its base branch.
+
+Input: `{ workspace, from, into, doc?, cursor?, limit?, dry_run? }`
+
+Rules:
+
+- v0 merge supports only **merge-back into base**: `from.base_branch == into`.
+- `dry_run=true` discovers outcomes without writing.
+
+Output:
+
+- `{ from, into, doc, merged, skipped, conflicts_created, conflict_ids?, pagination:{ cursor, next_cursor?, has_more, limit, count } }`
+
+Semantics:
+
+- Only keys changed on `from` since branching are considered.
+- If `into` also changed the same key differently since the base snapshot → create a conflict entity and skip applying that key.
+- Conflict discovery must be deterministic and idempotent.
+
+### `branchmind_graph_conflicts`
+
+List conflicts for a target merge destination.
+
+Input: `{ workspace, into, doc?, status?, cursor?, limit?, max_chars? }`
+
+Output:
+
+- `{ into, doc, conflicts:[{ conflict_id, kind, key, status, created_at_ms }], pagination:{...}, truncated }`
+
+### `branchmind_graph_conflict_show`
+
+Show a single conflict with base/from/into snapshots.
+
+Input: `{ workspace, conflict_id }`
+
+Output:
+
+- `{ conflict:{ conflict_id, kind, key, from, into, doc, status, base, theirs, ours, created_at_ms, resolved_at_ms? } }`
+
+### `branchmind_graph_conflict_resolve`
+
+Resolve a conflict explicitly and (optionally) apply the chosen state into the destination branch.
+
+Input: `{ workspace, conflict_id, resolution:"use_from"|"use_into" }`
+
+Output:
+
+- `{ conflict_id, status:"resolved", applied }`
+
+Semantics:
+
+- `use_from` writes the `from` snapshot into `into` as a new version (then marks conflict resolved).
+- `use_into` keeps the destination state and just marks conflict resolved.
 
 ### `branchmind_branch_create`
 
