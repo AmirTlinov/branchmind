@@ -174,6 +174,9 @@ impl McpServer {
             "branchmind_graph_conflict_resolve" => {
                 self.tool_branchmind_graph_conflict_resolve(args)
             }
+            "branchmind_think_template" => self.tool_branchmind_think_template(args),
+            "branchmind_think_card" => self.tool_branchmind_think_card(args),
+            "branchmind_think_context" => self.tool_branchmind_think_context(args),
             "branchmind_export" => self.tool_branchmind_export(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
@@ -3302,6 +3305,433 @@ impl McpServer {
         )
     }
 
+    fn tool_branchmind_think_template(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let card_type = match require_string(args_obj, "type") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let card_type = card_type.trim().to_string();
+        let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
+        if !bm_core::think::is_supported_think_card_type(&card_type) {
+            return ai_error_with(
+                "INVALID_INPUT",
+                "Unsupported card type",
+                Some(&format!(
+                    "Supported: {}",
+                    supported.iter().copied().collect::<Vec<_>>().join(", ")
+                )),
+                vec![suggest_call(
+                    "branchmind_think_template",
+                    "Request a supported template type.",
+                    "high",
+                    json!({ "workspace": workspace.as_str(), "type": "hypothesis" }),
+                )],
+            );
+        }
+
+        let template = json!({
+            "id": "CARD-<id>",
+            "type": card_type,
+            "title": null,
+            "text": null,
+            "status": "open",
+            "tags": [],
+            "meta": {}
+        });
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "type": card_type,
+            "supported_types": supported,
+            "template": template,
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let used = attach_budget(&mut result, limit, false);
+            if used > limit {
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("template".to_string(), Value::Null);
+                    obj.insert("truncated".to_string(), Value::Bool(true));
+                }
+                let _ = attach_budget(&mut result, limit, true);
+            }
+        }
+
+        ai_ok("branchmind_think_template", result)
+    }
+
+    fn tool_branchmind_think_card(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch_override = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let trace_doc = match optional_string(args_obj, "trace_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let graph_doc = match optional_string(args_obj, "graph_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if target.is_some() && (trace_doc.is_some() || graph_doc.is_some()) {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide either target or (branch, trace_doc, graph_doc), not both",
+            );
+        }
+
+        let (branch, trace_doc, graph_doc) = match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
+                    }
+                };
+                let reasoning = match self
+                    .store
+                    .ensure_reasoning_ref(&workspace, &target_id, kind)
+                {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Unknown target id");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let branch = branch_override.unwrap_or(reasoning.branch);
+                (branch, reasoning.trace_doc, reasoning.graph_doc)
+            }
+            None => {
+                let Some(branch) = branch_override else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "branch is required when target is not provided",
+                    );
+                };
+                let Some(trace_doc) = trace_doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "trace_doc is required when target is not provided",
+                    );
+                };
+                let Some(graph_doc) = graph_doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "graph_doc is required when target is not provided",
+                    );
+                };
+                (branch, trace_doc, graph_doc)
+            }
+        };
+
+        let supports = match optional_string_array(args_obj, "supports") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let blocks = match optional_string_array(args_obj, "blocks") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+
+        let card_value = args_obj.get("card").cloned().unwrap_or(Value::Null);
+        let parsed = match parse_think_card(&workspace, card_value) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let result = match self.store.think_card_commit(
+            &workspace,
+            &branch,
+            &trace_doc,
+            &graph_doc,
+            bm_storage::ThinkCardInput {
+                card_id: parsed.card_id.clone(),
+                card_type: parsed.card_type.clone(),
+                title: parsed.title.clone(),
+                text: parsed.text.clone(),
+                status: Some(parsed.status.clone()),
+                tags: parsed.tags.clone(),
+                meta_json: Some(parsed.meta_json.clone()),
+                content: parsed.content.clone(),
+                payload_json: parsed.payload_json.clone(),
+            },
+            &supports,
+            &blocks,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list or branchmind_branch_create, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) if msg == "unsupported card.type" => {
+                let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
+                return ai_error_with(
+                    "INVALID_INPUT",
+                    "Unsupported card.type",
+                    Some(&format!(
+                        "Supported: {}",
+                        supported.iter().copied().collect::<Vec<_>>().join(", ")
+                    )),
+                    vec![suggest_call(
+                        "branchmind_think_template",
+                        "Get a valid card skeleton.",
+                        "high",
+                        json!({ "workspace": workspace.as_str(), "type": "hypothesis" }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_think_card",
+            json!({
+                "workspace": workspace.as_str(),
+                "branch": branch,
+                "trace_doc": trace_doc,
+                "graph_doc": graph_doc,
+                "card_id": parsed.card_id,
+                "inserted": result.inserted,
+                "graph_applied": {
+                    "nodes_upserted": result.nodes_upserted,
+                    "edges_upserted": result.edges_upserted
+                },
+                "last_seq": result.last_seq
+            }),
+        )
+    }
+
+    fn tool_branchmind_think_context(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch_override = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let graph_doc = match optional_string(args_obj, "graph_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if target.is_some() && graph_doc.is_some() {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide either target or (branch, graph_doc), not both",
+            );
+        }
+
+        let (branch, graph_doc) = match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
+                    }
+                };
+                let reasoning = match self
+                    .store
+                    .ensure_reasoning_ref(&workspace, &target_id, kind)
+                {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Unknown target id");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let branch = branch_override.unwrap_or(reasoning.branch);
+                (branch, reasoning.graph_doc)
+            }
+            None => {
+                let Some(branch) = branch_override else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "branch is required when target is not provided",
+                    );
+                };
+                let Some(graph_doc) = graph_doc else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "graph_doc is required when target is not provided",
+                    );
+                };
+                (branch, graph_doc)
+            }
+        };
+
+        let limit_cards = match optional_usize(args_obj, "limit_cards") {
+            Ok(v) => v.unwrap_or(30),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
+        let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        let slice = match self.store.graph_query(
+            &workspace,
+            &branch,
+            &graph_doc,
+            bm_storage::GraphQueryRequest {
+                ids: None,
+                types: Some(types),
+                status: None,
+                tags_any: None,
+                tags_all: None,
+                text: None,
+                cursor: None,
+                limit: limit_cards,
+                include_edges: false,
+                edges_limit: 0,
+            },
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut by_type = std::collections::BTreeMap::<String, u64>::new();
+        for n in &slice.nodes {
+            *by_type.entry(n.node_type.clone()).or_insert(0) += 1;
+        }
+
+        let cards = slice
+            .nodes
+            .into_iter()
+            .map(|n| {
+                json!({
+                    "id": n.id,
+                    "type": n.node_type,
+                    "title": n.title,
+                    "text": n.text,
+                    "status": n.status,
+                    "tags": n.tags,
+                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "deleted": n.deleted,
+                    "last_seq": n.last_seq,
+                    "last_ts_ms": n.last_ts_ms
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branch": branch,
+            "graph_doc": graph_doc,
+            "stats": {
+                "cards": cards.len(),
+                "by_type": by_type
+            },
+            "cards": cards,
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let before = result
+                .get("cards")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let (_used, truncated) = enforce_graph_list_budget(&mut result, "cards", limit);
+            let after = result
+                .get("cards")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            if after < before {
+                let mut by_type = std::collections::BTreeMap::<String, u64>::new();
+                if let Some(arr) = result.get("cards").and_then(|v| v.as_array()) {
+                    for card in arr {
+                        if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
+                            *by_type.entry(ty.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                }
+                if let Some(stats) = result.get_mut("stats").and_then(|v| v.as_object_mut()) {
+                    stats.insert(
+                        "cards".to_string(),
+                        Value::Number(serde_json::Number::from(after as u64)),
+                    );
+                    stats.insert("by_type".to_string(), json!(by_type));
+                }
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "cards", limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_think_context", result)
+    }
+
     fn tool_branchmind_export(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -3836,6 +4266,58 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "branchmind_think_template",
+            "description": "Return a deterministic thinking card skeleton for a supported type.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "type": { "type": "string" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "type"]
+            }
+        }),
+        json!({
+            "name": "branchmind_think_card",
+            "description": "Atomically commit a thinking card into trace_doc and upsert node/edges into graph_doc.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "card": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "supports": { "type": "array", "items": { "type": "string" } },
+                    "blocks": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "card"]
+            }
+        }),
+        json!({
+            "name": "branchmind_think_context",
+            "description": "Return a bounded low-noise thinking context slice (cards from the graph).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "limit_cards": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
             "name": "tasks_create",
             "description": "Create a plan or a task (v0 skeleton).",
             "inputSchema": {
@@ -4274,6 +4756,294 @@ fn parse_json_or_null(value: Option<String>) -> Value {
 
 fn parse_json_or_string(raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
+}
+
+#[derive(Clone, Debug)]
+struct ParsedThinkCard {
+    card_id: String,
+    card_type: String,
+    title: Option<String>,
+    text: Option<String>,
+    status: String,
+    tags: Vec<String>,
+    meta_json: String,
+    content: String,
+    payload_json: String,
+}
+
+fn parse_think_card(workspace: &WorkspaceId, value: Value) -> Result<ParsedThinkCard, Value> {
+    let raw_obj = match value {
+        Value::Object(obj) => obj,
+        Value::String(raw) => {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                return Err(ai_error("INVALID_INPUT", "card must not be empty"));
+            }
+            if raw.starts_with('{') {
+                if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(raw) {
+                    obj
+                } else {
+                    parse_think_card_dsl(raw)?
+                }
+            } else {
+                parse_think_card_dsl(raw)?
+            }
+        }
+        Value::Null => return Err(ai_error("INVALID_INPUT", "card is required")),
+        _ => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "card must be an object or string",
+            ));
+        }
+    };
+
+    normalize_think_card(workspace, raw_obj)
+}
+
+fn parse_think_card_dsl(raw: &str) -> Result<serde_json::Map<String, Value>, Value> {
+    let mut out = serde_json::Map::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "card DSL must be 'key: value' lines",
+            ));
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() {
+            return Err(ai_error("INVALID_INPUT", "card DSL key must not be empty"));
+        }
+        out.insert(key.to_string(), Value::String(value.to_string()));
+    }
+    Ok(out)
+}
+
+fn normalize_think_card(
+    workspace: &WorkspaceId,
+    raw: serde_json::Map<String, Value>,
+) -> Result<ParsedThinkCard, Value> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut id: Option<String> = None;
+    let mut card_type: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut text: Option<String> = None;
+    let mut status: Option<String> = None;
+    let mut tags: Vec<String> = Vec::new();
+    let mut meta: BTreeMap<String, Value> = BTreeMap::new();
+
+    for (key, value) in raw {
+        let key = key.trim().to_ascii_lowercase();
+        match key.as_str() {
+            "id" | "card_id" => {
+                let Some(v) = value.as_str() else {
+                    return Err(ai_error("INVALID_INPUT", "card.id must be a string"));
+                };
+                id = Some(v.trim().to_string());
+            }
+            "type" | "card_type" => {
+                let Some(v) = value.as_str() else {
+                    return Err(ai_error("INVALID_INPUT", "card.type must be a string"));
+                };
+                card_type = Some(v.trim().to_string());
+            }
+            "title" => {
+                if let Some(v) = value.as_str() {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        title = Some(v.to_string());
+                    }
+                }
+            }
+            "text" => {
+                if let Some(v) = value.as_str() {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        text = Some(v.to_string());
+                    }
+                }
+            }
+            "status" => {
+                if let Some(v) = value.as_str() {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        status = Some(v.to_string());
+                    }
+                }
+            }
+            "tags" => {
+                let mut set = BTreeSet::new();
+                match value {
+                    Value::Array(arr) => {
+                        for item in arr {
+                            let Some(s) = item.as_str() else {
+                                return Err(ai_error(
+                                    "INVALID_INPUT",
+                                    "card.tags must be an array of strings",
+                                ));
+                            };
+                            let s = s.trim();
+                            if !s.is_empty() {
+                                set.insert(s.to_lowercase());
+                            }
+                        }
+                    }
+                    Value::String(s) => {
+                        for part in s.split(|c| c == ';' || c == ',') {
+                            let part = part.trim();
+                            if !part.is_empty() {
+                                set.insert(part.to_lowercase());
+                            }
+                        }
+                    }
+                    Value::Null => {}
+                    _ => {
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "card.tags must be a string or an array of strings",
+                        ));
+                    }
+                }
+                tags = set.into_iter().collect();
+            }
+            "meta" => match value {
+                Value::Object(obj) => {
+                    for (k, v) in obj {
+                        meta.insert(k, v);
+                    }
+                }
+                Value::String(raw) => {
+                    if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&raw) {
+                        for (k, v) in obj {
+                            meta.insert(k, v);
+                        }
+                    } else {
+                        return Err(ai_error("INVALID_INPUT", "card.meta must be an object"));
+                    }
+                }
+                Value::Null => {}
+                _ => return Err(ai_error("INVALID_INPUT", "card.meta must be an object")),
+            },
+            _ => {
+                meta.insert(key, value);
+            }
+        }
+    }
+
+    let card_id = id.unwrap_or_default();
+    if card_id.trim().is_empty() {
+        return Err(ai_error("INVALID_INPUT", "card.id is required"));
+    }
+    let card_type = card_type.unwrap_or_default();
+    if card_type.trim().is_empty() {
+        return Err(ai_error("INVALID_INPUT", "card.type is required"));
+    }
+    if !bm_core::think::is_supported_think_card_type(&card_type) {
+        let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
+        return Err(ai_error_with(
+            "INVALID_INPUT",
+            "Unsupported card.type",
+            Some(&format!(
+                "Supported: {}",
+                supported.iter().copied().collect::<Vec<_>>().join(", ")
+            )),
+            vec![suggest_call(
+                "branchmind_think_template",
+                "Get a valid card skeleton.",
+                "high",
+                json!({ "workspace": workspace.as_str(), "type": "hypothesis" }),
+            )],
+        ));
+    }
+
+    if title.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true)
+        && text.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true)
+    {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            "card must have at least one of title or text",
+        ));
+    }
+
+    let status = status.unwrap_or_else(|| "open".to_string());
+    let meta_value = Value::Object(meta.into_iter().collect());
+
+    let normalized = json!({
+        "id": card_id,
+        "type": card_type,
+        "title": title,
+        "text": text,
+        "status": status,
+        "tags": tags,
+        "meta": meta_value
+    });
+    let payload_json = normalized.to_string();
+
+    let meta_json = json!({
+        "source": "think_card",
+        "card_id": normalized.get("id").cloned().unwrap_or(Value::Null),
+        "type": normalized.get("type").cloned().unwrap_or(Value::Null),
+        "status": normalized.get("status").cloned().unwrap_or(Value::Null),
+        "tags": normalized.get("tags").cloned().unwrap_or(Value::Null),
+        "meta": normalized.get("meta").cloned().unwrap_or(Value::Null)
+    })
+    .to_string();
+
+    let content = normalized
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            normalized
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_default();
+
+    Ok(ParsedThinkCard {
+        card_id: normalized
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        card_type: normalized
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        title: normalized
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        text: normalized
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        status: normalized
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("open")
+            .to_string(),
+        tags: normalized
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        meta_json,
+        content,
+        payload_json,
+    })
 }
 
 fn format_store_error(err: StoreError) -> String {

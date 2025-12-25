@@ -175,6 +175,27 @@ pub struct MergeNotesResult {
 }
 
 #[derive(Clone, Debug)]
+pub struct ThinkCardInput {
+    pub card_id: String,
+    pub card_type: String,
+    pub title: Option<String>,
+    pub text: Option<String>,
+    pub status: Option<String>,
+    pub tags: Vec<String>,
+    pub meta_json: Option<String>,
+    pub content: String,
+    pub payload_json: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ThinkCardCommitResult {
+    pub inserted: bool,
+    pub nodes_upserted: usize,
+    pub edges_upserted: usize,
+    pub last_seq: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
 pub struct GraphNodeRow {
     pub id: String,
     pub node_type: String,
@@ -1949,6 +1970,303 @@ impl SqliteStore {
             edges_deleted,
             last_seq,
             last_ts_ms: now_ms,
+        })
+    }
+
+    pub fn think_card_commit(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        trace_doc: &str,
+        graph_doc: &str,
+        card: ThinkCardInput,
+        supports: &[String],
+        blocks: &[String],
+    ) -> Result<ThinkCardCommitResult, StoreError> {
+        let branch = branch.trim();
+        if branch.is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        let trace_doc = trace_doc.trim();
+        if trace_doc.is_empty() {
+            return Err(StoreError::InvalidInput("trace_doc must not be empty"));
+        }
+        let graph_doc = graph_doc.trim();
+        if graph_doc.is_empty() {
+            return Err(StoreError::InvalidInput("graph_doc must not be empty"));
+        }
+
+        let card_id = card.card_id.trim();
+        if card_id.is_empty() {
+            return Err(StoreError::InvalidInput("card.id must not be empty"));
+        }
+        let card_type = card.card_type.trim();
+        if card_type.is_empty() {
+            return Err(StoreError::InvalidInput("card.type must not be empty"));
+        }
+        if !bm_core::think::is_supported_think_card_type(card_type) {
+            return Err(StoreError::InvalidInput("unsupported card.type"));
+        }
+        validate_graph_node_id(card_id)?;
+        validate_graph_type(card_type)?;
+
+        let title_ok = card
+            .title
+            .as_deref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        let text_ok = card
+            .text
+            .as_deref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        if !title_ok && !text_ok {
+            return Err(StoreError::InvalidInput(
+                "card must have at least one of title or text",
+            ));
+        }
+        let tags = normalize_tags(&card.tags)?;
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        // 1) Trace: idempotent note entry keyed by card_id.
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            branch,
+            trace_doc,
+            DocumentKind::Trace.as_str(),
+            now_ms,
+        )?;
+
+        let trace_source_event_id = format!("think_card:{card_id}");
+        let existing_payload: Option<Option<String>> = tx
+            .query_row(
+                r#"
+                SELECT payload_json
+                FROM doc_entries
+                WHERE workspace=?1 AND branch=?2 AND doc=?3 AND source_event_id=?4
+                LIMIT 1
+                "#,
+                params![
+                    workspace.as_str(),
+                    branch,
+                    trace_doc,
+                    trace_source_event_id.as_str()
+                ],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+
+        let mut inserted = false;
+        match existing_payload {
+            Some(Some(existing)) => {
+                if existing != card.payload_json {
+                    return Err(StoreError::InvalidInput(
+                        "card_id already exists with a different payload",
+                    ));
+                }
+            }
+            Some(None) => {
+                return Err(StoreError::InvalidInput(
+                    "card_id already exists but stored payload is missing",
+                ));
+            }
+            None => {
+                let inserted_rows = tx.execute(
+                    r#"
+                    INSERT OR IGNORE INTO doc_entries(
+                      workspace, branch, doc, ts_ms, kind, title, format, meta_json, content,
+                      source_event_id, event_type, payload_json
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    "#,
+                    params![
+                        workspace.as_str(),
+                        branch,
+                        trace_doc,
+                        now_ms,
+                        DocEntryKind::Note.as_str(),
+                        card.title.as_deref(),
+                        "think_card",
+                        card.meta_json.as_deref(),
+                        card.content.as_str(),
+                        trace_source_event_id.as_str(),
+                        "think_card",
+                        card.payload_json.as_str(),
+                    ],
+                )?;
+                inserted = inserted_rows > 0;
+                if inserted {
+                    touch_document_tx(&tx, workspace.as_str(), branch, trace_doc, now_ms)?;
+                }
+            }
+        }
+
+        // 2) Graph: idempotent semantic upserts for node + support/block edges.
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            branch,
+            graph_doc,
+            DocumentKind::Graph.as_str(),
+            now_ms,
+        )?;
+
+        let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+
+        let mut nodes_upserted = 0usize;
+        let mut edges_upserted = 0usize;
+        let mut last_seq: Option<i64> = None;
+        let mut touched_graph = false;
+
+        let existing_node =
+            graph_node_get_tx(&tx, workspace.as_str(), &sources, graph_doc, card_id)?;
+        let candidate_node = GraphNodeRow {
+            id: card_id.to_string(),
+            node_type: card_type.to_string(),
+            title: card.title.clone(),
+            text: card.text.clone(),
+            tags: tags.clone(),
+            status: card.status.clone(),
+            meta_json: card.meta_json.clone(),
+            deleted: false,
+            last_seq: 0,
+            last_ts_ms: 0,
+        };
+
+        if !graph_node_semantic_eq(existing_node.as_ref(), Some(&candidate_node)) {
+            let op = GraphOp::NodeUpsert(GraphNodeUpsert {
+                id: candidate_node.id.clone(),
+                node_type: candidate_node.node_type.clone(),
+                title: candidate_node.title.clone(),
+                text: candidate_node.text.clone(),
+                tags: tags.clone(),
+                status: candidate_node.status.clone(),
+                meta_json: candidate_node.meta_json.clone(),
+            });
+            let dedup = format!("think_card:{card_id}:node");
+            let (_payload, seq_opt) = insert_graph_doc_entry_tx(
+                &tx,
+                workspace.as_str(),
+                branch,
+                graph_doc,
+                now_ms,
+                &op,
+                Some(&dedup),
+            )?;
+            let Some(seq) = seq_opt else {
+                return Err(StoreError::InvalidInput(
+                    "dedup prevented node write (card_id collision)",
+                ));
+            };
+            insert_graph_node_version_tx(
+                &tx,
+                workspace.as_str(),
+                branch,
+                graph_doc,
+                seq,
+                now_ms,
+                &candidate_node.id,
+                Some(&candidate_node.node_type),
+                candidate_node.title.as_deref(),
+                candidate_node.text.as_deref(),
+                &tags,
+                candidate_node.status.as_deref(),
+                candidate_node.meta_json.as_deref(),
+                false,
+            )?;
+            nodes_upserted += 1;
+            last_seq = Some(seq);
+            touched_graph = true;
+        }
+
+        let mut upsert_edge = |rel: &str, to_id: &str| -> Result<(), StoreError> {
+            validate_graph_rel(rel)?;
+            validate_graph_node_id(to_id)?;
+            let key = GraphEdgeKey {
+                from: card_id.to_string(),
+                rel: rel.to_string(),
+                to: to_id.to_string(),
+            };
+            let existing = graph_edge_get_tx(&tx, workspace.as_str(), &sources, graph_doc, &key)?;
+            let candidate = GraphEdgeRow {
+                from: key.from.clone(),
+                rel: key.rel.clone(),
+                to: key.to.clone(),
+                meta_json: None,
+                deleted: false,
+                last_seq: 0,
+                last_ts_ms: 0,
+            };
+            if graph_edge_semantic_eq(existing.as_ref(), Some(&candidate)) {
+                return Ok(());
+            }
+
+            let op = GraphOp::EdgeUpsert(GraphEdgeUpsert {
+                from: key.from.clone(),
+                rel: key.rel.clone(),
+                to: key.to.clone(),
+                meta_json: None,
+            });
+            let dedup = format!("think_card:{card_id}:edge:{rel}:{to_id}");
+            let (_payload, seq_opt) = insert_graph_doc_entry_tx(
+                &tx,
+                workspace.as_str(),
+                branch,
+                graph_doc,
+                now_ms,
+                &op,
+                Some(&dedup),
+            )?;
+            let Some(seq) = seq_opt else {
+                return Err(StoreError::InvalidInput(
+                    "dedup prevented edge write (card_id collision)",
+                ));
+            };
+            insert_graph_edge_version_tx(
+                &tx,
+                workspace.as_str(),
+                branch,
+                graph_doc,
+                seq,
+                now_ms,
+                &key.from,
+                &key.rel,
+                &key.to,
+                None,
+                false,
+            )?;
+            edges_upserted += 1;
+            last_seq = Some(seq);
+            touched_graph = true;
+            Ok(())
+        };
+
+        for to_id in supports {
+            upsert_edge("supports", to_id)?;
+        }
+        for to_id in blocks {
+            upsert_edge("blocks", to_id)?;
+        }
+
+        if touched_graph {
+            touch_document_tx(&tx, workspace.as_str(), branch, graph_doc, now_ms)?;
+        }
+
+        tx.commit()?;
+
+        Ok(ThinkCardCommitResult {
+            inserted,
+            nodes_upserted,
+            edges_upserted,
+            last_seq,
         })
     }
 

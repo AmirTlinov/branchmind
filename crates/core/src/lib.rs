@@ -154,3 +154,23 @@ pub mod model {
         }
     }
 }
+
+pub mod think {
+    pub const SUPPORTED_THINK_CARD_TYPES: &[&str] = &[
+        "frame",
+        "hypothesis",
+        "question",
+        "test",
+        "evidence",
+        "decision",
+        "note",
+        "update",
+    ];
+
+    pub fn is_supported_think_card_type(value: &str) -> bool {
+        let value = value.trim();
+        SUPPORTED_THINK_CARD_TYPES
+            .iter()
+            .any(|candidate| *candidate == value)
+    }
+}

@@ -394,6 +394,94 @@ Idempotency rule:
 
 - ingesting the same `event_id` twice must not create duplicates.
 
+## Thinking tools (Milestone 4.1)
+
+These tools provide a **structured external working memory** without storing hidden chain-of-thought.
+
+Design:
+
+- A thinking “card” is an explicit artifact written by the agent.
+- `think_card` writes into:
+  - the **trace** document as a `note` entry (chronology),
+  - the **graph** document as a typed node + optional edges (structure).
+- Idempotency is mandatory: repeating the same `card_id` must be a no-op.
+
+Supported card types (v0):
+
+- `frame`, `hypothesis`, `question`, `test`, `evidence`, `decision`, `note`, `update`
+
+### `branchmind_think_template`
+
+Return a deterministic card skeleton so agents never guess required fields.
+
+Input: `{ workspace, type, max_chars? }`
+
+Output:
+
+- `{ type, supported_types:[...], template:{...}, truncated }`
+
+Semantics:
+
+- Unknown `type` must be a typed error with a recovery hint listing `supported_types`.
+- `template` is a JSON object that includes at least: `id`, `type`, `title?`, `text?`, `status?`, `tags?`, `meta?`.
+
+### `branchmind_think_card`
+
+Atomically commit a thinking card into `trace_doc` and upsert the corresponding node/edges into `graph_doc`.
+
+Input (one of):
+
+- `{ workspace, target, branch?, card, supports?, blocks? }`
+- `{ workspace, branch, trace_doc, graph_doc, card, supports?, blocks? }`
+
+Where:
+
+- `card` is either a JSON object or a string:
+  - JSON object string (`"{...}"`) is accepted.
+  - DSL string is accepted in v0: `key: value` lines (unknown keys preserved under `card.meta`).
+- Required normalized fields:
+  - `card.id` (aka `card_id`) — stable identifier (non-empty),
+  - `card.type` — one of `supported_types` (non-empty),
+  - at least one of `card.title` or `card.text` must be non-empty.
+- Optional:
+  - `card.status` (default: `"open"`),
+  - `card.tags` (default: `[]`),
+  - `supports[]` / `blocks[]` — arrays of other card ids (graph edges from `card.id`).
+
+Output:
+
+- `{ branch, trace_doc, graph_doc, card_id, inserted, graph_applied:{ nodes_upserted, edges_upserted }, last_seq? }`
+
+Semantics:
+
+- **Atomic**: trace entry + graph updates commit as one transaction.
+- **Idempotent** by `card_id`:
+  - A repeated call with identical normalized `card` + edges must not create a second trace entry.
+  - It must not create new graph versions if the effective node/edges are already semantically equal.
+
+### `branchmind_think_context`
+
+Return a bounded, low-noise “thinking context slice” for fast resumption.
+
+Input (one of):
+
+- `{ workspace, target, branch?, limit_cards?, max_chars? }`
+- `{ workspace, branch, graph_doc, limit_cards?, max_chars? }`
+
+Defaults:
+
+- `limit_cards=30`
+
+Output:
+
+- `{ branch, graph_doc, stats:{ cards, by_type:{...} }, cards:[...], truncated }`
+
+Semantics:
+
+- `cards[]` are graph nodes filtered to `supported_types`, ordered by `last_seq DESC`.
+- `max_chars` truncates by dropping older cards first; truncation must be explicit.
+- If a precondition fails (unknown target/branch), return a typed error and a single best next action suggestion.
+
 ## Tool groups (future)
 
 - Repo/workspace:
