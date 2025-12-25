@@ -162,6 +162,7 @@ impl McpServer {
             "branchmind_checkout" => self.tool_branchmind_checkout(args),
             "branchmind_notes_commit" => self.tool_branchmind_notes_commit(args),
             "branchmind_show" => self.tool_branchmind_show(args),
+            "branchmind_export" => self.tool_branchmind_export(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
         }
@@ -1785,6 +1786,234 @@ impl McpServer {
 
         ai_ok("branchmind_show", result)
     }
+
+    fn tool_branchmind_export(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let target_id = match require_string(args_obj, "target") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let notes_limit = match optional_usize(args_obj, "notes_limit") {
+            Ok(v) => v.unwrap_or(20),
+            Err(resp) => return resp,
+        };
+        let trace_limit = match optional_usize(args_obj, "trace_limit") {
+            Ok(v) => v.unwrap_or(50),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let kind = match parse_plan_or_task_kind(&target_id) {
+            Some(v) => v,
+            None => return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-"),
+        };
+
+        let target = match kind {
+            TaskKind::Plan => match self.store.get_plan(&workspace, &target_id) {
+                Ok(Some(p)) => json!({
+                    "id": p.id,
+                    "kind": "plan",
+                    "revision": p.revision,
+                    "title": p.title,
+                    "created_at_ms": p.created_at_ms,
+                    "updated_at_ms": p.updated_at_ms
+                }),
+                Ok(None) => {
+                    return ai_error_with(
+                        "UNKNOWN_ID",
+                        "Unknown target id",
+                        Some("Call tasks_context to discover ids in this workspace, then retry."),
+                        vec![suggest_call(
+                            "tasks_context",
+                            "List plans and tasks for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    );
+                }
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            },
+            TaskKind::Task => match self.store.get_task(&workspace, &target_id) {
+                Ok(Some(t)) => json!({
+                    "id": t.id,
+                    "kind": "task",
+                    "revision": t.revision,
+                    "parent": t.parent_plan_id,
+                    "title": t.title,
+                    "created_at_ms": t.created_at_ms,
+                    "updated_at_ms": t.updated_at_ms
+                }),
+                Ok(None) => {
+                    return ai_error_with(
+                        "UNKNOWN_ID",
+                        "Unknown target id",
+                        Some("Call tasks_context to discover ids in this workspace, then retry."),
+                        vec![suggest_call(
+                            "tasks_context",
+                            "List plans and tasks for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    );
+                }
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            },
+        };
+
+        let reasoning = match self
+            .store
+            .ensure_reasoning_ref(&workspace, &target_id, kind)
+        {
+            Ok(r) => r,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown target id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let branch = reasoning.branch.clone();
+        let notes_doc = reasoning.notes_doc.clone();
+        let trace_doc = reasoning.trace_doc.clone();
+
+        let notes_slice =
+            match self
+                .store
+                .doc_show_tail(&workspace, &branch, &notes_doc, None, notes_limit)
+            {
+                Ok(v) => v,
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+        let trace_slice =
+            match self
+                .store
+                .doc_show_tail(&workspace, &branch, &trace_doc, None, trace_limit)
+            {
+                Ok(v) => v,
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+
+        let notes_entries = notes_slice
+            .entries
+            .into_iter()
+            .map(|e| match e.kind {
+                bm_storage::DocEntryKind::Note => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "title": e.title,
+                    "format": e.format,
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "content": e.content
+                }),
+                bm_storage::DocEntryKind::Event => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "event_id": e.source_event_id,
+                    "event_type": e.event_type,
+                    "task_id": e.task_id,
+                    "path": e.path
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let trace_entries = trace_slice
+            .entries
+            .into_iter()
+            .map(|e| match e.kind {
+                bm_storage::DocEntryKind::Note => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "title": e.title,
+                    "format": e.format,
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "content": e.content
+                }),
+                bm_storage::DocEntryKind::Event => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "event_id": e.source_event_id,
+                    "event_type": e.event_type,
+                    "task_id": e.task_id,
+                    "path": e.path
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let notes_count = notes_entries.len();
+        let trace_count = trace_entries.len();
+        let notes_branch = branch.clone();
+        let trace_branch = branch.clone();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "target": target,
+            "reasoning_ref": {
+                "branch": reasoning.branch,
+                "notes_doc": reasoning.notes_doc,
+                "graph_doc": reasoning.graph_doc,
+                "trace_doc": reasoning.trace_doc
+            },
+            "notes": {
+                "branch": notes_branch,
+                "doc": notes_doc,
+                "entries": notes_entries,
+                "pagination": {
+                    "cursor": Value::Null,
+                    "next_cursor": notes_slice.next_cursor,
+                    "has_more": notes_slice.has_more,
+                    "limit": notes_limit,
+                    "count": notes_count
+                }
+            },
+            "trace": {
+                "branch": trace_branch,
+                "doc": trace_doc,
+                "entries": trace_entries,
+                "pagination": {
+                    "cursor": Value::Null,
+                    "next_cursor": trace_slice.next_cursor,
+                    "has_more": trace_slice.has_more,
+                    "limit": trace_limit,
+                    "count": trace_count
+                }
+            },
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let mut truncated_any = false;
+            for _ in 0..4 {
+                let (_used, truncated) = enforce_branchmind_export_budget(&mut result, limit);
+                truncated_any = truncated_any || truncated;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_any));
+                }
+                let used = attach_budget(&mut result, limit, truncated_any);
+                if used <= limit {
+                    break;
+                }
+            }
+        }
+
+        ai_ok("branchmind_export", result)
+    }
 }
 
 fn tool_definitions() -> Vec<Value> {
@@ -1889,6 +2118,21 @@ fn tool_definitions() -> Vec<Value> {
                     "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "branchmind_export",
+            "description": "Build a bounded snapshot for fast IDE/agent resumption (target + refs + tail notes/trace).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "notes_limit": { "type": "integer" },
+                    "trace_limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "target"]
             }
         }),
         json!({
@@ -2558,6 +2802,140 @@ fn enforce_branchmind_branch_list_budget(value: &mut Value, max_chars: usize) ->
         }
     }
 
+    (used, truncated)
+}
+
+fn export_pop_first_entry(value: &mut Value, section_key: &str) -> bool {
+    let Some(section) = value.get_mut(section_key).and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    let Some(entries) = section.get_mut("entries").and_then(|v| v.as_array_mut()) else {
+        return false;
+    };
+    if entries.is_empty() {
+        return false;
+    }
+
+    entries.remove(0);
+    let count = entries.len();
+    if let Some(pagination) = section
+        .get_mut("pagination")
+        .and_then(|v| v.as_object_mut())
+    {
+        pagination.insert(
+            "count".to_string(),
+            Value::Number(serde_json::Number::from(count as u64)),
+        );
+    }
+    true
+}
+
+fn enforce_branchmind_export_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
+    if max_chars == 0 {
+        return (json_len_chars(value), false);
+    }
+
+    let mut used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, false);
+    }
+
+    // First pass: shrink note content/meta (high-yield) in both sections.
+    for section_key in ["notes", "trace"] {
+        if let Some(section) = value.get_mut(section_key).and_then(|v| v.as_object_mut()) {
+            if let Some(entries) = section.get_mut("entries").and_then(|v| v.as_array_mut()) {
+                for entry in entries.iter_mut() {
+                    if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
+                        continue;
+                    }
+                    let Some(content) = entry
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                    else {
+                        continue;
+                    };
+                    let shorter = truncate_string(&content, 256);
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert("content".to_string(), Value::String(shorter));
+                        if obj.contains_key("meta") {
+                            obj.insert("meta".to_string(), Value::Null);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let truncated = true;
+    used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, truncated);
+    }
+
+    // Second pass: drop oldest entries (prefer notes, then trace) until within budget.
+    loop {
+        used = json_len_chars(value);
+        if used <= max_chars {
+            break;
+        }
+        if export_pop_first_entry(value, "notes") {
+            continue;
+        }
+        if export_pop_first_entry(value, "trace") {
+            continue;
+        }
+        break;
+    }
+
+    used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, truncated);
+    }
+
+    // Third pass: remove non-essential fields in the nested payloads.
+    for section_key in ["notes", "trace"] {
+        if let Some(section) = value.get_mut(section_key).and_then(|v| v.as_object_mut()) {
+            section.remove("pagination");
+            section.remove("branch");
+            section.remove("doc");
+        }
+    }
+
+    used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, truncated);
+    }
+
+    if let Some(target) = value.get_mut("target").and_then(|v| v.as_object_mut()) {
+        target.remove("created_at_ms");
+        target.remove("updated_at_ms");
+        target.remove("parent");
+    }
+    if let Some(refs) = value
+        .get_mut("reasoning_ref")
+        .and_then(|v| v.as_object_mut())
+    {
+        refs.remove("graph_doc");
+    }
+
+    used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, truncated);
+    }
+
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("trace");
+    }
+    used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, truncated);
+    }
+
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("notes");
+    }
+    used = json_len_chars(value);
     (used, truncated)
 }
 

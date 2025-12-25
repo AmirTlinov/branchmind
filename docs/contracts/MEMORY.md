@@ -103,6 +103,22 @@ Semantics:
 - If `branch` has a recorded base, `branchmind_show` returns the **effective view** (base snapshot + branch entries).
 - If `branch` has no base, it returns entries written to that branch only.
 
+### `branchmind_export`
+
+Builds a bounded snapshot for fast IDE/agent resumption: target metadata + reasoning refs + tail of notes and trace.
+
+Input: `{ workspace, target, notes_limit?, trace_limit?, max_chars? }`
+
+Output:
+
+- `{ target, reasoning_ref, notes:{...}, trace:{...}, truncated }`
+
+Semantics:
+
+- Resolves the canonical branch/docs via `target` (plan/task).
+- `notes` and `trace` are equivalent to calling `branchmind_show` with `cursor=null` and the provided limits.
+- `max_chars` applies to the whole snapshot payload; truncation must be explicit.
+
 ### `branchmind_branch_create`
 
 Creates a new branch ref from an existing branch snapshot (no copy).
