@@ -3,7 +3,8 @@
 use bm_core::ids::WorkspaceId;
 use bm_core::model::{ReasoningRef, TaskKind};
 use bm_core::paths::StepPath;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -13,6 +14,10 @@ pub enum StoreError {
     InvalidInput(&'static str),
     RevisionMismatch { expected: i64, actual: i64 },
     UnknownId,
+    UnknownBranch,
+    BranchAlreadyExists,
+    BranchCycle,
+    BranchDepthExceeded,
     StepNotFound,
     CheckpointsNotConfirmed { criteria: bool, tests: bool },
 }
@@ -30,6 +35,10 @@ impl std::fmt::Display for StoreError {
                 )
             }
             Self::UnknownId => write!(f, "unknown id"),
+            Self::UnknownBranch => write!(f, "unknown branch"),
+            Self::BranchAlreadyExists => write!(f, "branch already exists"),
+            Self::BranchCycle => write!(f, "branch base cycle"),
+            Self::BranchDepthExceeded => write!(f, "branch base depth exceeded"),
             Self::StepNotFound => write!(f, "step not found"),
             Self::CheckpointsNotConfirmed { criteria, tests } => {
                 write!(
@@ -83,6 +92,14 @@ pub struct ReasoningRefRow {
     pub notes_doc: String,
     pub graph_doc: String,
     pub trace_doc: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BranchInfo {
+    pub name: String,
+    pub base_branch: Option<String>,
+    pub base_seq: Option<i64>,
+    pub created_at_ms: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -334,6 +351,21 @@ impl SqliteStore {
               payload_json TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS branches (
+              workspace TEXT NOT NULL,
+              name TEXT NOT NULL,
+              base_branch TEXT NOT NULL,
+              base_seq INTEGER NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS branch_checkout (
+              workspace TEXT PRIMARY KEY,
+              branch TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS steps (
               workspace TEXT NOT NULL,
               task_id TEXT NOT NULL,
@@ -384,6 +416,7 @@ impl SqliteStore {
 
             CREATE INDEX IF NOT EXISTS idx_events_workspace_seq ON events(workspace, seq);
             CREATE INDEX IF NOT EXISTS idx_doc_entries_lookup ON doc_entries(workspace, branch, doc, seq);
+            CREATE INDEX IF NOT EXISTS idx_doc_entries_workspace_seq ON doc_entries(workspace, seq);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_entries_event_dedup ON doc_entries(workspace, branch, doc, source_event_id) WHERE source_event_id IS NOT NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_root_unique ON steps(workspace, task_id, ordinal) WHERE parent_step_id IS NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_child_unique ON steps(workspace, task_id, parent_step_id, ordinal) WHERE parent_step_id IS NOT NULL;
@@ -951,25 +984,39 @@ impl SqliteStore {
 
         let mut entries_desc = Vec::new();
         {
-            let mut stmt = tx.prepare(
-                r#"
-                SELECT seq, ts_ms, kind, title, format, meta_json, content, source_event_id, event_type, task_id, path, payload_json
-                FROM doc_entries
-                WHERE workspace=?1 AND branch=?2 AND doc=?3 AND seq < ?4
-                ORDER BY seq DESC
-                LIMIT ?5
-                "#,
-            )?;
-            let mut rows = stmt.query(params![
-                workspace.as_str(),
-                branch,
-                doc,
-                before_seq,
-                limit + 1
-            ])?;
+            let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+
+            let mut sql = String::from(
+                "SELECT seq, ts_ms, branch, kind, title, format, meta_json, content, source_event_id, event_type, task_id, path, payload_json \
+                 FROM doc_entries \
+                 WHERE workspace=? AND doc=? AND seq < ? AND (",
+            );
+            let mut params: Vec<SqlValue> = Vec::new();
+            params.push(SqlValue::Text(workspace.as_str().to_string()));
+            params.push(SqlValue::Text(doc.to_string()));
+            params.push(SqlValue::Integer(before_seq));
+
+            for (index, source) in sources.iter().enumerate() {
+                if index > 0 {
+                    sql.push_str(" OR ");
+                }
+                sql.push_str("(branch=?");
+                params.push(SqlValue::Text(source.branch.clone()));
+                if let Some(cutoff) = source.cutoff_seq {
+                    sql.push_str(" AND seq <= ?");
+                    params.push(SqlValue::Integer(cutoff));
+                }
+                sql.push(')');
+            }
+
+            sql.push_str(") ORDER BY seq DESC LIMIT ?");
+            params.push(SqlValue::Integer(limit + 1));
+
+            let mut stmt = tx.prepare(&sql)?;
+            let mut rows = stmt.query(params_from_iter(params))?;
 
             while let Some(row) = rows.next()? {
-                let kind_str: String = row.get(2)?;
+                let kind_str: String = row.get(3)?;
                 let kind = match kind_str.as_str() {
                     "note" => DocEntryKind::Note,
                     "event" => DocEntryKind::Event,
@@ -978,18 +1025,18 @@ impl SqliteStore {
                 entries_desc.push(DocEntryRow {
                     seq: row.get(0)?,
                     ts_ms: row.get(1)?,
-                    branch: branch.to_string(),
+                    branch: row.get(2)?,
                     doc: doc.to_string(),
                     kind,
-                    title: row.get(3)?,
-                    format: row.get(4)?,
-                    meta_json: row.get(5)?,
-                    content: row.get(6)?,
-                    source_event_id: row.get(7)?,
-                    event_type: row.get(8)?,
-                    task_id: row.get(9)?,
-                    path: row.get(10)?,
-                    payload_json: row.get(11)?,
+                    title: row.get(4)?,
+                    format: row.get(5)?,
+                    meta_json: row.get(6)?,
+                    content: row.get(7)?,
+                    source_event_id: row.get(8)?,
+                    event_type: row.get(9)?,
+                    task_id: row.get(10)?,
+                    path: row.get(11)?,
+                    payload_json: row.get(12)?,
                 });
             }
         }
@@ -1034,6 +1081,189 @@ impl SqliteStore {
         let inserted = ingest_task_event_tx(&tx, workspace.as_str(), branch, doc, event)?;
         tx.commit()?;
         Ok(inserted)
+    }
+
+    pub fn branch_checkout_get(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT branch FROM branch_checkout WHERE workspace=?1",
+                params![workspace.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    pub fn branch_checkout_set(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+    ) -> Result<(Option<String>, String), StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let previous = tx
+            .query_row(
+                "SELECT branch FROM branch_checkout WHERE workspace=?1",
+                params![workspace.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        tx.execute(
+            r#"
+            INSERT INTO branch_checkout(workspace, branch, updated_at_ms)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(workspace) DO UPDATE SET branch=excluded.branch, updated_at_ms=excluded.updated_at_ms
+            "#,
+            params![workspace.as_str(), branch, now_ms],
+        )?;
+
+        tx.commit()?;
+        Ok((previous, branch.to_string()))
+    }
+
+    pub fn branch_create(
+        &mut self,
+        workspace: &WorkspaceId,
+        name: &str,
+        from: Option<&str>,
+    ) -> Result<BranchInfo, StoreError> {
+        if name.trim().is_empty() {
+            return Err(StoreError::InvalidInput("name must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        if branch_exists_tx(&tx, workspace.as_str(), name)? {
+            return Err(StoreError::BranchAlreadyExists);
+        }
+
+        let base_branch = match from {
+            Some(v) if !v.trim().is_empty() => v.to_string(),
+            Some(_) => return Err(StoreError::InvalidInput("from must not be empty")),
+            None => tx
+                .query_row(
+                    "SELECT branch FROM branch_checkout WHERE workspace=?1",
+                    params![workspace.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or(StoreError::InvalidInput(
+                    "from is required when no checkout branch is set",
+                ))?,
+        };
+
+        if !branch_exists_tx(&tx, workspace.as_str(), &base_branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let base_seq = doc_entries_head_seq_tx(&tx, workspace.as_str())?.unwrap_or(0);
+
+        tx.execute(
+            r#"
+            INSERT INTO branches(workspace, name, base_branch, base_seq, created_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                workspace.as_str(),
+                name,
+                base_branch.as_str(),
+                base_seq,
+                now_ms
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(BranchInfo {
+            name: name.to_string(),
+            base_branch: Some(base_branch),
+            base_seq: Some(base_seq),
+            created_at_ms: Some(now_ms),
+        })
+    }
+
+    pub fn branch_list(
+        &self,
+        workspace: &WorkspaceId,
+        limit: usize,
+    ) -> Result<Vec<BranchInfo>, StoreError> {
+        use std::collections::HashMap;
+
+        let limit = limit.clamp(1, 500);
+        let mut map: HashMap<String, BranchInfo> = HashMap::new();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT name, base_branch, base_seq, created_at_ms
+            FROM branches
+            WHERE workspace=?1
+            ORDER BY name ASC
+            "#,
+        )?;
+        let rows = stmt.query_map(params![workspace.as_str()], |row| {
+            Ok(BranchInfo {
+                name: row.get::<_, String>(0)?,
+                base_branch: Some(row.get::<_, String>(1)?),
+                base_seq: Some(row.get::<_, i64>(2)?),
+                created_at_ms: Some(row.get::<_, i64>(3)?),
+            })
+        })?;
+        for row in rows {
+            let info = row?;
+            map.insert(info.name.clone(), info);
+        }
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT branch FROM reasoning_refs WHERE workspace=?1")?;
+        let refs = stmt.query_map(params![workspace.as_str()], |row| row.get::<_, String>(0))?;
+        for branch in refs {
+            let branch = branch?;
+            map.entry(branch.clone()).or_insert(BranchInfo {
+                name: branch,
+                base_branch: None,
+                base_seq: None,
+                created_at_ms: None,
+            });
+        }
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT branch FROM doc_entries WHERE workspace=?1")?;
+        let entries = stmt.query_map(params![workspace.as_str()], |row| row.get::<_, String>(0))?;
+        for branch in entries {
+            let branch = branch?;
+            map.entry(branch.clone()).or_insert(BranchInfo {
+                name: branch,
+                base_branch: None,
+                base_seq: None,
+                created_at_ms: None,
+            });
+        }
+
+        let mut names = map.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        let mut out = Vec::new();
+        for name in names.into_iter().take(limit) {
+            if let Some(info) = map.remove(&name) {
+                out.push(info);
+            }
+        }
+        Ok(out)
     }
 
     pub fn steps_decompose(
@@ -1863,6 +2093,129 @@ fn ingest_task_event_tx(
     }
 
     Ok(inserted > 0)
+}
+
+fn doc_entries_head_seq_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+) -> Result<Option<i64>, StoreError> {
+    Ok(tx
+        .query_row(
+            "SELECT seq FROM doc_entries WHERE workspace=?1 ORDER BY seq DESC LIMIT 1",
+            params![workspace],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?)
+}
+
+fn branch_exists_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+) -> Result<bool, StoreError> {
+    if tx
+        .query_row(
+            "SELECT 1 FROM branches WHERE workspace=?1 AND name=?2",
+            params![workspace, branch],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Ok(true);
+    }
+
+    if tx
+        .query_row(
+            "SELECT 1 FROM reasoning_refs WHERE workspace=?1 AND branch=?2 LIMIT 1",
+            params![workspace, branch],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Ok(true);
+    }
+
+    if tx
+        .query_row(
+            "SELECT 1 FROM doc_entries WHERE workspace=?1 AND branch=?2 LIMIT 1",
+            params![workspace, branch],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+#[derive(Clone, Debug)]
+struct BranchSource {
+    branch: String,
+    cutoff_seq: Option<i64>,
+}
+
+fn branch_sources_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+) -> Result<Vec<BranchSource>, StoreError> {
+    use std::collections::HashSet;
+
+    const MAX_DEPTH: usize = 32;
+
+    let mut sources = Vec::new();
+    sources.push(BranchSource {
+        branch: branch.to_string(),
+        cutoff_seq: None,
+    });
+
+    let mut seen = HashSet::new();
+    seen.insert(branch.to_string());
+
+    let mut current = branch.to_string();
+    let mut inherited_cutoff: Option<i64> = None;
+
+    for depth in 0..MAX_DEPTH {
+        let row = tx
+            .query_row(
+                "SELECT base_branch, base_seq FROM branches WHERE workspace=?1 AND name=?2",
+                params![workspace, current],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+
+        let Some((base_branch, base_seq)) = row else {
+            break;
+        };
+
+        if seen.contains(&base_branch) {
+            return Err(StoreError::BranchCycle);
+        }
+
+        let effective = match inherited_cutoff {
+            None => base_seq,
+            Some(prev) => std::cmp::min(prev, base_seq),
+        };
+
+        sources.push(BranchSource {
+            branch: base_branch.clone(),
+            cutoff_seq: Some(effective),
+        });
+
+        seen.insert(base_branch.clone());
+        current = base_branch;
+        inherited_cutoff = Some(effective);
+
+        if depth == MAX_DEPTH - 1 {
+            return Err(StoreError::BranchDepthExceeded);
+        }
+    }
+
+    Ok(sources)
 }
 
 fn ensure_workspace_tx(

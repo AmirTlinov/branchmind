@@ -10,6 +10,10 @@ Stated differently:
 
 > If the task state changed, the reasoning log must reflect it — without relying on agent discipline.
 
+Branching note:
+
+- Task mutations always ingest into the **canonical** `reasoning_ref.branch` (and its `trace_doc`), regardless of any reasoning checkout/what-if branches.
+
 ## Reasoning reference
 
 Each task/plan must be associated with a stable “reasoning reference”:

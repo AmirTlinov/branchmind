@@ -32,7 +32,31 @@ Documents are addressed by `(branch, doc)`:
 - `branch` is the stable reasoning namespace returned by `tasks_radar.reasoning_ref.branch` (e.g. `task/TASK-001`).
 - `doc` is one of the reasoning docs returned by `tasks_radar.reasoning_ref.*_doc` (e.g. `notes`, `TASK-001-trace`).
 
-## Tool surface (Milestone 2 MVP)
+## Branching model (Milestone 3 core)
+
+Branching exists to support **what-if reasoning** without corrupting the canonical history.
+
+Key rules:
+
+- The canonical branch for plans/tasks is `tasks_radar.reasoning_ref.branch` (e.g. `task/TASK-001`).
+- `tasks_*` mutations always ingest into the canonical branch (single organism invariant).
+- Branching and checkout affect only **reasoning reads/writes** (notes/graph), not task state.
+
+### Base snapshot (no-copy)
+
+Creating a branch records:
+
+- `base_branch` — the source branch name,
+- `base_seq` — a cutoff on the global `doc_entries.seq` at the time of branching.
+
+When reading a document on a derived branch, the effective view is:
+
+- all entries from `base_branch` with `seq <= base_seq`,
+- plus all entries written directly to the derived branch.
+
+This produces a snapshot-like experience without copying logs.
+
+## Tool surface (Milestone 2–3 MVP)
 
 ### `branchmind_init`
 
@@ -73,6 +97,35 @@ Input (one of):
 Output:
 
 - `{ branch, doc, entries:[...], pagination:{ cursor, next_cursor?, has_more, limit, count }, truncated }`
+
+Semantics:
+
+- If `branch` has a recorded base, `branchmind_show` returns the **effective view** (base snapshot + branch entries).
+- If `branch` has no base, it returns entries written to that branch only.
+
+### `branchmind_branch_create`
+
+Creates a new branch ref from an existing branch snapshot (no copy).
+
+Input: `{ workspace, name, from? }`
+
+- If `from` is omitted, it defaults to the workspace checkout branch.
+
+Output: `{ workspace, branch: { name, base_branch, base_seq } }`
+
+### `branchmind_branch_list`
+
+Lists known branch refs for a workspace (including canonical task/plan branches).
+
+Input: `{ workspace, limit?, max_chars? }`  
+Output: `{ workspace, branches:[...], truncated? }`
+
+### `branchmind_checkout`
+
+Sets the current workspace branch ref (convenience; does not affect tasks).
+
+Input: `{ workspace, ref }`  
+Output: `{ workspace, previous?, current }`
 
 ## Automatic ingestion (single organism invariant)
 

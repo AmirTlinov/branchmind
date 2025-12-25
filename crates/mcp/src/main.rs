@@ -157,6 +157,9 @@ impl McpServer {
             "tasks_radar" => self.tool_tasks_radar(args),
             "branchmind_init" => self.tool_branchmind_init(args),
             "branchmind_status" => self.tool_branchmind_status(args),
+            "branchmind_branch_create" => self.tool_branchmind_branch_create(args),
+            "branchmind_branch_list" => self.tool_branchmind_branch_list(args),
+            "branchmind_checkout" => self.tool_branchmind_checkout(args),
             "branchmind_notes_commit" => self.tool_branchmind_notes_commit(args),
             "branchmind_show" => self.tool_branchmind_show(args),
             "storage" => self.tool_storage(args),
@@ -1338,6 +1341,176 @@ impl McpServer {
         ai_ok("branchmind_status", result)
     }
 
+    fn tool_branchmind_branch_create(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let name = match require_string(args_obj, "name") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let from = match optional_string(args_obj, "from") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let info = match self.store.branch_create(&workspace, &name, from.as_deref()) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown base branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::BranchAlreadyExists) => {
+                return ai_error_with(
+                    "CONFLICT",
+                    "Branch already exists",
+                    Some("Choose a different name (or delete/rename the existing branch)."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::BranchCycle) => return ai_error("INVALID_INPUT", "Branch base cycle"),
+            Err(StoreError::BranchDepthExceeded) => {
+                return ai_error("INVALID_INPUT", "Branch base depth exceeded");
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_branch_create",
+            json!({
+                "workspace": workspace.as_str(),
+                "branch": {
+                    "name": info.name,
+                    "base_branch": info.base_branch,
+                    "base_seq": info.base_seq
+                }
+            }),
+        )
+    }
+
+    fn tool_branchmind_branch_list(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let limit = match optional_usize(args_obj, "limit") {
+            Ok(v) => v.unwrap_or(200),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let branches = match self.store.branch_list(&workspace, limit) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let branches_json = branches
+            .into_iter()
+            .map(|b| {
+                json!({
+                    "name": b.name,
+                    "base_branch": b.base_branch,
+                    "base_seq": b.base_seq,
+                    "created_at_ms": b.created_at_ms
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let count = branches_json.len();
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branches": branches_json,
+            "count": count,
+            "truncated": false
+        });
+
+        if let Some(limit) = max_chars {
+            let (_used, truncated) = enforce_branchmind_branch_list_budget(&mut result, limit);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            }
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) =
+                    enforce_branchmind_branch_list_budget(&mut result, limit);
+                let truncated_final = truncated || truncated2;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                }
+                let _ = attach_budget(&mut result, limit, truncated_final);
+            }
+        }
+
+        ai_ok("branchmind_branch_list", result)
+    }
+
+    fn tool_branchmind_checkout(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let reference = match require_string(args_obj, "ref") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let (previous, current) = match self.store.branch_checkout_set(&workspace, &reference) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_checkout",
+            json!({
+                "workspace": workspace.as_str(),
+                "previous": previous,
+                "current": current
+            }),
+        )
+    }
+
     fn tool_branchmind_notes_commit(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -1642,6 +1815,44 @@ fn tool_definitions() -> Vec<Value> {
                     "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "branchmind_branch_create",
+            "description": "Create a new branch ref from an existing branch snapshot (no copy).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "name": { "type": "string" },
+                    "from": { "type": "string" }
+                },
+                "required": ["workspace", "name"]
+            }
+        }),
+        json!({
+            "name": "branchmind_branch_list",
+            "description": "List known branch refs for a workspace (including canonical task/plan branches).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "branchmind_checkout",
+            "description": "Set the current workspace branch ref (does not affect tasks).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "ref": { "type": "string" }
+                },
+                "required": ["workspace", "ref"]
             }
         }),
         json!({
@@ -2116,6 +2327,10 @@ fn format_store_error(err: StoreError) -> String {
             format!("Revision mismatch: expected={expected} actual={actual}")
         }
         StoreError::UnknownId => "Unknown id".to_string(),
+        StoreError::UnknownBranch => "Unknown branch".to_string(),
+        StoreError::BranchAlreadyExists => "Branch already exists".to_string(),
+        StoreError::BranchCycle => "Branch base cycle".to_string(),
+        StoreError::BranchDepthExceeded => "Branch base depth exceeded".to_string(),
         StoreError::StepNotFound => "Step not found".to_string(),
         StoreError::CheckpointsNotConfirmed { criteria, tests } => {
             format!("Checkpoints not confirmed: criteria={criteria} tests={tests}")
@@ -2301,6 +2516,45 @@ fn enforce_branchmind_show_budget(value: &mut Value, max_chars: usize) -> (usize
         used = json_len_chars(value);
         if used <= max_chars {
             return (used, truncated);
+        }
+    }
+
+    (used, truncated)
+}
+
+fn enforce_branchmind_branch_list_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
+    if max_chars == 0 {
+        return (json_len_chars(value), false);
+    }
+
+    let mut used = json_len_chars(value);
+    if used <= max_chars {
+        return (used, false);
+    }
+
+    let mut truncated = false;
+
+    if value.get("branches").is_some() {
+        loop {
+            used = json_len_chars(value);
+            if used <= max_chars {
+                break;
+            }
+            let removed =
+                if let Some(branches) = value.get_mut("branches").and_then(|v| v.as_array_mut()) {
+                    if branches.is_empty() {
+                        false
+                    } else {
+                        branches.remove(0);
+                        true
+                    }
+                } else {
+                    false
+                };
+            if !removed {
+                break;
+            }
+            truncated = true;
         }
     }
 
