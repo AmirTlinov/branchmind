@@ -569,6 +569,7 @@ Semantics:
 - Each stage becomes a `think_card` with `card.type=<stage>`.
 - Each stage is auto-linked via `supports` to the previous stage (if present).
 - If `note_decision=true`, the decision is summarized into `notes_doc`.
+- `status` keys must match provided stages; unknown keys or statuses for missing stages are errors.
 
 ### `branchmind_think_context`
 
@@ -661,7 +662,7 @@ and normalize fields.
 
 Query thinking cards via graph filters.
 
-Input: `{ workspace, target?, graph_doc?, ref?, ids?, status?, tags_any?, tags_all?, text?, limit? }`
+Input: `{ workspace, target?, graph_doc?, ref?, ids?, status?, tags_any?, tags_all?, text?, limit?, max_chars? }`
 
 ### `branchmind_think_pack`
 
@@ -673,8 +674,8 @@ Bounded resumption pack that merges **notes**, **trace**, and **graph cards** in
 
 Input (one of):
 
-- `{ workspace, target, notes_limit?, trace_limit?, limit_cards?, max_chars? }`
-- `{ workspace, ref?, notes_doc?, trace_doc?, graph_doc?, notes_limit?, trace_limit?, limit_cards?, max_chars? }`
+- `{ workspace, target, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars? }`
+- `{ workspace, ref?, notes_doc?, trace_doc?, graph_doc?, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars? }`
 
 Defaults:
 
@@ -682,10 +683,11 @@ Defaults:
 - If `ref` is omitted, the current checkout branch is used.
 - `notes_doc=notes`, `trace_doc=trace`, `graph_doc=graph`.
 - `notes_limit=20`, `trace_limit=50`, `limit_cards=30`.
+- `decisions_limit=5`, `evidence_limit=5`, `blockers_limit=5`.
 
 Output:
 
-- `{ branch, docs:{ notes, trace, graph }, notes:{...}, trace:{...}, cards:[...], stats:{...}, truncated }`
+- `{ requested:{ target, ref }, branch, docs:{ notes, trace, graph }, notes:{...}, trace:{...}, cards:[...], signals:{ blockers, decisions, evidence, stats }, stats:{...}, truncated }`
 
 ### `branchmind_think_frontier` / `branchmind_think_next`
 

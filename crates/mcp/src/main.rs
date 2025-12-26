@@ -204,6 +204,9 @@ impl McpServer {
             "tasks_mirror" => self.tool_tasks_mirror(args),
             "tasks_handoff" => self.tool_tasks_handoff(args),
             "tasks_lint" => self.tool_tasks_lint(args),
+            "tasks_templates_list" => self.tool_tasks_templates_list(args),
+            "tasks_scaffold" => self.tool_tasks_scaffold(args),
+            "tasks_storage" => self.tool_tasks_storage(args),
             "branchmind_init" => self.tool_branchmind_init(args),
             "branchmind_status" => self.tool_branchmind_status(args),
             "branchmind_branch_create" => self.tool_branchmind_branch_create(args),
@@ -313,11 +316,56 @@ impl McpServer {
             .map(|s| s.to_string());
         let contract_json = args_obj.get("contract_data").map(|v| v.to_string());
 
-        if args_obj.get("steps").is_some() {
-            return ai_error(
-                "NOT_IMPLEMENTED",
-                "steps are not implemented in v0 skeleton",
-            );
+        let steps_value = args_obj.get("steps").cloned().unwrap_or(Value::Null);
+        let mut steps = Vec::new();
+        if !steps_value.is_null() {
+            let Some(steps_array) = steps_value.as_array() else {
+                return ai_error("INVALID_INPUT", "steps must be an array");
+            };
+            if steps_array.is_empty() {
+                return ai_error("INVALID_INPUT", "steps must not be empty");
+            }
+            if kind != TaskKind::Task {
+                return ai_error("INVALID_INPUT", "steps are only supported for task create");
+            }
+            for step in steps_array {
+                let Some(obj) = step.as_object() else {
+                    return ai_error("INVALID_INPUT", "steps[] items must be objects");
+                };
+                let title = match require_string(obj, "title") {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
+                let criteria_value = obj.get("success_criteria").cloned().unwrap_or(Value::Null);
+                let Some(criteria_array) = criteria_value.as_array() else {
+                    return ai_error("INVALID_INPUT", "steps[].success_criteria must be an array");
+                };
+                if criteria_array.is_empty() {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "steps[].success_criteria must not be empty",
+                    );
+                }
+                let mut success_criteria = Vec::with_capacity(criteria_array.len());
+                for item in criteria_array {
+                    let Some(s) = item.as_str() else {
+                        return ai_error(
+                            "INVALID_INPUT",
+                            "steps[].success_criteria items must be strings",
+                        );
+                    };
+                    success_criteria.push(s.to_string());
+                }
+                let tests = match optional_string_array(obj, "tests") {
+                    Ok(v) => v.unwrap_or_default(),
+                    Err(resp) => return resp,
+                };
+                let blockers = match optional_string_array(obj, "blockers") {
+                    Ok(v) => v.unwrap_or_default(),
+                    Err(resp) => return resp,
+                };
+                steps.push((title, success_criteria, tests, blockers));
+            }
         }
 
         let event_type = match kind {
@@ -333,7 +381,7 @@ impl McpServer {
         })
         .to_string();
 
-        match self.store.create(
+        let created = self.store.create(
             &workspace,
             kind,
             title,
@@ -343,24 +391,103 @@ impl McpServer {
             contract_json,
             event_type.clone(),
             event_payload_json,
-        ) {
-            Ok((id, revision, event)) => ai_ok(
-                "create",
-                json!({
-                    "id": id,
-                    "kind": kind.as_str(),
-                    "revision": revision,
-                    "event": {
-                        "event_id": event.event_id(),
-                        "ts": ts_ms_to_rfc3339(event.ts_ms),
-                        "ts_ms": event.ts_ms,
-                        "task_id": event.task_id,
-                        "path": event.path,
-                        "type": event.event_type,
-                        "payload": parse_json_or_string(&event.payload_json)
+        );
+
+        match created {
+            Ok((id, revision, event)) => {
+                if steps.is_empty() {
+                    return ai_ok(
+                        "create",
+                        json!( {
+                            "id": id,
+                            "kind": kind.as_str(),
+                            "revision": revision,
+                            "event": {
+                                "event_id": event.event_id(),
+                                "ts": ts_ms_to_rfc3339(event.ts_ms),
+                                "ts_ms": event.ts_ms,
+                                "task_id": event.task_id,
+                                "path": event.path,
+                                "type": event.event_type,
+                                "payload": parse_json_or_string(&event.payload_json)
+                            }
+                        }),
+                    );
+                }
+
+                let mut events = vec![events_to_json(vec![event]).remove(0)];
+                let decompose_steps = steps
+                    .iter()
+                    .map(
+                        |(title, success_criteria, _tests, _blockers)| bm_storage::NewStep {
+                            title: title.clone(),
+                            success_criteria: success_criteria.clone(),
+                        },
+                    )
+                    .collect::<Vec<_>>();
+                let decompose = match self.store.steps_decompose(
+                    &workspace,
+                    &id,
+                    Some(revision),
+                    None,
+                    decompose_steps,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                events.push(events_to_json(vec![decompose.event]).remove(0));
+
+                let mut current_revision = decompose.task_revision;
+                for ((_, _criteria, tests, blockers), step_ref) in
+                    steps.iter().zip(decompose.steps.iter())
+                {
+                    if tests.is_empty() && blockers.is_empty() {
+                        continue;
                     }
-                }),
-            ),
+                    let defined = match self.store.step_define(
+                        &workspace,
+                        &id,
+                        Some(current_revision),
+                        Some(step_ref.step_id.as_str()),
+                        None,
+                        None,
+                        None,
+                        Some(tests.clone()),
+                        Some(blockers.clone()),
+                    ) {
+                        Ok(v) => v,
+                        Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                    };
+                    current_revision = defined.task_revision;
+                    events.push(events_to_json(vec![defined.event]).remove(0));
+                }
+
+                let steps_out = decompose
+                    .steps
+                    .into_iter()
+                    .map(|s| json!({ "step_id": s.step_id, "path": s.path }))
+                    .collect::<Vec<_>>();
+
+                ai_ok(
+                    "create",
+                    json!( {
+                        "id": id,
+                        "kind": kind.as_str(),
+                        "revision": current_revision,
+                        "event": {
+                            "event_id": events[0]["event_id"].clone(),
+                            "ts": events[0]["ts"].clone(),
+                            "ts_ms": events[0]["ts_ms"].clone(),
+                            "task_id": events[0]["task_id"].clone(),
+                            "path": events[0]["path"].clone(),
+                            "type": events[0]["type"].clone(),
+                            "payload": events[0]["payload"].clone()
+                        },
+                        "steps": steps_out,
+                        "events": events
+                    }),
+                )
+            }
             Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
         }
     }
@@ -4279,6 +4406,50 @@ impl McpServer {
         };
         events.reverse();
 
+        let mut steps_detail: Option<Value> = None;
+        if kind == TaskKind::Task {
+            let steps = match self
+                .store
+                .list_task_steps(&workspace, &target_id, None, 200)
+            {
+                Ok(v) => v,
+                Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            let mut out = Vec::with_capacity(steps.len());
+            for step in steps {
+                let detail = match self.store.step_detail(
+                    &workspace,
+                    &target_id,
+                    Some(step.step_id.as_str()),
+                    None,
+                ) {
+                    Ok(v) => v,
+                    Err(StoreError::StepNotFound) => {
+                        return ai_error("UNKNOWN_ID", "Step not found");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                out.push(json!({
+                    "step_id": detail.step_id,
+                    "path": detail.path,
+                    "title": detail.title,
+                    "completed": detail.completed,
+                    "criteria_confirmed": detail.criteria_confirmed,
+                    "tests_confirmed": detail.tests_confirmed,
+                    "security_confirmed": detail.security_confirmed,
+                    "perf_confirmed": detail.perf_confirmed,
+                    "docs_confirmed": detail.docs_confirmed,
+                    "blocked": detail.blocked,
+                    "block_reason": detail.block_reason,
+                    "success_criteria": detail.success_criteria,
+                    "tests": detail.tests,
+                    "blockers": detail.blockers
+                }));
+            }
+            steps_detail = Some(json!(out));
+        }
+
         let mut result = json!({
             "workspace": workspace.as_str(),
             "requested": {
@@ -4294,7 +4465,7 @@ impl McpServer {
                 "events": events_to_json(events)
             }
         });
-        if let Some(steps) = context.steps {
+        if let Some(steps) = steps_detail.or(context.steps) {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("steps".to_string(), steps);
             }
@@ -5034,14 +5205,16 @@ impl McpServer {
                     issues.push(json!({
                         "severity": "warning",
                         "code": "NO_CHECKLIST",
-                        "message": "plan checklist is empty"
+                        "message": "plan checklist is empty",
+                        "recovery": "Use tasks_plan to set checklist steps."
                     }));
                 }
                 if checklist.current < 0 || checklist.current > total {
                     issues.push(json!({
                         "severity": "error",
                         "code": "CHECKLIST_INDEX_OUT_OF_RANGE",
-                        "message": format!("plan_current out of range: {}", checklist.current)
+                        "message": format!("plan_current out of range: {}", checklist.current),
+                        "recovery": "Use tasks_plan to set a valid current index."
                     }));
                 }
             }
@@ -5051,42 +5224,48 @@ impl McpServer {
                         issues.push(json!({
                             "severity": "warning",
                             "code": "NO_STEPS",
-                            "message": "task has no steps"
+                            "message": "task has no steps",
+                            "recovery": "Use tasks_decompose to add steps."
                         }));
                     }
                     if summary.missing_criteria > 0 {
                         issues.push(json!({
                             "severity": "warning",
                             "code": "MISSING_CRITERIA",
-                            "message": format!("missing criteria checkpoints: {}", summary.missing_criteria)
+                            "message": format!("missing criteria checkpoints: {}", summary.missing_criteria),
+                            "recovery": "Fill success_criteria via tasks_define and confirm with tasks_verify."
                         }));
                     }
                     if summary.missing_tests > 0 {
                         issues.push(json!({
                             "severity": "warning",
                             "code": "MISSING_TESTS",
-                            "message": format!("missing tests checkpoints: {}", summary.missing_tests)
+                            "message": format!("missing tests checkpoints: {}", summary.missing_tests),
+                            "recovery": "Set tests via tasks_define and confirm with tasks_verify."
                         }));
                     }
                     if summary.missing_security > 0 {
                         issues.push(json!({
                             "severity": "warning",
                             "code": "MISSING_SECURITY",
-                            "message": format!("missing security checkpoints: {}", summary.missing_security)
+                            "message": format!("missing security checkpoints: {}", summary.missing_security),
+                            "recovery": "Confirm security checkpoint via tasks_verify."
                         }));
                     }
                     if summary.missing_perf > 0 {
                         issues.push(json!({
                             "severity": "warning",
                             "code": "MISSING_PERF",
-                            "message": format!("missing perf checkpoints: {}", summary.missing_perf)
+                            "message": format!("missing perf checkpoints: {}", summary.missing_perf),
+                            "recovery": "Confirm perf checkpoint via tasks_verify."
                         }));
                     }
                     if summary.missing_docs > 0 {
                         issues.push(json!({
                             "severity": "warning",
                             "code": "MISSING_DOCS",
-                            "message": format!("missing docs checkpoints: {}", summary.missing_docs)
+                            "message": format!("missing docs checkpoints: {}", summary.missing_docs),
+                            "recovery": "Confirm docs checkpoint via tasks_verify."
                         }));
                     }
                     if let Ok(blockers) = self.store.task_open_blockers(&workspace, &target_id, 1) {
@@ -5094,7 +5273,8 @@ impl McpServer {
                             issues.push(json!({
                                 "severity": "warning",
                                 "code": "BLOCKED_STEPS",
-                                "message": "task has blocked steps"
+                                "message": "task has blocked steps",
+                                "recovery": "Use tasks_context/tasks_resume to locate blockers and clear via tasks_block."
                             }));
                         }
                     }
@@ -5123,6 +5303,342 @@ impl McpServer {
                     "total": errors + warnings
                 },
                 "issues": issues
+            }),
+        )
+    }
+
+    fn tool_tasks_templates_list(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let templates = built_in_task_templates()
+            .into_iter()
+            .map(|template| {
+                let mut out = json!({
+                    "id": template.id,
+                    "kind": template.kind.as_str(),
+                    "title": template.title,
+                    "description": template.description
+                });
+                if template.kind == TaskKind::Plan {
+                    if let Some(obj) = out.as_object_mut() {
+                        obj.insert("plan_steps".to_string(), json!(template.plan_steps));
+                    }
+                } else if let Some(obj) = out.as_object_mut() {
+                    obj.insert(
+                        "steps".to_string(),
+                        Value::Array(
+                            template
+                                .task_steps
+                                .into_iter()
+                                .map(|step| {
+                                    json!({
+                                        "title": step.title,
+                                        "success_criteria": step.success_criteria,
+                                        "tests": step.tests,
+                                        "blockers": step.blockers
+                                    })
+                                })
+                                .collect(),
+                        ),
+                    );
+                }
+                out
+            })
+            .collect::<Vec<_>>();
+
+        ai_ok(
+            "templates_list",
+            json!({
+                "workspace": workspace.as_str(),
+                "templates": templates
+            }),
+        )
+    }
+
+    fn tool_tasks_scaffold(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let template_id = match require_string(args_obj, "template") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let title = match require_string(args_obj, "title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let description = match optional_string(args_obj, "description") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let parent = args_obj
+            .get("parent")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let plan_title = match optional_string(args_obj, "plan_title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if parent.is_some() && plan_title.is_some() {
+            return ai_error("INVALID_INPUT", "provide parent or plan_title, not both");
+        }
+
+        let kind_override = args_obj.get("kind").and_then(|v| v.as_str());
+        let inferred_kind = match kind_override {
+            Some(kind) => parse_kind(Some(kind), parent.is_some() || plan_title.is_some()),
+            None => find_task_template_any(&template_id)
+                .map(|t| t.kind)
+                .unwrap_or_else(|| parse_kind(None, parent.is_some() || plan_title.is_some())),
+        };
+
+        let template = match find_task_template(&template_id, inferred_kind) {
+            Some(v) => v,
+            None => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown template id",
+                    Some("Call tasks_templates_list to list available templates."),
+                    vec![suggest_call(
+                        "tasks_templates_list",
+                        "List available templates.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+        };
+
+        match inferred_kind {
+            TaskKind::Plan => {
+                if template.plan_steps.is_empty() {
+                    return ai_error("INVALID_INPUT", "template has no plan steps");
+                }
+                let payload = json!({ "kind": "plan", "title": title }).to_string();
+                let (plan_id, revision, event) = match self.store.create(
+                    &workspace,
+                    TaskKind::Plan,
+                    title,
+                    None,
+                    description,
+                    None,
+                    None,
+                    "plan_created".to_string(),
+                    payload,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let create_event_json = events_to_json(vec![event]).remove(0);
+                let plan_steps = template.plan_steps.clone();
+                let (checklist_revision, checklist, checklist_event) =
+                    match self.store.plan_checklist_update(
+                        &workspace,
+                        &plan_id,
+                        Some(revision),
+                        Some(plan_steps.clone()),
+                        Some(0),
+                        None,
+                        false,
+                        "plan_updated".to_string(),
+                        json!({ "steps": plan_steps, "current": 0 }).to_string(),
+                    ) {
+                        Ok(v) => v,
+                        Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                    };
+
+                let events = vec![
+                    create_event_json.clone(),
+                    events_to_json(vec![checklist_event]).remove(0),
+                ];
+
+                return ai_ok(
+                    "tasks_scaffold",
+                    json!({
+                        "workspace": workspace.as_str(),
+                        "template": { "id": template.id, "kind": template.kind.as_str() },
+                        "plan": { "id": plan_id, "revision": checklist_revision },
+                        "checklist": {
+                            "steps": checklist.steps,
+                            "current": checklist.current
+                        },
+                        "events": events,
+                        "event": {
+                            "event_id": create_event_json["event_id"].clone(),
+                            "ts": create_event_json["ts"].clone(),
+                            "ts_ms": create_event_json["ts_ms"].clone(),
+                            "task_id": create_event_json["task_id"].clone(),
+                            "path": create_event_json["path"].clone(),
+                            "type": create_event_json["type"].clone(),
+                            "payload": create_event_json["payload"].clone()
+                        }
+                    }),
+                );
+            }
+            TaskKind::Task => {
+                if template.task_steps.is_empty() {
+                    return ai_error("INVALID_INPUT", "template has no task steps");
+                }
+                let parent_plan_id = match (parent, plan_title) {
+                    (Some(id), None) => {
+                        if !id.starts_with("PLAN-") {
+                            return ai_error("INVALID_INPUT", "parent must start with PLAN-");
+                        }
+                        match self.store.get_plan(&workspace, &id) {
+                            Ok(Some(_)) => id,
+                            Ok(None) => return ai_error("UNKNOWN_ID", "Unknown plan id"),
+                            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                        }
+                    }
+                    (None, Some(plan_title)) => {
+                        let payload = json!({ "kind": "plan", "title": plan_title }).to_string();
+                        let (plan_id, _revision, _event) = match self.store.create(
+                            &workspace,
+                            TaskKind::Plan,
+                            plan_title,
+                            None,
+                            None,
+                            None,
+                            None,
+                            "plan_created".to_string(),
+                            payload,
+                        ) {
+                            Ok(v) => v,
+                            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                        };
+                        plan_id
+                    }
+                    (None, None) => {
+                        return ai_error(
+                            "INVALID_INPUT",
+                            "parent or plan_title is required for task scaffold",
+                        );
+                    }
+                    (Some(_), Some(_)) => {
+                        return ai_error("INVALID_INPUT", "provide parent or plan_title, not both");
+                    }
+                };
+
+                let payload = json!({
+                    "kind": "task",
+                    "title": title,
+                    "parent": parent_plan_id
+                })
+                .to_string();
+                let (task_id, _revision, create_event) = match self.store.create(
+                    &workspace,
+                    TaskKind::Task,
+                    title,
+                    Some(parent_plan_id.clone()),
+                    description,
+                    None,
+                    None,
+                    "task_created".to_string(),
+                    payload,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+
+                let decompose_steps = template
+                    .task_steps
+                    .iter()
+                    .map(|step| bm_storage::NewStep {
+                        title: step.title.clone(),
+                        success_criteria: step.success_criteria.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                let decompose = match self.store.steps_decompose(
+                    &workspace,
+                    &task_id,
+                    None,
+                    None,
+                    decompose_steps,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+
+                let mut events = vec![
+                    events_to_json(vec![create_event]).remove(0),
+                    events_to_json(vec![decompose.event]).remove(0),
+                ];
+
+                let mut revision = decompose.task_revision;
+                for (step, step_ref) in template.task_steps.iter().zip(decompose.steps.iter()) {
+                    if step.tests.is_empty() && step.blockers.is_empty() {
+                        continue;
+                    }
+                    let defined = match self.store.step_define(
+                        &workspace,
+                        &task_id,
+                        Some(revision),
+                        Some(step_ref.step_id.as_str()),
+                        None,
+                        None,
+                        None,
+                        Some(step.tests.clone()),
+                        Some(step.blockers.clone()),
+                    ) {
+                        Ok(v) => v,
+                        Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                    };
+                    revision = defined.task_revision;
+                    events.push(events_to_json(vec![defined.event]).remove(0));
+                }
+
+                let steps_out = decompose
+                    .steps
+                    .into_iter()
+                    .map(|s| json!({ "step_id": s.step_id, "path": s.path }))
+                    .collect::<Vec<_>>();
+
+                ai_ok(
+                    "tasks_scaffold",
+                    json!({
+                        "workspace": workspace.as_str(),
+                        "template": { "id": template.id, "kind": template.kind.as_str() },
+                        "plan": { "id": parent_plan_id },
+                        "task": { "id": task_id, "revision": revision },
+                        "steps": steps_out,
+                        "events": events
+                    }),
+                )
+            }
+        }
+    }
+
+    fn tool_tasks_storage(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        ai_ok(
+            "tasks_storage",
+            json!({
+                "workspace": workspace.as_str(),
+                "storage_dir": self.store.storage_dir().to_string_lossy().to_string(),
+                "defaults": {
+                    "branch": self.store.default_branch_name(),
+                    "docs": {
+                        "notes": DEFAULT_NOTES_DOC,
+                        "graph": DEFAULT_GRAPH_DOC,
+                        "trace": DEFAULT_TRACE_DOC
+                    }
+                }
             }),
         )
     }
@@ -7450,7 +7966,8 @@ impl McpServer {
                     "code": e.code,
                     "message": e.message,
                     "kind": e.kind,
-                    "key": e.key
+                    "key": e.key,
+                    "recovery": "Inspect the referenced node/edge via branchmind_think_query or branchmind_graph_query, fix with branchmind_graph_apply, then re-run branchmind_think_lint."
                 })
             })
             .collect::<Vec<_>>();
@@ -8510,18 +9027,32 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let used = attach_budget(&mut result, limit, false);
-            if used > limit {
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("template".to_string(), Value::Null);
-                    obj.insert("truncated".to_string(), Value::Bool(true));
-                }
-                let _ = attach_budget(&mut result, limit, true);
-            }
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if let Some(obj) = value.as_object_mut() {
+                        if obj.remove("template").is_some() {
+                            changed = true;
+                        }
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_template", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_template", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_template", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_think_card(&mut self, args: Value) -> Value {
@@ -8690,6 +9221,9 @@ impl McpServer {
             })
             .collect::<Vec<_>>();
 
+        let cards_total = cards.len();
+        let stats_by_type = by_type.clone();
+
         let mut result = json!({
             "workspace": workspace.as_str(),
             "branch": branch,
@@ -8715,7 +9249,12 @@ impl McpServer {
             let trimmed = trim_array_to_budget(&mut result, &["cards"], limit, false);
             truncated |= trimmed;
             if trimmed {
-                recompute_card_stats(&mut result, "cards");
+                if ensure_minimal_list_at(&mut result, &["cards"], cards_total, "cards") {
+                    minimal = true;
+                    set_card_stats(&mut result, cards_total, &stats_by_type);
+                } else {
+                    recompute_card_stats(&mut result, "cards");
+                }
             }
             if json_len_chars(&result) > limit {
                 if compact_stats_by_type(&mut result) {
@@ -8738,6 +9277,12 @@ impl McpServer {
                         if retain_one_at(value, &["cards"], true) {
                             changed = true;
                             recompute_card_stats(value, "cards");
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(value, &["cards"], cards_total, "cards") {
+                            changed = true;
+                            set_card_stats(value, cards_total, &stats_by_type);
                         }
                     }
                     if json_len_chars(value) > limit {
@@ -8844,6 +9389,33 @@ impl McpServer {
             ("evidence", args_obj.get("evidence")),
             ("decision", args_obj.get("decision")),
         ];
+
+        let mut provided_stages = std::collections::BTreeSet::new();
+        for (stage, value) in stages {
+            if let Some(value) = value {
+                if !value.is_null() {
+                    provided_stages.insert(stage.to_string());
+                }
+            }
+        }
+        let allowed_stages = ["frame", "hypothesis", "test", "evidence", "decision"];
+        for (stage, status) in &status_map {
+            if !allowed_stages.iter().any(|s| *s == stage) {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "status keys must be one of: frame, hypothesis, test, evidence, decision",
+                );
+            }
+            if status.trim().is_empty() {
+                return ai_error("INVALID_INPUT", "status values must be non-empty strings");
+            }
+            if !provided_stages.contains(stage) {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "status provided for a missing pipeline stage",
+                );
+            }
+        }
 
         let mut created = Vec::new();
         let mut prev_card_id: Option<String> = None;
@@ -9141,6 +9713,7 @@ impl McpServer {
         };
 
         let cards = graph_nodes_to_cards(slice.nodes);
+        let cards_total = cards.len();
         let mut result = json!({
             "workspace": workspace.as_str(),
             "branch": branch,
@@ -9156,19 +9729,24 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
             let before = result
                 .get("cards")
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            let (_used, truncated) = enforce_graph_list_budget(&mut result, "cards", limit);
+            let (_used, cards_truncated) = enforce_graph_list_budget(&mut result, "cards", limit);
+            truncated |= cards_truncated;
             let after = result
                 .get("cards")
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            set_truncated_flag(&mut result, truncated);
             if after < before {
                 if let Some(next_cursor) = result
                     .get("cards")
@@ -9192,16 +9770,70 @@ impl McpServer {
                     }
                 }
             }
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "cards", limit);
-                let truncated_final = truncated || truncated2;
-                set_truncated_flag(&mut result, truncated_final);
-                let _ = attach_budget(&mut result, limit, truncated_final);
+            if after == 0 && cards_total > 0 {
+                if ensure_minimal_list_at(&mut result, &["cards"], cards_total, "cards") {
+                    truncated = true;
+                    minimal = true;
+                    if let Some(pagination) =
+                        result.get_mut("pagination").and_then(|v| v.as_object_mut())
+                    {
+                        pagination.insert(
+                            "count".to_string(),
+                            Value::Number(serde_json::Number::from(cards_total as u64)),
+                        );
+                        pagination.insert("has_more".to_string(), Value::Bool(true));
+                    }
+                }
             }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        if retain_one_at(value, &["cards"], true) {
+                            changed = true;
+                            refresh_pagination_count(value, &["cards"], &["pagination"]);
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(value, &["cards"], cards_total, "cards") {
+                            changed = true;
+                            if let Some(pagination) =
+                                value.get_mut("pagination").and_then(|v| v.as_object_mut())
+                            {
+                                pagination.insert(
+                                    "count".to_string(),
+                                    Value::Number(serde_json::Number::from(cards_total as u64)),
+                                );
+                                pagination.insert("has_more".to_string(), Value::Bool(true));
+                            }
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["pagination"],
+                            &["next_cursor", "has_more", "count"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["cards"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["pagination"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_query", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_query", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_query", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_think_lint(&mut self, args: Value) -> Value {
@@ -9267,19 +9899,36 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_graph_list_budget(&mut result, "errors", limit);
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let (_used, errors_truncated) = enforce_graph_list_budget(&mut result, "errors", limit);
+            truncated |= errors_truncated;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["errors"], true);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["errors"]);
+                    }
+                    changed
+                });
+
             set_truncated_flag(&mut result, truncated);
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "errors", limit);
-                let truncated_final = truncated || truncated2;
-                set_truncated_flag(&mut result, truncated_final);
-                let _ = attach_budget(&mut result, limit, truncated_final);
-            }
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_lint", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_lint", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_lint", result, warnings, Vec::new())
+        }
     }
 
     fn build_think_frontier(
@@ -10173,19 +10822,49 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_graph_list_budget(&mut result, "pins", limit);
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let (_used, pins_truncated) = enforce_graph_list_budget(&mut result, "pins", limit);
+            truncated |= pins_truncated;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        if retain_one_at(value, &["pins"], true) {
+                            changed = true;
+                            refresh_pagination_count(value, &["pins"], &["pagination"]);
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["pagination"],
+                            &["next_cursor", "has_more", "count"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["pins"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["pagination"]);
+                    }
+                    changed
+                });
+
             set_truncated_flag(&mut result, truncated);
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "pins", limit);
-                let truncated_final = truncated || truncated2;
-                set_truncated_flag(&mut result, truncated_final);
-                let _ = attach_budget(&mut result, limit, truncated_final);
-            }
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_pins", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_pins", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_pins", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_think_nominal_merge(&mut self, args: Value) -> Value {
@@ -10408,19 +11087,44 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_graph_list_budget(&mut result, "groups", limit);
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let (_used, groups_truncated) = enforce_graph_list_budget(&mut result, "groups", limit);
+            truncated |= groups_truncated;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["groups"], true);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["groups"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["applied"]);
+                    }
+                    changed
+                });
+
             set_truncated_flag(&mut result, truncated);
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "groups", limit);
-                let truncated_final = truncated || truncated2;
-                set_truncated_flag(&mut result, truncated_final);
-                let _ = attach_budget(&mut result, limit, truncated_final);
-            }
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_nominal_merge", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_nominal_merge", result)
+        } else {
+            ai_ok_with_warnings(
+                "branchmind_think_nominal_merge",
+                result,
+                warnings,
+                Vec::new(),
+            )
+        }
     }
 
     fn tool_branchmind_think_playbook(&mut self, args: Value) -> Value {
@@ -10477,18 +11181,32 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let used = attach_budget(&mut result, limit, false);
-            if used > limit {
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("template".to_string(), Value::Null);
-                    obj.insert("truncated".to_string(), Value::Bool(true));
-                }
-                let _ = attach_budget(&mut result, limit, true);
-            }
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if let Some(obj) = value.as_object_mut() {
+                        if obj.remove("template").is_some() {
+                            changed = true;
+                        }
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_playbook", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_playbook", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_playbook", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_think_subgoal_open(&mut self, args: Value) -> Value {
@@ -11794,10 +12512,25 @@ impl McpServer {
             Ok(v) => v.unwrap_or(30),
             Err(resp) => return resp,
         };
+        let decisions_limit = match optional_usize(args_obj, "decisions_limit") {
+            Ok(v) => v.unwrap_or(5),
+            Err(resp) => return resp,
+        };
+        let evidence_limit = match optional_usize(args_obj, "evidence_limit") {
+            Ok(v) => v.unwrap_or(5),
+            Err(resp) => return resp,
+        };
+        let blockers_limit = match optional_usize(args_obj, "blockers_limit") {
+            Ok(v) => v.unwrap_or(5),
+            Err(resp) => return resp,
+        };
         let max_chars = match optional_usize(args_obj, "max_chars") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+
+        let requested_target = target.clone();
+        let requested_ref = reference.clone();
 
         let scope = match self.resolve_reasoning_scope(
             &workspace,
@@ -11916,12 +12649,99 @@ impl McpServer {
         };
 
         let cards = graph_nodes_to_cards(slice.nodes);
+        let cards_total = cards.len();
+
+        let mut decisions = Vec::new();
+        if decisions_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &scope.branch,
+                &scope.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: Some(vec!["decision".to_string()]),
+                    status: None,
+                    tags_any: None,
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: decisions_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            decisions = graph_nodes_to_signal_cards(slice.nodes);
+        }
+
+        let mut evidence = Vec::new();
+        if evidence_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &scope.branch,
+                &scope.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: Some(vec!["evidence".to_string()]),
+                    status: None,
+                    tags_any: None,
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: evidence_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            evidence = graph_nodes_to_signal_cards(slice.nodes);
+        }
+
+        let mut blockers = Vec::new();
+        if blockers_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &scope.branch,
+                &scope.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: None,
+                    status: None,
+                    tags_any: Some(vec!["blocker".to_string()]),
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: blockers_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            blockers = graph_nodes_to_signal_cards(slice.nodes);
+        }
+
+        let decisions_total = decisions.len();
+        let evidence_total = evidence.len();
+        let blockers_total = blockers.len();
         let mut by_type = std::collections::BTreeMap::<String, u64>::new();
         for card in &cards {
             if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
                 *by_type.entry(ty.to_string()).or_insert(0) += 1;
             }
         }
+        let stats_by_type = by_type.clone();
 
         let notes_count = notes_entries.len();
         let trace_count = trace_entries.len();
@@ -11929,6 +12749,10 @@ impl McpServer {
 
         let mut result = json!({
             "workspace": workspace.as_str(),
+            "requested": {
+                "target": requested_target.map(Value::String).unwrap_or(Value::Null),
+                "ref": requested_ref.map(Value::String).unwrap_or(Value::Null)
+            },
             "branch": scope.branch,
             "docs": {
                 "notes": scope.notes_doc,
@@ -11953,6 +12777,16 @@ impl McpServer {
                     "has_more": trace_slice.has_more,
                     "limit": trace_limit,
                     "count": trace_count
+                }
+            },
+            "signals": {
+                "blockers": blockers,
+                "decisions": decisions,
+                "evidence": evidence,
+                "stats": {
+                    "blockers": blockers.len(),
+                    "decisions": decisions.len(),
+                    "evidence": evidence.len()
                 }
             },
             "stats": {
@@ -11990,6 +12824,30 @@ impl McpServer {
                 );
                 truncated |=
                     compact_card_fields_at(&mut result, &["cards"], 180, true, true, false);
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["signals", "decisions"],
+                    180,
+                    true,
+                    true,
+                    false,
+                );
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["signals", "evidence"],
+                    180,
+                    true,
+                    true,
+                    false,
+                );
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["signals", "blockers"],
+                    180,
+                    true,
+                    true,
+                    false,
+                );
             }
 
             let before_cards = result
@@ -12005,7 +12863,11 @@ impl McpServer {
                 .unwrap_or(0);
             truncated |= cards_truncated;
             if after_cards < before_cards {
-                recompute_card_stats(&mut result, "cards");
+                if after_cards == 0 && cards_total > 0 {
+                    set_card_stats(&mut result, cards_total, &stats_by_type);
+                } else {
+                    recompute_card_stats(&mut result, "cards");
+                }
             }
 
             if json_len_chars(&result) > limit {
@@ -12023,6 +12885,37 @@ impl McpServer {
                     &["trace", "entries"],
                     &["trace", "pagination"],
                 );
+            }
+            if json_len_chars(&result) > limit {
+                let decisions_trimmed =
+                    trim_array_to_budget(&mut result, &["signals", "decisions"], limit, false);
+                let evidence_trimmed =
+                    trim_array_to_budget(&mut result, &["signals", "evidence"], limit, false);
+                let blockers_trimmed =
+                    trim_array_to_budget(&mut result, &["signals", "blockers"], limit, false);
+                if decisions_trimmed || evidence_trimmed || blockers_trimmed {
+                    truncated = true;
+                    let signals_empty = ["decisions", "evidence", "blockers"].iter().all(|key| {
+                        result
+                            .get("signals")
+                            .and_then(|v| v.get(*key))
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.is_empty())
+                            .unwrap_or(true)
+                    });
+                    if signals_empty
+                        && (decisions_total > 0 || evidence_total > 0 || blockers_total > 0)
+                    {
+                        set_signal_stats(
+                            &mut result,
+                            blockers_total,
+                            decisions_total,
+                            evidence_total,
+                        );
+                    } else {
+                        refresh_signal_stats(&mut result);
+                    }
+                }
             }
             if json_len_chars(&result) > limit {
                 if compact_stats_by_type(&mut result) {
@@ -12051,11 +12944,44 @@ impl McpServer {
                             true,
                         );
                         changed |= compact_card_fields_at(value, &["cards"], 120, true, true, true);
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "decisions"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "evidence"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "blockers"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
                     }
                     if json_len_chars(value) > limit {
                         changed |= minimalize_doc_entries_at(value, &["notes", "entries"]);
                         changed |= minimalize_doc_entries_at(value, &["trace", "entries"]);
                         changed |= minimalize_cards_at(value, &["cards"]);
+                        if minimalize_cards_at(value, &["signals", "decisions"]) {
+                            changed = true;
+                        }
+                        if minimalize_cards_at(value, &["signals", "evidence"]) {
+                            changed = true;
+                        }
+                        if minimalize_cards_at(value, &["signals", "blockers"]) {
+                            changed = true;
+                        }
                     }
                     if json_len_chars(value) > limit {
                         changed |= retain_one_at(value, &["notes", "entries"], true);
@@ -12072,6 +12998,61 @@ impl McpServer {
                             &["trace", "pagination"],
                         );
                         recompute_card_stats(value, "cards");
+                        if retain_one_at(value, &["signals", "decisions"], true)
+                            || retain_one_at(value, &["signals", "evidence"], true)
+                            || retain_one_at(value, &["signals", "blockers"], true)
+                        {
+                            refresh_signal_stats(value);
+                            changed = true;
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(value, &["cards"], cards_total, "cards") {
+                            set_card_stats(value, cards_total, &stats_by_type);
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["signals", "decisions"],
+                            decisions_total,
+                            "decisions",
+                        ) {
+                            set_signal_stats(
+                                value,
+                                blockers_total,
+                                decisions_total,
+                                evidence_total,
+                            );
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["signals", "evidence"],
+                            evidence_total,
+                            "evidence",
+                        ) {
+                            set_signal_stats(
+                                value,
+                                blockers_total,
+                                decisions_total,
+                                evidence_total,
+                            );
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["signals", "blockers"],
+                            blockers_total,
+                            "blockers",
+                        ) {
+                            set_signal_stats(
+                                value,
+                                blockers_total,
+                                decisions_total,
+                                evidence_total,
+                            );
+                            changed = true;
+                        }
                     }
                     if json_len_chars(value) > limit {
                         changed |=
@@ -12081,6 +13062,16 @@ impl McpServer {
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["docs"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["signals"],
+                            &["blockers", "decisions", "evidence"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["signals"]);
                     }
                     changed
                 });
@@ -12712,6 +13703,9 @@ fn tool_definitions() -> Vec<Value> {
                     "notes_limit": { "type": "integer" },
                     "trace_limit": { "type": "integer" },
                     "limit_cards": { "type": "integer" },
+                    "decisions_limit": { "type": "integer" },
+                    "evidence_limit": { "type": "integer" },
+                    "blockers_limit": { "type": "integer" },
                     "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]
@@ -13568,7 +14562,19 @@ fn tool_definitions() -> Vec<Value> {
                     "description": { "type": "string" },
                     "contract": { "type": "string" },
                     "contract_data": { "type": "object" },
-                    "steps": { "type": "array", "items": {} }
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": { "type": "string" },
+                                "success_criteria": { "type": "array", "items": { "type": "string" } },
+                                "tests": { "type": "array", "items": { "type": "string" } },
+                                "blockers": { "type": "array", "items": { "type": "string" } }
+                            },
+                            "required": ["title", "success_criteria"]
+                        }
+                    }
                 },
                 "required": ["workspace", "title"]
             }
@@ -14188,6 +15194,45 @@ fn tool_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "plan": { "type": "string" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_templates_list",
+            "description": "List built-in templates for scaffolding.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_scaffold",
+            "description": "Create a plan/task from a template.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "template": { "type": "string" },
+                    "kind": { "type": "string", "enum": ["plan", "task"] },
+                    "title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "parent": { "type": "string" },
+                    "plan_title": { "type": "string" }
+                },
+                "required": ["workspace", "template", "title"]
+            }
+        }),
+        json!({
+            "name": "tasks_storage",
+            "description": "Return storage paths and namespaces.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" }
                 },
                 "required": ["workspace"]
             }
@@ -14975,6 +16020,94 @@ fn parse_seq_reference(value: &str) -> Option<i64> {
     raw.parse::<i64>().ok().filter(|v| *v > 0)
 }
 
+#[derive(Clone)]
+struct TaskTemplateStep {
+    title: String,
+    success_criteria: Vec<String>,
+    tests: Vec<String>,
+    blockers: Vec<String>,
+}
+
+#[derive(Clone)]
+struct TaskTemplate {
+    id: &'static str,
+    kind: TaskKind,
+    title: &'static str,
+    description: &'static str,
+    plan_steps: Vec<String>,
+    task_steps: Vec<TaskTemplateStep>,
+}
+
+fn template_step(
+    title: &str,
+    success_criteria: &[&str],
+    tests: &[&str],
+    blockers: &[&str],
+) -> TaskTemplateStep {
+    TaskTemplateStep {
+        title: title.to_string(),
+        success_criteria: success_criteria.iter().map(|s| s.to_string()).collect(),
+        tests: tests.iter().map(|s| s.to_string()).collect(),
+        blockers: blockers.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+fn built_in_task_templates() -> Vec<TaskTemplate> {
+    vec![
+        TaskTemplate {
+            id: "basic-plan",
+            kind: TaskKind::Plan,
+            title: "Basic plan checklist",
+            description: "Minimal plan checklist for execution.",
+            plan_steps: vec![
+                "Clarify goal and constraints".to_string(),
+                "Implement the change".to_string(),
+                "Verify and document".to_string(),
+            ],
+            task_steps: Vec::new(),
+        },
+        TaskTemplate {
+            id: "basic-task",
+            kind: TaskKind::Task,
+            title: "Basic delivery task",
+            description: "Clarify → implement → verify with explicit checkpoints.",
+            plan_steps: Vec::new(),
+            task_steps: vec![
+                template_step(
+                    "Clarify goal and constraints",
+                    &["Goal and constraints captured", "Success criteria defined"],
+                    &["Planning notes updated"],
+                    &[],
+                ),
+                template_step(
+                    "Implement change",
+                    &["Implementation complete", "Review for correctness"],
+                    &["Relevant tests updated or added"],
+                    &[],
+                ),
+                template_step(
+                    "Verify and document",
+                    &["Checks executed and passing", "Docs updated if needed"],
+                    &["Run relevant test suite"],
+                    &[],
+                ),
+            ],
+        },
+    ]
+}
+
+fn find_task_template(id: &str, kind: TaskKind) -> Option<TaskTemplate> {
+    built_in_task_templates()
+        .into_iter()
+        .find(|template| template.id == id && template.kind == kind)
+}
+
+fn find_task_template_any(id: &str) -> Option<TaskTemplate> {
+    built_in_task_templates()
+        .into_iter()
+        .find(|template| template.id == id)
+}
+
 fn graph_nodes_to_cards(nodes: Vec<bm_storage::GraphNode>) -> Vec<Value> {
     nodes
         .into_iter()
@@ -14988,6 +16121,24 @@ fn graph_nodes_to_cards(nodes: Vec<bm_storage::GraphNode>) -> Vec<Value> {
                 "tags": n.tags,
                 "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
                 "deleted": n.deleted,
+                "last_seq": n.last_seq,
+                "last_ts_ms": n.last_ts_ms
+            })
+        })
+        .collect()
+}
+
+fn graph_nodes_to_signal_cards(nodes: Vec<bm_storage::GraphNode>) -> Vec<Value> {
+    nodes
+        .into_iter()
+        .map(|n| {
+            json!({
+                "id": n.id,
+                "type": n.node_type,
+                "title": n.title,
+                "text": n.text,
+                "status": n.status,
+                "tags": n.tags,
                 "last_seq": n.last_seq,
                 "last_ts_ms": n.last_ts_ms
             })
@@ -15710,6 +16861,24 @@ fn minimalize_cards_at(value: &mut Value, path: &[&str]) -> bool {
     changed
 }
 
+fn ensure_minimal_list_at(value: &mut Value, path: &[&str], total: usize, label: &str) -> bool {
+    if total == 0 {
+        return false;
+    }
+    let Some(cards) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    if !cards.is_empty() {
+        return false;
+    }
+    cards.push(json!({
+        "type": "summary",
+        "label": label,
+        "count": total
+    }));
+    true
+}
+
 fn compact_event_payloads_at(value: &mut Value, path: &[&str]) -> bool {
     let Some(events) = get_array_mut_at(value, path) else {
         return false;
@@ -16103,6 +17272,81 @@ fn recompute_card_stats(value: &mut Value, cards_key: &str) -> usize {
     }
 
     count
+}
+
+fn set_card_stats(
+    value: &mut Value,
+    total: usize,
+    by_type: &std::collections::BTreeMap<String, u64>,
+) -> bool {
+    let Some(stats) = value.get_mut("stats").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    stats.insert(
+        "cards".to_string(),
+        Value::Number(serde_json::Number::from(total as u64)),
+    );
+    stats.insert("by_type".to_string(), json!(by_type));
+    true
+}
+
+fn set_signal_stats(value: &mut Value, blockers: usize, decisions: usize, evidence: usize) -> bool {
+    let Some(signals) = value.get_mut("signals").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    let Some(stats) = signals.get_mut("stats").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    stats.insert(
+        "blockers".to_string(),
+        Value::Number(serde_json::Number::from(blockers as u64)),
+    );
+    stats.insert(
+        "decisions".to_string(),
+        Value::Number(serde_json::Number::from(decisions as u64)),
+    );
+    stats.insert(
+        "evidence".to_string(),
+        Value::Number(serde_json::Number::from(evidence as u64)),
+    );
+    true
+}
+
+fn refresh_signal_stats(value: &mut Value) -> bool {
+    let Some(signals) = value.get_mut("signals").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    let blockers = signals
+        .get("blockers")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let decisions = signals
+        .get("decisions")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let evidence = signals
+        .get("evidence")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let Some(stats) = signals.get_mut("stats").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    stats.insert(
+        "blockers".to_string(),
+        Value::Number(serde_json::Number::from(blockers as u64)),
+    );
+    stats.insert(
+        "decisions".to_string(),
+        Value::Number(serde_json::Number::from(decisions as u64)),
+    );
+    stats.insert(
+        "evidence".to_string(),
+        Value::Number(serde_json::Number::from(evidence as u64)),
+    );
+    true
 }
 
 fn refresh_trace_pagination_count(value: &mut Value) {

@@ -74,6 +74,21 @@ For full intent surfaces and semantics, use this project’s contracts as the so
 
 ## Core lifecycle (v0.2)
 
+### `tasks_create`
+
+Create a plan or task.
+
+Input: `{ workspace, kind?, parent?, title, description?, contract?, contract_data?, steps? }`
+
+Semantics:
+
+- `kind` defaults to `task` when `parent` is provided; otherwise `plan`.
+- `steps` are allowed only for task creation.
+- When `steps` are provided:
+  - `steps[].title` and `steps[].success_criteria` are required.
+  - `steps[].tests` / `steps[].blockers` are optional and applied via `tasks_define`.
+  - Response includes `steps` and `events` for the create + step operations.
+
 ### `tasks_complete`
 
 Sets plan/task status.
@@ -302,13 +317,27 @@ Input: `{ workspace, task, path }`
 
 List built-in templates for scaffolding.
 
+Output: `{ templates:[{ id, kind, title, description, plan_steps?, steps? }] }`
+
 ### `tasks_scaffold`
 
 Create a plan/task from a template.
 
+Input (union):
+
+- Plan: `{ workspace, template, kind:"plan", title, description? }`
+- Task: `{ workspace, template, kind:"task", title, parent?, plan_title?, description? }`
+
+Semantics:
+
+- `parent` is a `PLAN-###` id; `plan_title` creates a plan on the fly (mutually exclusive).
+- Applies template checklist/steps with checkpoints as appropriate.
+
 ### `tasks_storage`
 
 Return storage paths and namespaces.
+
+Output: `{ storage_dir, defaults:{ branch, docs:{ notes, graph, trace } } }`
 
 ## Fast-path close (v0.1)
 
