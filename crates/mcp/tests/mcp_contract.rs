@@ -143,6 +143,7 @@ fn mcp_requires_notifications_initialized() {
             "branchmind_branch_rename",
             "branchmind_checkout",
             "branchmind_commit",
+            "branchmind_context_pack",
             "branchmind_diff",
             "branchmind_docs_list",
             "branchmind_export",
@@ -911,9 +912,46 @@ fn branchmind_export_smoke() {
         Some(true)
     );
 
-    let export = server.request(json!({
+    let context_card_id = "CARD-CONTEXT-PACK-1";
+    let context_card_text = "context pack smoke";
+    let think_card = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_card", "arguments": { "workspace": "ws1", "target": task_id.clone(), "card": { "id": context_card_id, "type": "note", "title": "Context pack", "text": context_card_text } } }
+    }));
+    let think_card_text = extract_tool_text(&think_card);
+    assert_eq!(
+        think_card_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let context_pack = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "branchmind_context_pack", "arguments": { "workspace": "ws1", "target": task_id.clone(), "notes_limit": 10, "trace_limit": 50, "limit_cards": 10 } }
+    }));
+    let context_pack_text = extract_tool_text(&context_pack);
+    assert_eq!(
+        context_pack_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let context_cards = context_pack_text
+        .get("result")
+        .and_then(|v| v.get("cards"))
+        .and_then(|v| v.as_array())
+        .expect("context_pack cards");
+    assert!(
+        context_cards
+            .iter()
+            .any(|card| card.get("id").and_then(|v| v.as_str()) == Some(context_card_id)),
+        "context_pack must include the newly added think card"
+    );
+
+    let export = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
         "method": "tools/call",
         "params": { "name": "branchmind_export", "arguments": { "workspace": "ws1", "target": task_id.clone(), "notes_limit": 10, "trace_limit": 50 } }
     }));
@@ -952,14 +990,14 @@ fn branchmind_export_smoke() {
     let long_note = "x".repeat(2048);
     server.request(json!({
         "jsonrpc": "2.0",
-        "id": 6,
+        "id": 8,
         "method": "tools/call",
         "params": { "name": "branchmind_notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": long_note } }
     }));
 
     let export_budget = server.request(json!({
         "jsonrpc": "2.0",
-        "id": 7,
+        "id": 9,
         "method": "tools/call",
         "params": { "name": "branchmind_export", "arguments": { "workspace": "ws1", "target": task_id, "notes_limit": 50, "trace_limit": 50, "max_chars": 400 } }
     }));

@@ -19,6 +19,21 @@ const DEFAULT_GRAPH_DOC: &str = "graph";
 const DEFAULT_TRACE_DOC: &str = "trace";
 const PIN_TAG: &str = "pinned";
 
+struct ReasoningScope {
+    branch: String,
+    notes_doc: String,
+    graph_doc: String,
+    trace_doc: String,
+}
+
+struct ReasoningScopeInput {
+    target: Option<String>,
+    branch: Option<String>,
+    notes_doc: Option<String>,
+    graph_doc: Option<String>,
+    trace_doc: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
     #[serde(default)]
@@ -245,6 +260,7 @@ impl McpServer {
             "branchmind_trace_sequential_step" => self.tool_branchmind_trace_sequential_step(args),
             "branchmind_trace_hydrate" => self.tool_branchmind_trace_hydrate(args),
             "branchmind_trace_validate" => self.tool_branchmind_trace_validate(args),
+            "branchmind_context_pack" => self.tool_branchmind_context_pack(args),
             "branchmind_export" => self.tool_branchmind_export(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
@@ -7337,6 +7353,82 @@ impl McpServer {
         )
     }
 
+    fn resolve_reasoning_scope(
+        &mut self,
+        workspace: &WorkspaceId,
+        input: ReasoningScopeInput,
+    ) -> Result<ReasoningScope, Value> {
+        let overrides_present = input.branch.is_some()
+            || input.notes_doc.is_some()
+            || input.graph_doc.is_some()
+            || input.trace_doc.is_some();
+
+        if input.target.is_some() && overrides_present {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "provide either target or explicit branch/doc overrides, not both",
+            ));
+        }
+
+        match input.target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "target must start with PLAN- or TASK-",
+                        ));
+                    }
+                };
+                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                    }
+                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+                };
+                Ok(ReasoningScope {
+                    branch: reasoning.branch,
+                    notes_doc: reasoning.notes_doc,
+                    graph_doc: reasoning.graph_doc,
+                    trace_doc: reasoning.trace_doc,
+                })
+            }
+            None => {
+                let branch = match input.branch {
+                    Some(branch) => branch,
+                    None => match require_checkout_branch(&mut self.store, workspace) {
+                        Ok(branch) => branch,
+                        Err(resp) => return Err(resp),
+                    },
+                };
+                if !self
+                    .store
+                    .branch_exists(workspace, &branch)
+                    .unwrap_or(false)
+                {
+                    return Err(unknown_branch_error(workspace));
+                }
+                let notes_doc = input
+                    .notes_doc
+                    .unwrap_or_else(|| DEFAULT_NOTES_DOC.to_string());
+                let graph_doc = input
+                    .graph_doc
+                    .unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
+                let trace_doc = input
+                    .trace_doc
+                    .unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
+                Ok(ReasoningScope {
+                    branch,
+                    notes_doc,
+                    graph_doc,
+                    trace_doc,
+                })
+            }
+        }
+    }
+
     fn resolve_think_commit_scope(
         &mut self,
         workspace: &WorkspaceId,
@@ -7359,47 +7451,24 @@ impl McpServer {
             Err(resp) => return Err(resp),
         };
 
-        if target.is_some() && (trace_doc.is_some() || graph_doc.is_some()) {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "provide either target or (branch, trace_doc, graph_doc), not both",
-            ));
+        if let Err(resp) = ensure_nonempty_doc(&trace_doc, "trace_doc") {
+            return Err(resp);
+        }
+        if let Err(resp) = ensure_nonempty_doc(&graph_doc, "graph_doc") {
+            return Err(resp);
         }
 
-        match target {
-            Some(target_id) => {
-                let kind = match parse_plan_or_task_kind(&target_id) {
-                    Some(v) => v,
-                    None => {
-                        return Err(ai_error(
-                            "INVALID_INPUT",
-                            "target must start with PLAN- or TASK-",
-                        ));
-                    }
-                };
-                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
-                    Ok(r) => r,
-                    Err(StoreError::UnknownId) => {
-                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
-                    }
-                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-                };
-                let branch = branch_override.unwrap_or(reasoning.branch);
-                Ok((branch, reasoning.trace_doc, reasoning.graph_doc))
-            }
-            None => {
-                let branch = match branch_override {
-                    Some(branch) => branch,
-                    None => match require_checkout_branch(&mut self.store, workspace) {
-                        Ok(branch) => branch,
-                        Err(resp) => return Err(resp),
-                    },
-                };
-                let trace_doc = trace_doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
-                let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
-                Ok((branch, trace_doc, graph_doc))
-            }
-        }
+        let scope = self.resolve_reasoning_scope(
+            workspace,
+            ReasoningScopeInput {
+                target,
+                branch: branch_override,
+                notes_doc: None,
+                graph_doc,
+                trace_doc,
+            },
+        )?;
+        Ok((scope.branch, scope.trace_doc, scope.graph_doc))
     }
 
     fn resolve_think_graph_scope(
@@ -7420,64 +7489,21 @@ impl McpServer {
             Err(resp) => return Err(resp),
         };
 
-        if target.is_some() && (reference.is_some() || graph_doc.is_some()) {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "provide either target or (ref, graph_doc), not both",
-            ));
+        if let Err(resp) = ensure_nonempty_doc(&graph_doc, "graph_doc") {
+            return Err(resp);
         }
 
-        match target {
-            Some(target_id) => {
-                let kind = match parse_plan_or_task_kind(&target_id) {
-                    Some(v) => v,
-                    None => {
-                        return Err(ai_error(
-                            "INVALID_INPUT",
-                            "target must start with PLAN- or TASK-",
-                        ));
-                    }
-                };
-                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
-                    Ok(r) => r,
-                    Err(StoreError::UnknownId) => {
-                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
-                    }
-                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-                };
-                Ok((reasoning.branch, reasoning.graph_doc))
-            }
-            None => {
-                let branch = match reference {
-                    Some(branch) => branch,
-                    None => match require_checkout_branch(&mut self.store, workspace) {
-                        Ok(branch) => branch,
-                        Err(resp) => return Err(resp),
-                    },
-                };
-                if !self
-                    .store
-                    .branch_exists(workspace, &branch)
-                    .unwrap_or(false)
-                {
-                    return Err(ai_error_with(
-                        "UNKNOWN_ID",
-                        "Unknown branch",
-                        Some(
-                            "Call branchmind_branch_list to discover existing branches, then retry.",
-                        ),
-                        vec![suggest_call(
-                            "branchmind_branch_list",
-                            "List known branches for this workspace.",
-                            "high",
-                            json!({ "workspace": workspace.as_str() }),
-                        )],
-                    ));
-                }
-                let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
-                Ok((branch, graph_doc))
-            }
-        }
+        let scope = self.resolve_reasoning_scope(
+            workspace,
+            ReasoningScopeInput {
+                target,
+                branch: reference,
+                notes_doc: None,
+                graph_doc,
+                trace_doc: None,
+            },
+        )?;
+        Ok((scope.branch, scope.graph_doc))
     }
 
     fn resolve_think_watch_scope(
@@ -7502,65 +7528,24 @@ impl McpServer {
             Err(resp) => return Err(resp),
         };
 
-        if target.is_some() && (reference.is_some() || graph_doc.is_some() || trace_doc.is_some()) {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "provide either target or (ref, graph_doc, trace_doc), not both",
-            ));
+        if let Err(resp) = ensure_nonempty_doc(&graph_doc, "graph_doc") {
+            return Err(resp);
+        }
+        if let Err(resp) = ensure_nonempty_doc(&trace_doc, "trace_doc") {
+            return Err(resp);
         }
 
-        match target {
-            Some(target_id) => {
-                let kind = match parse_plan_or_task_kind(&target_id) {
-                    Some(v) => v,
-                    None => {
-                        return Err(ai_error(
-                            "INVALID_INPUT",
-                            "target must start with PLAN- or TASK-",
-                        ));
-                    }
-                };
-                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
-                    Ok(r) => r,
-                    Err(StoreError::UnknownId) => {
-                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
-                    }
-                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-                };
-                Ok((reasoning.branch, reasoning.graph_doc, reasoning.trace_doc))
-            }
-            None => {
-                let branch = match reference {
-                    Some(branch) => branch,
-                    None => match require_checkout_branch(&mut self.store, workspace) {
-                        Ok(branch) => branch,
-                        Err(resp) => return Err(resp),
-                    },
-                };
-                if !self
-                    .store
-                    .branch_exists(workspace, &branch)
-                    .unwrap_or(false)
-                {
-                    return Err(ai_error_with(
-                        "UNKNOWN_ID",
-                        "Unknown branch",
-                        Some(
-                            "Call branchmind_branch_list to discover existing branches, then retry.",
-                        ),
-                        vec![suggest_call(
-                            "branchmind_branch_list",
-                            "List known branches for this workspace.",
-                            "high",
-                            json!({ "workspace": workspace.as_str() }),
-                        )],
-                    ));
-                }
-                let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
-                let trace_doc = trace_doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
-                Ok((branch, graph_doc, trace_doc))
-            }
-        }
+        let scope = self.resolve_reasoning_scope(
+            workspace,
+            ReasoningScopeInput {
+                target,
+                branch: reference,
+                notes_doc: None,
+                graph_doc,
+                trace_doc,
+            },
+        )?;
+        Ok((scope.branch, scope.graph_doc, scope.trace_doc))
     }
 
     fn resolve_trace_scope(
@@ -7577,48 +7562,21 @@ impl McpServer {
             Err(resp) => return Err(resp),
         };
 
-        if let Some(doc) = doc.as_ref() {
-            if doc.trim().is_empty() {
-                return Err(ai_error("INVALID_INPUT", "doc must not be empty"));
-            }
+        if let Err(resp) = ensure_nonempty_doc(&doc, "doc") {
+            return Err(resp);
         }
 
-        if target.is_some() && doc.is_some() {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "provide either target or doc, not both",
-            ));
-        }
-
-        match target {
-            Some(target_id) => {
-                let kind = match parse_plan_or_task_kind(&target_id) {
-                    Some(v) => v,
-                    None => {
-                        return Err(ai_error(
-                            "INVALID_INPUT",
-                            "target must start with PLAN- or TASK-",
-                        ));
-                    }
-                };
-                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
-                    Ok(r) => r,
-                    Err(StoreError::UnknownId) => {
-                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
-                    }
-                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-                };
-                Ok((reasoning.branch, reasoning.trace_doc))
-            }
-            None => {
-                let branch = match require_checkout_branch(&mut self.store, workspace) {
-                    Ok(branch) => branch,
-                    Err(resp) => return Err(resp),
-                };
-                let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
-                Ok((branch, trace_doc))
-            }
-        }
+        let scope = self.resolve_reasoning_scope(
+            workspace,
+            ReasoningScopeInput {
+                target,
+                branch: None,
+                notes_doc: None,
+                graph_doc: None,
+                trace_doc: doc,
+            },
+        )?;
+        Ok((scope.branch, scope.trace_doc))
     }
 
     fn resolve_trace_scope_with_ref(
@@ -7639,51 +7597,21 @@ impl McpServer {
             Err(resp) => return Err(resp),
         };
 
-        if let Some(doc) = doc.as_ref() {
-            if doc.trim().is_empty() {
-                return Err(ai_error("INVALID_INPUT", "doc must not be empty"));
-            }
+        if let Err(resp) = ensure_nonempty_doc(&doc, "doc") {
+            return Err(resp);
         }
 
-        if target.is_some() && (reference.is_some() || doc.is_some()) {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "provide either target or (ref, doc), not both",
-            ));
-        }
-
-        match target {
-            Some(target_id) => {
-                let kind = match parse_plan_or_task_kind(&target_id) {
-                    Some(v) => v,
-                    None => {
-                        return Err(ai_error(
-                            "INVALID_INPUT",
-                            "target must start with PLAN- or TASK-",
-                        ));
-                    }
-                };
-                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
-                    Ok(r) => r,
-                    Err(StoreError::UnknownId) => {
-                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
-                    }
-                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-                };
-                Ok((reasoning.branch, reasoning.trace_doc))
-            }
-            None => {
-                let branch = match reference {
-                    Some(branch) => branch,
-                    None => match require_checkout_branch(&mut self.store, workspace) {
-                        Ok(branch) => branch,
-                        Err(resp) => return Err(resp),
-                    },
-                };
-                let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
-                Ok((branch, trace_doc))
-            }
-        }
+        let scope = self.resolve_reasoning_scope(
+            workspace,
+            ReasoningScopeInput {
+                target,
+                branch: reference,
+                notes_doc: None,
+                graph_doc: None,
+                trace_doc: doc,
+            },
+        )?;
+        Ok((scope.branch, scope.trace_doc))
     }
 
     fn commit_think_card_internal(
@@ -7914,46 +7842,25 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        if target.is_some() && graph_doc.is_some() {
-            return ai_error(
-                "INVALID_INPUT",
-                "provide either target or (branch, graph_doc), not both",
-            );
+        if let Err(resp) = ensure_nonempty_doc(&graph_doc, "graph_doc") {
+            return resp;
         }
 
-        let (branch, graph_doc) = match target {
-            Some(target_id) => {
-                let kind = match parse_plan_or_task_kind(&target_id) {
-                    Some(v) => v,
-                    None => {
-                        return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-");
-                    }
-                };
-                let reasoning = match self
-                    .store
-                    .ensure_reasoning_ref(&workspace, &target_id, kind)
-                {
-                    Ok(r) => r,
-                    Err(StoreError::UnknownId) => {
-                        return ai_error("UNKNOWN_ID", "Unknown target id");
-                    }
-                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-                };
-                let branch = branch_override.unwrap_or(reasoning.branch);
-                (branch, reasoning.graph_doc)
-            }
-            None => {
-                let branch = match branch_override {
-                    Some(branch) => branch,
-                    None => match require_checkout_branch(&mut self.store, &workspace) {
-                        Ok(branch) => branch,
-                        Err(resp) => return resp,
-                    },
-                };
-                let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
-                (branch, graph_doc)
-            }
+        let scope = match self.resolve_reasoning_scope(
+            &workspace,
+            ReasoningScopeInput {
+                target,
+                branch: branch_override,
+                notes_doc: None,
+                graph_doc,
+                trace_doc: None,
+            },
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
+        let branch = scope.branch;
+        let graph_doc = scope.graph_doc;
 
         let limit_cards = match optional_usize(args_obj, "limit_cards") {
             Ok(v) => v.unwrap_or(30),
@@ -10631,6 +10538,279 @@ impl McpServer {
         ai_ok("branchmind_trace_validate", result)
     }
 
+    fn tool_branchmind_context_pack(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let reference = match optional_string(args_obj, "ref") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let notes_doc = match optional_string(args_obj, "notes_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let trace_doc = match optional_string(args_obj, "trace_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let graph_doc = match optional_string(args_obj, "graph_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if let Err(resp) = ensure_nonempty_doc(&notes_doc, "notes_doc") {
+            return resp;
+        }
+        if let Err(resp) = ensure_nonempty_doc(&trace_doc, "trace_doc") {
+            return resp;
+        }
+        if let Err(resp) = ensure_nonempty_doc(&graph_doc, "graph_doc") {
+            return resp;
+        }
+
+        let notes_limit = match optional_usize(args_obj, "notes_limit") {
+            Ok(v) => v.unwrap_or(20),
+            Err(resp) => return resp,
+        };
+        let trace_limit = match optional_usize(args_obj, "trace_limit") {
+            Ok(v) => v.unwrap_or(50),
+            Err(resp) => return resp,
+        };
+        let limit_cards = match optional_usize(args_obj, "limit_cards") {
+            Ok(v) => v.unwrap_or(30),
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let scope = match self.resolve_reasoning_scope(
+            &workspace,
+            ReasoningScopeInput {
+                target,
+                branch: reference,
+                notes_doc,
+                graph_doc,
+                trace_doc,
+            },
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let notes_slice = match self.store.doc_show_tail(
+            &workspace,
+            &scope.branch,
+            &scope.notes_doc,
+            None,
+            notes_limit,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let trace_slice = match self.store.doc_show_tail(
+            &workspace,
+            &scope.branch,
+            &scope.trace_doc,
+            None,
+            trace_limit,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let notes_entries = notes_slice
+            .entries
+            .into_iter()
+            .map(|e| match e.kind {
+                bm_storage::DocEntryKind::Note => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "title": e.title,
+                    "format": e.format,
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "content": e.content
+                }),
+                bm_storage::DocEntryKind::Event => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "event_id": e.source_event_id,
+                    "event_type": e.event_type,
+                    "task_id": e.task_id,
+                    "path": e.path
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let trace_entries = trace_slice
+            .entries
+            .into_iter()
+            .map(|e| match e.kind {
+                bm_storage::DocEntryKind::Note => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "title": e.title,
+                    "format": e.format,
+                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                    "content": e.content
+                }),
+                bm_storage::DocEntryKind::Event => json!({
+                    "seq": e.seq,
+                    "ts": ts_ms_to_rfc3339(e.ts_ms),
+                    "ts_ms": e.ts_ms,
+                    "kind": e.kind.as_str(),
+                    "event_id": e.source_event_id,
+                    "event_type": e.event_type,
+                    "task_id": e.task_id,
+                    "path": e.path
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
+        let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        let slice = match self.store.graph_query(
+            &workspace,
+            &scope.branch,
+            &scope.graph_doc,
+            bm_storage::GraphQueryRequest {
+                ids: None,
+                types: Some(types),
+                status: None,
+                tags_any: None,
+                tags_all: None,
+                text: None,
+                cursor: None,
+                limit: limit_cards,
+                include_edges: false,
+                edges_limit: 0,
+            },
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let cards = graph_nodes_to_cards(slice.nodes);
+        let mut by_type = std::collections::BTreeMap::<String, u64>::new();
+        for card in &cards {
+            if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
+                *by_type.entry(ty.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        let notes_count = notes_entries.len();
+        let trace_count = trace_entries.len();
+        let card_count = cards.len();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branch": scope.branch,
+            "docs": {
+                "notes": scope.notes_doc,
+                "trace": scope.trace_doc,
+                "graph": scope.graph_doc
+            },
+            "notes": {
+                "entries": notes_entries,
+                "pagination": {
+                    "cursor": Value::Null,
+                    "next_cursor": notes_slice.next_cursor,
+                    "has_more": notes_slice.has_more,
+                    "limit": notes_limit,
+                    "count": notes_count
+                }
+            },
+            "trace": {
+                "entries": trace_entries,
+                "pagination": {
+                    "cursor": Value::Null,
+                    "next_cursor": trace_slice.next_cursor,
+                    "has_more": trace_slice.has_more,
+                    "limit": trace_limit,
+                    "count": trace_count
+                }
+            },
+            "stats": {
+                "cards": card_count,
+                "by_type": by_type
+            },
+            "cards": cards,
+            "truncated": false
+        });
+
+        redact_value(&mut result, 6);
+
+        if let Some(limit) = max_chars {
+            let mut truncated_any = false;
+            for _ in 0..4 {
+                let before = result
+                    .get("cards")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                let (_used, cards_truncated) =
+                    enforce_graph_list_budget(&mut result, "cards", limit);
+                let after = result
+                    .get("cards")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                truncated_any = truncated_any || cards_truncated;
+                if after < before {
+                    let mut by_type = std::collections::BTreeMap::<String, u64>::new();
+                    if let Some(arr) = result.get("cards").and_then(|v| v.as_array()) {
+                        for card in arr {
+                            if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
+                                *by_type.entry(ty.to_string()).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                    if let Some(stats) = result.get_mut("stats").and_then(|v| v.as_object_mut()) {
+                        stats.insert(
+                            "cards".to_string(),
+                            Value::Number(serde_json::Number::from(after as u64)),
+                        );
+                        stats.insert("by_type".to_string(), json!(by_type));
+                    }
+                }
+
+                let (_used, export_truncated) =
+                    enforce_branchmind_export_budget(&mut result, limit);
+                truncated_any = truncated_any || export_truncated;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated_any));
+                }
+                let used = attach_budget(&mut result, limit, truncated_any);
+                if used <= limit {
+                    break;
+                }
+            }
+        }
+
+        ai_ok("branchmind_context_pack", result)
+    }
+
     fn tool_branchmind_export(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -11134,6 +11314,26 @@ fn tool_definitions() -> Vec<Value> {
                     "dry_run": { "type": "boolean" }
                 },
                 "required": ["workspace", "from", "into"]
+            }
+        }),
+        json!({
+            "name": "branchmind_context_pack",
+            "description": "Bounded resumption pack that merges notes, trace, and graph cards into one response.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "ref": { "type": "string" },
+                    "notes_doc": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "notes_limit": { "type": "integer" },
+                    "trace_limit": { "type": "integer" },
+                    "limit_cards": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
             }
         }),
         json!({
@@ -12856,6 +13056,32 @@ fn require_checkout_branch(
         )),
         Err(err) => Err(ai_error("STORE_ERROR", &format_store_error(err))),
     }
+}
+
+fn unknown_branch_error(workspace: &WorkspaceId) -> Value {
+    ai_error_with(
+        "UNKNOWN_ID",
+        "Unknown branch",
+        Some("Call branchmind_branch_list to discover existing branches, then retry."),
+        vec![suggest_call(
+            "branchmind_branch_list",
+            "List known branches for this workspace.",
+            "high",
+            json!({ "workspace": workspace.as_str() }),
+        )],
+    )
+}
+
+fn ensure_nonempty_doc(doc: &Option<String>, key: &str) -> Result<(), Value> {
+    if let Some(doc) = doc.as_ref() {
+        if doc.trim().is_empty() {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!("{key} must not be empty"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn require_string(args: &serde_json::Map<String, Value>, key: &str) -> Result<String, Value> {

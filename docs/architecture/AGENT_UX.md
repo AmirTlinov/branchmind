@@ -29,3 +29,15 @@ If an operation fails due to a fixable precondition, return:
 
 All potentially large responses must be bounded and must expose truncation explicitly.
 
+## 6) Scope resolution invariants
+
+- `target` (PLAN/TASK) defines the canonical branch + docs; overrides are not allowed.
+- If `target` is absent, explicit `ref`/`branch` wins; otherwise fallback to checkout.
+- Doc keys default to `notes` / `graph` / `trace` unless explicitly provided.
+- Empty doc identifiers are invalid (explicit error).
+
+## 7) DX pain points → invariants
+
+- Pain: ambiguous scope inputs (`target` + overrides) → Invariant: strict mutual exclusivity.
+- Pain: multi-call resumption → Invariant: provide a single bounded context pack.
+- Pain: inconsistent errors → Invariant: typed errors + one recovery suggestion.

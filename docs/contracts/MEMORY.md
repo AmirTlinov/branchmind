@@ -616,9 +616,12 @@ Moves a ref pointer to a specified commit entry.
 
 Defaults:
 
-- Think tools accept `target` (plan/task) or explicit `(ref, graph_doc)` inputs.
-  When `target` is provided, `ref`/`graph_doc` must be omitted and
+- Think tools accept `target` (plan/task) or explicit branch/ref + doc overrides
+  (see each tool schema for exact field names).
+- When `target` is provided, branch/ref/doc overrides must be omitted and
   branch/docs are resolved from the target reasoning reference.
+- If `target` is absent, explicit `branch`/`ref` wins; otherwise fallback to checkout.
+- Doc keys default to `notes` / `graph` / `trace` when supported by the tool.
 
 ### `branchmind_think_add_hypothesis` / `branchmind_think_add_question` / `branchmind_think_add_test` / `branchmind_think_add_note` / `branchmind_think_add_decision` / `branchmind_think_add_evidence` / `branchmind_think_add_frame` / `branchmind_think_add_update`
 
@@ -634,6 +637,26 @@ Input: `{ workspace, target?, graph_doc?, ref?, ids?, status?, tags_any?, tags_a
 ### `branchmind_think_pack`
 
 Bounded low-noise pack: a compact `think_context` + stats summary.
+
+### `branchmind_context_pack`
+
+Bounded resumption pack that merges **notes**, **trace**, and **graph cards** into one response.
+
+Input (one of):
+
+- `{ workspace, target, notes_limit?, trace_limit?, limit_cards?, max_chars? }`
+- `{ workspace, ref?, notes_doc?, trace_doc?, graph_doc?, notes_limit?, trace_limit?, limit_cards?, max_chars? }`
+
+Defaults:
+
+- If `target` is provided, `ref`/`notes_doc`/`trace_doc`/`graph_doc` must be omitted.
+- If `ref` is omitted, the current checkout branch is used.
+- `notes_doc=notes`, `trace_doc=trace`, `graph_doc=graph`.
+- `notes_limit=20`, `trace_limit=50`, `limit_cards=30`.
+
+Output:
+
+- `{ branch, docs:{ notes, trace, graph }, notes:{...}, trace:{...}, cards:[...], stats:{...}, truncated }`
 
 ### `branchmind_think_frontier` / `branchmind_think_next`
 
@@ -689,7 +712,8 @@ Validate trace invariants (ordering, required fields).
 Defaults:
 
 - Trace tools accept `target` (plan/task) or explicit `(ref, doc)` / `(doc)` inputs.
-  When `target` is provided, branch/doc are resolved from the target reasoning reference.
+- When `target` is provided, branch/doc are resolved from the target reasoning reference
+  and overrides must be omitted.
 
 ## Tool groups (future)
 
