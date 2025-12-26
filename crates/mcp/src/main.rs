@@ -59,6 +59,13 @@ struct McpServer {
     store: SqliteStore,
 }
 
+struct RadarContext {
+    target: Value,
+    reasoning_ref: Value,
+    radar: Value,
+    steps: Option<Value>,
+}
+
 impl McpServer {
     fn new(store: SqliteStore) -> Self {
         Self {
@@ -174,6 +181,11 @@ impl McpServer {
             "tasks_focus_set" => self.tool_tasks_focus_set(args),
             "tasks_focus_clear" => self.tool_tasks_focus_clear(args),
             "tasks_radar" => self.tool_tasks_radar(args),
+            "tasks_resume" => self.tool_tasks_resume(args),
+            "tasks_context_pack" => self.tool_tasks_context_pack(args),
+            "tasks_mirror" => self.tool_tasks_mirror(args),
+            "tasks_handoff" => self.tool_tasks_handoff(args),
+            "tasks_lint" => self.tool_tasks_lint(args),
             "branchmind_init" => self.tool_branchmind_init(args),
             "branchmind_status" => self.tool_branchmind_status(args),
             "branchmind_branch_create" => self.tool_branchmind_branch_create(args),
@@ -3783,213 +3795,30 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let requested_task = args_obj
-            .get("task")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let focus = match self.store.focus_get(&workspace) {
-            Ok(v) => v,
-            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-        };
-
-        let target_id = requested_task.or(focus.clone());
-        let Some(target_id) = target_id else {
-            return ai_error_with(
-                "INVALID_INPUT",
-                "No target: provide task or set focus",
-                Some("Call tasks_context to list ids, then set focus with tasks_focus_set."),
-                vec![suggest_call(
-                    "tasks_context",
-                    "List plans and tasks for this workspace to choose a focus target.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        };
-
-        let kind = if target_id.starts_with("PLAN-") {
-            TaskKind::Plan
-        } else if target_id.starts_with("TASK-") {
-            TaskKind::Task
-        } else {
-            return ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-");
-        };
-
-        let target = match kind {
-            TaskKind::Plan => match self.store.get_plan(&workspace, &target_id) {
-                Ok(Some(p)) => json!({
-                    "id": p.id,
-                    "kind": "plan",
-                    "revision": p.revision,
-                    "title": p.title,
-                    "contract": p.contract,
-                    "contract_data": parse_json_or_null(p.contract_json),
-                    "created_at_ms": p.created_at_ms,
-                    "updated_at_ms": p.updated_at_ms
-                }),
-                Ok(None) => return ai_error("UNKNOWN_ID", "Unknown id"),
-                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-            },
-            TaskKind::Task => match self.store.get_task(&workspace, &target_id) {
-                Ok(Some(t)) => json!({
-                    "id": t.id,
-                    "kind": "task",
-                    "revision": t.revision,
-                    "parent": t.parent_plan_id,
-                    "title": t.title,
-                    "description": t.description,
-                    "created_at_ms": t.created_at_ms,
-                    "updated_at_ms": t.updated_at_ms
-                }),
-                Ok(None) => return ai_error("UNKNOWN_ID", "Unknown id"),
-                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-            },
-        };
-
-        let reasoning_ref = match self
-            .store
-            .ensure_reasoning_ref(&workspace, &target_id, kind)
+        let (target_id, kind, focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
         {
-            Ok(r) => json!({
-                "branch": r.branch,
-                "notes_doc": r.notes_doc,
-                "graph_doc": r.graph_doc,
-                "trace_doc": r.trace_doc
-            }),
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+            Ok(v) => v,
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        let now = match kind {
-            TaskKind::Plan => format!(
-                "Plan {}: {}",
-                target_id,
-                target.get("title").and_then(|v| v.as_str()).unwrap_or("")
-            ),
-            TaskKind::Task => format!(
-                "Task {}: {}",
-                target_id,
-                target.get("title").and_then(|v| v.as_str()).unwrap_or("")
-            ),
-        };
-
-        let why = match kind {
-            TaskKind::Plan => target
-                .get("contract")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            TaskKind::Task => target
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-        };
-
-        let mut verify = Vec::<String>::new();
-        let mut next = Vec::<String>::new();
-        let mut blockers = Vec::<String>::new();
-        let mut steps_summary: Option<Value> = None;
-
-        if kind == TaskKind::Task {
-            match self.store.task_steps_summary(&workspace, &target_id) {
-                Ok(summary) => {
-                    steps_summary = Some(json!({
-                        "total": summary.total_steps,
-                        "open": summary.open_steps,
-                        "completed": summary.completed_steps,
-                        "missing_criteria": summary.missing_criteria,
-                        "missing_tests": summary.missing_tests,
-                        "missing_security": summary.missing_security,
-                        "missing_perf": summary.missing_perf,
-                        "missing_docs": summary.missing_docs,
-                        "first_open": summary.first_open.as_ref().map(|s| json!({
-                            "step_id": s.step_id,
-                            "path": s.path,
-                            "title": s.title,
-                            "criteria_confirmed": s.criteria_confirmed,
-                            "tests_confirmed": s.tests_confirmed,
-                            "security_confirmed": s.security_confirmed,
-                            "perf_confirmed": s.perf_confirmed,
-                            "docs_confirmed": s.docs_confirmed
-                        }))
-                    }));
-
-                    if summary.total_steps == 0 {
-                        next.push("Add steps with tasks_decompose".to_string());
-                    } else {
-                        if summary.missing_criteria > 0 {
-                            verify.push(format!(
-                                "Missing criteria checkpoints: {}",
-                                summary.missing_criteria
-                            ));
-                        }
-                        if summary.missing_tests > 0 {
-                            verify.push(format!(
-                                "Missing tests checkpoints: {}",
-                                summary.missing_tests
-                            ));
-                        }
-                        if summary.missing_security > 0 {
-                            verify.push(format!(
-                                "Missing security checkpoints: {}",
-                                summary.missing_security
-                            ));
-                        }
-                        if summary.missing_perf > 0 {
-                            verify.push(format!(
-                                "Missing perf checkpoints: {}",
-                                summary.missing_perf
-                            ));
-                        }
-                        if summary.missing_docs > 0 {
-                            verify.push(format!(
-                                "Missing docs checkpoints: {}",
-                                summary.missing_docs
-                            ));
-                        }
-
-                        if let Some(first) = summary.first_open {
-                            let require_security = summary.missing_security > 0;
-                            let require_perf = summary.missing_perf > 0;
-                            let require_docs = summary.missing_docs > 0;
-                            if !first.criteria_confirmed
-                                || !first.tests_confirmed
-                                || (require_security && !first.security_confirmed)
-                                || (require_perf && !first.perf_confirmed)
-                                || (require_docs && !first.docs_confirmed)
-                            {
-                                next.push(format!("Confirm checkpoints for {}", first.path));
-                            } else {
-                                next.push(format!("Close next step {}", first.path));
-                            }
-                        }
-                    }
-                }
-                Err(StoreError::UnknownId) => {}
-                Err(_) => {}
-            }
-
-            if let Ok(items) = self.store.task_open_blockers(&workspace, &target_id, 10) {
-                blockers = items;
-            }
-        }
-
         let mut result = json!({
             "workspace": workspace.as_str(),
-            "requested": { "task": args_obj.get("task").cloned().unwrap_or(Value::Null) },
+            "requested": {
+                "task": args_obj.get("task").cloned().unwrap_or(Value::Null),
+                "plan": args_obj.get("plan").cloned().unwrap_or(Value::Null)
+            },
             "focus": focus,
-            "target": target,
-            "reasoning_ref": reasoning_ref,
-            "radar": {
-                "now": now,
-                "why": why,
-                "verify": verify,
-                "next": next,
-                "blockers": blockers
-            }
+            "target": context.target,
+            "reasoning_ref": context.reasoning_ref,
+            "radar": context.radar
         });
-        if let Some(steps) = steps_summary {
+        if let Some(steps) = context.steps {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("steps".to_string(), steps);
             }
@@ -4005,6 +3834,492 @@ impl McpServer {
         }
 
         ai_ok("radar", result)
+    }
+
+    fn tool_tasks_resume(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let events_limit = args_obj
+            .get("events_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(20);
+
+        let (target_id, kind, focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut events = if events_limit == 0 {
+            Vec::new()
+        } else {
+            match self
+                .store
+                .list_events_for_task(&workspace, &target_id, events_limit)
+            {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        };
+        events.reverse();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "requested": {
+                "task": args_obj.get("task").cloned().unwrap_or(Value::Null),
+                "plan": args_obj.get("plan").cloned().unwrap_or(Value::Null)
+            },
+            "focus": focus,
+            "target": context.target,
+            "reasoning_ref": context.reasoning_ref,
+            "radar": context.radar,
+            "timeline": {
+                "limit": events_limit,
+                "events": events_to_json(events)
+            }
+        });
+        if let Some(steps) = context.steps {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("steps".to_string(), steps);
+            }
+        }
+
+        ai_ok("resume", result)
+    }
+
+    fn tool_tasks_context_pack(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let delta_limit = args_obj
+            .get("delta_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(50);
+
+        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut events = if delta_limit == 0 {
+            Vec::new()
+        } else {
+            match self
+                .store
+                .list_events_for_task(&workspace, &target_id, delta_limit)
+            {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        };
+        events.reverse();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "target": context.target,
+            "radar": context.radar,
+            "delta": {
+                "limit": delta_limit,
+                "events": events_to_json(events)
+            }
+        });
+        if let Some(steps) = context.steps {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("steps".to_string(), steps);
+            }
+        }
+
+        if let Some(limit) = max_chars {
+            let mut truncated = false;
+            if let Some(delta) = result.get_mut("delta") {
+                let (_used, list_truncated) = enforce_graph_list_budget(delta, "events", limit);
+                truncated |= list_truncated;
+            }
+            let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
+            let _ = attach_budget(&mut result, limit, truncated || truncated2);
+        }
+
+        ai_ok("context_pack", result)
+    }
+
+    fn tool_tasks_mirror(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let limit = args_obj
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(50);
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let result = match kind {
+            TaskKind::Plan => {
+                if path.is_some() {
+                    return ai_error("INVALID_INPUT", "path is not supported for plan mirror");
+                }
+                let plan = match self.store.get_plan(&workspace, &target_id) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let checklist = match self.store.plan_checklist_get(&workspace, &target_id) {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let tasks = match self
+                    .store
+                    .list_tasks_for_plan(&workspace, &target_id, limit, 0)
+                {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                json!({
+                    "scope": { "id": plan.id, "kind": "plan" },
+                    "plan": {
+                        "id": plan.id,
+                        "title": plan.title,
+                        "revision": plan.revision,
+                        "status": plan.status
+                    },
+                    "checklist": {
+                        "doc": checklist.doc,
+                        "current": checklist.current,
+                        "steps": checklist.steps
+                    },
+                    "tasks": tasks.into_iter().map(|t| json!({
+                        "id": t.id,
+                        "title": t.title,
+                        "status": t.status,
+                        "revision": t.revision
+                    })).collect::<Vec<_>>()
+                })
+            }
+            TaskKind::Task => {
+                let steps = match self
+                    .store
+                    .list_task_steps(&workspace, &target_id, path.as_ref(), limit)
+                {
+                    Ok(v) => v,
+                    Err(StoreError::StepNotFound) => return ai_error("UNKNOWN_ID", "Step not found"),
+                    Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                json!({
+                    "scope": { "id": target_id, "kind": "task" },
+                    "steps": steps.into_iter().map(|s| json!({
+                        "step_id": s.step_id,
+                        "path": s.path,
+                        "title": s.title,
+                        "completed": s.completed,
+                        "criteria_confirmed": s.criteria_confirmed,
+                        "tests_confirmed": s.tests_confirmed,
+                        "security_confirmed": s.security_confirmed,
+                        "perf_confirmed": s.perf_confirmed,
+                        "docs_confirmed": s.docs_confirmed,
+                        "blocked": s.blocked,
+                        "block_reason": s.block_reason
+                    })).collect::<Vec<_>>()
+                })
+            }
+        };
+
+        ai_ok("mirror", result)
+    }
+
+    fn tool_tasks_handoff(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let (done, remaining, risks) = match kind {
+            TaskKind::Plan => {
+                let checklist = match self.store.plan_checklist_get(&workspace, &target_id) {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let total = checklist.steps.len() as i64;
+                let done_count = checklist.current.min(total).max(0);
+                let mut remaining = Vec::new();
+                if total == 0 {
+                    remaining.push("Checklist is empty".to_string());
+                } else if (checklist.current as usize) < checklist.steps.len() {
+                    remaining.push(format!(
+                        "Next checklist item: {}",
+                        checklist.steps[checklist.current as usize]
+                    ));
+                }
+                (vec![format!("Checklist progress: {done_count}/{total}")], remaining, Vec::new())
+            }
+            TaskKind::Task => match self.store.task_steps_summary(&workspace, &target_id) {
+                Ok(summary) => {
+                    let mut remaining = Vec::new();
+                    if summary.total_steps == 0 {
+                        remaining.push("No steps defined".to_string());
+                    } else {
+                        remaining.push(format!("Open steps: {}", summary.open_steps));
+                        if let Some(first) = summary.first_open {
+                            remaining.push(format!("Next open step: {}", first.path));
+                        }
+                    }
+                    let mut risks = Vec::new();
+                    if summary.missing_criteria > 0 {
+                        risks.push(format!(
+                            "Missing criteria checkpoints: {}",
+                            summary.missing_criteria
+                        ));
+                    }
+                    if summary.missing_tests > 0 {
+                        risks.push(format!(
+                            "Missing tests checkpoints: {}",
+                            summary.missing_tests
+                        ));
+                    }
+                    if summary.missing_security > 0 {
+                        risks.push(format!(
+                            "Missing security checkpoints: {}",
+                            summary.missing_security
+                        ));
+                    }
+                    if summary.missing_perf > 0 {
+                        risks.push(format!(
+                            "Missing perf checkpoints: {}",
+                            summary.missing_perf
+                        ));
+                    }
+                    if summary.missing_docs > 0 {
+                        risks.push(format!(
+                            "Missing docs checkpoints: {}",
+                            summary.missing_docs
+                        ));
+                    }
+                    if let Ok(blockers) = self.store.task_open_blockers(&workspace, &target_id, 10) {
+                        if !blockers.is_empty() {
+                            risks.push(format!("Open blockers: {}", blockers.len()));
+                        }
+                    }
+                    (
+                        vec![format!(
+                            "Completed steps: {}/{}",
+                            summary.completed_steps, summary.total_steps
+                        )],
+                        remaining,
+                        risks,
+                    )
+                }
+                Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            },
+        };
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "target": context.target,
+            "radar": context.radar,
+            "handoff": {
+                "done": done,
+                "remaining": remaining,
+                "risks": risks
+            }
+        });
+        if let Some(steps) = context.steps {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("steps".to_string(), steps);
+            }
+        }
+
+        if let Some(limit) = max_chars {
+            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
+                let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            }
+        }
+
+        ai_ok("handoff", result)
+    }
+
+    fn tool_tasks_lint(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
+        {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let mut issues = Vec::new();
+        match kind {
+            TaskKind::Plan => {
+                let checklist = match self.store.plan_checklist_get(&workspace, &target_id) {
+                    Ok(v) => v,
+                    Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let total = checklist.steps.len() as i64;
+                if total == 0 {
+                    issues.push(json!({
+                        "severity": "warning",
+                        "code": "NO_CHECKLIST",
+                        "message": "plan checklist is empty"
+                    }));
+                }
+                if checklist.current < 0 || checklist.current > total {
+                    issues.push(json!({
+                        "severity": "error",
+                        "code": "CHECKLIST_INDEX_OUT_OF_RANGE",
+                        "message": format!("plan_current out of range: {}", checklist.current)
+                    }));
+                }
+            }
+            TaskKind::Task => match self.store.task_steps_summary(&workspace, &target_id) {
+                Ok(summary) => {
+                    if summary.total_steps == 0 {
+                        issues.push(json!({
+                            "severity": "warning",
+                            "code": "NO_STEPS",
+                            "message": "task has no steps"
+                        }));
+                    }
+                    if summary.missing_criteria > 0 {
+                        issues.push(json!({
+                            "severity": "warning",
+                            "code": "MISSING_CRITERIA",
+                            "message": format!("missing criteria checkpoints: {}", summary.missing_criteria)
+                        }));
+                    }
+                    if summary.missing_tests > 0 {
+                        issues.push(json!({
+                            "severity": "warning",
+                            "code": "MISSING_TESTS",
+                            "message": format!("missing tests checkpoints: {}", summary.missing_tests)
+                        }));
+                    }
+                    if summary.missing_security > 0 {
+                        issues.push(json!({
+                            "severity": "warning",
+                            "code": "MISSING_SECURITY",
+                            "message": format!("missing security checkpoints: {}", summary.missing_security)
+                        }));
+                    }
+                    if summary.missing_perf > 0 {
+                        issues.push(json!({
+                            "severity": "warning",
+                            "code": "MISSING_PERF",
+                            "message": format!("missing perf checkpoints: {}", summary.missing_perf)
+                        }));
+                    }
+                    if summary.missing_docs > 0 {
+                        issues.push(json!({
+                            "severity": "warning",
+                            "code": "MISSING_DOCS",
+                            "message": format!("missing docs checkpoints: {}", summary.missing_docs)
+                        }));
+                    }
+                    if let Ok(blockers) = self.store.task_open_blockers(&workspace, &target_id, 1) {
+                        if !blockers.is_empty() {
+                            issues.push(json!({
+                                "severity": "warning",
+                                "code": "BLOCKED_STEPS",
+                                "message": "task has blocked steps"
+                            }));
+                        }
+                    }
+                }
+                Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            },
+        }
+
+        let (errors, warnings) = issues.iter().fold((0, 0), |acc, item| {
+            match item.get("severity").and_then(|v| v.as_str()) {
+                Some("error") => (acc.0 + 1, acc.1),
+                Some("warning") => (acc.0, acc.1 + 1),
+                _ => acc,
+            }
+        });
+
+        ai_ok(
+            "lint",
+            json!({
+                "workspace": workspace.as_str(),
+                "target": { "id": target_id, "kind": kind.as_str() },
+                "summary": {
+                    "errors": errors,
+                    "warnings": warnings,
+                    "total": errors + warnings
+                },
+                "issues": issues
+            }),
+        )
     }
 
     fn tool_branchmind_init(&mut self, args: Value) -> Value {
@@ -7592,6 +7907,77 @@ fn tool_definitions() -> Vec<Value> {
                 "required": ["workspace"]
             }
         }),
+        json!({
+            "name": "tasks_resume",
+            "description": "Load a plan/task with optional timeline events.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "events_limit": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_context_pack",
+            "description": "Bounded summary: radar + delta slice.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "max_chars": { "type": "integer" },
+                    "delta_limit": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_mirror",
+            "description": "Export a compact plan/task slice for external consumers.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "path": { "type": "string" },
+                    "limit": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_handoff",
+            "description": "Shift report: done/remaining/risks + radar core.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_lint",
+            "description": "Read-only integrity checks for a plan/task.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" }
+                },
+                "required": ["workspace"]
+            }
+        }),
     ]
 }
 
@@ -7617,6 +8003,232 @@ fn parse_plan_or_task_kind(id: &str) -> Option<TaskKind> {
     } else {
         None
     }
+}
+
+fn resolve_target_id(
+    store: &mut SqliteStore,
+    workspace: &WorkspaceId,
+    args: &serde_json::Map<String, Value>,
+) -> Result<(String, TaskKind, Option<String>), Value> {
+    let task = args.get("task").and_then(|v| v.as_str());
+    let plan = args.get("plan").and_then(|v| v.as_str());
+    if task.is_some() && plan.is_some() {
+        return Err(ai_error("INVALID_INPUT", "provide task or plan, not both"));
+    }
+
+    let focus = match store.focus_get(workspace) {
+        Ok(v) => v,
+        Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+    };
+
+    let target_id = task
+        .map(|v| v.to_string())
+        .or_else(|| plan.map(|v| v.to_string()))
+        .or_else(|| focus.clone());
+    let Some(target_id) = target_id else {
+        return Err(ai_error_with(
+            "INVALID_INPUT",
+            "No target: provide task or plan, or set focus",
+            Some("Call tasks_context to list ids, then set focus with tasks_focus_set."),
+            vec![suggest_call(
+                "tasks_context",
+                "List plans and tasks for this workspace to choose a focus target.",
+                "high",
+                json!({ "workspace": workspace.as_str() }),
+            )],
+        ));
+    };
+
+    let kind = if target_id.starts_with("PLAN-") {
+        TaskKind::Plan
+    } else if target_id.starts_with("TASK-") {
+        TaskKind::Task
+    } else {
+        return Err(ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-"));
+    };
+
+    Ok((target_id, kind, focus))
+}
+
+fn build_radar_context(
+    store: &mut SqliteStore,
+    workspace: &WorkspaceId,
+    target_id: &str,
+    kind: TaskKind,
+) -> Result<RadarContext, StoreError> {
+    let target = match kind {
+        TaskKind::Plan => match store.get_plan(workspace, target_id)? {
+            Some(p) => json!({
+                "id": p.id,
+                "kind": "plan",
+                "revision": p.revision,
+                "title": p.title,
+                "contract": p.contract,
+                "contract_data": parse_json_or_null(p.contract_json),
+                "created_at_ms": p.created_at_ms,
+                "updated_at_ms": p.updated_at_ms
+            }),
+            None => return Err(StoreError::UnknownId),
+        },
+        TaskKind::Task => match store.get_task(workspace, target_id)? {
+            Some(t) => json!({
+                "id": t.id,
+                "kind": "task",
+                "revision": t.revision,
+                "parent": t.parent_plan_id,
+                "title": t.title,
+                "description": t.description,
+                "created_at_ms": t.created_at_ms,
+                "updated_at_ms": t.updated_at_ms
+            }),
+            None => return Err(StoreError::UnknownId),
+        },
+    };
+
+    let reasoning_ref = store.ensure_reasoning_ref(workspace, target_id, kind)?;
+    let reasoning_ref_json = json!({
+        "branch": reasoning_ref.branch,
+        "notes_doc": reasoning_ref.notes_doc,
+        "graph_doc": reasoning_ref.graph_doc,
+        "trace_doc": reasoning_ref.trace_doc
+    });
+
+    let now = match kind {
+        TaskKind::Plan => format!(
+            "Plan {}: {}",
+            target_id,
+            target.get("title").and_then(|v| v.as_str()).unwrap_or("")
+        ),
+        TaskKind::Task => format!(
+            "Task {}: {}",
+            target_id,
+            target.get("title").and_then(|v| v.as_str()).unwrap_or("")
+        ),
+    };
+
+    let why = match kind {
+        TaskKind::Plan => target
+            .get("contract")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        TaskKind::Task => target
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    };
+
+    let mut verify = Vec::<String>::new();
+    let mut next = Vec::<String>::new();
+    let mut blockers = Vec::<String>::new();
+    let mut steps_summary: Option<Value> = None;
+
+    if kind == TaskKind::Task {
+        if let Ok(summary) = store.task_steps_summary(workspace, target_id) {
+            steps_summary = Some(json!({
+                "total": summary.total_steps,
+                "open": summary.open_steps,
+                "completed": summary.completed_steps,
+                "missing_criteria": summary.missing_criteria,
+                "missing_tests": summary.missing_tests,
+                "missing_security": summary.missing_security,
+                "missing_perf": summary.missing_perf,
+                "missing_docs": summary.missing_docs,
+                "first_open": summary.first_open.as_ref().map(|s| json!({
+                    "step_id": s.step_id,
+                    "path": s.path,
+                    "title": s.title,
+                    "criteria_confirmed": s.criteria_confirmed,
+                    "tests_confirmed": s.tests_confirmed,
+                    "security_confirmed": s.security_confirmed,
+                    "perf_confirmed": s.perf_confirmed,
+                    "docs_confirmed": s.docs_confirmed
+                }))
+            }));
+
+            if summary.total_steps == 0 {
+                next.push("Add steps with tasks_decompose".to_string());
+            } else {
+                if summary.missing_criteria > 0 {
+                    verify.push(format!(
+                        "Missing criteria checkpoints: {}",
+                        summary.missing_criteria
+                    ));
+                }
+                if summary.missing_tests > 0 {
+                    verify.push(format!(
+                        "Missing tests checkpoints: {}",
+                        summary.missing_tests
+                    ));
+                }
+                if summary.missing_security > 0 {
+                    verify.push(format!(
+                        "Missing security checkpoints: {}",
+                        summary.missing_security
+                    ));
+                }
+                if summary.missing_perf > 0 {
+                    verify.push(format!("Missing perf checkpoints: {}", summary.missing_perf));
+                }
+                if summary.missing_docs > 0 {
+                    verify.push(format!("Missing docs checkpoints: {}", summary.missing_docs));
+                }
+
+                if let Some(first) = summary.first_open {
+                    let require_security = summary.missing_security > 0;
+                    let require_perf = summary.missing_perf > 0;
+                    let require_docs = summary.missing_docs > 0;
+                    if !first.criteria_confirmed
+                        || !first.tests_confirmed
+                        || (require_security && !first.security_confirmed)
+                        || (require_perf && !first.perf_confirmed)
+                        || (require_docs && !first.docs_confirmed)
+                    {
+                        next.push(format!("Confirm checkpoints for {}", first.path));
+                    } else {
+                        next.push(format!("Close next step {}", first.path));
+                    }
+                }
+            }
+        }
+
+        if let Ok(items) = store.task_open_blockers(workspace, target_id, 10) {
+            blockers = items;
+        }
+    }
+
+    let radar = json!({
+        "now": now,
+        "why": why,
+        "verify": verify,
+        "next": next,
+        "blockers": blockers
+    });
+
+    Ok(RadarContext {
+        target,
+        reasoning_ref: reasoning_ref_json,
+        radar,
+        steps: steps_summary,
+    })
+}
+
+fn events_to_json(events: Vec<bm_storage::EventRow>) -> Vec<Value> {
+    events
+        .into_iter()
+        .map(|event| {
+            json!({
+                "event_id": event.event_id(),
+                "ts": ts_ms_to_rfc3339(event.ts_ms),
+                "ts_ms": event.ts_ms,
+                "task_id": event.task_id,
+                "path": event.path,
+                "type": event.event_type,
+                "payload": parse_json_or_string(&event.payload_json)
+            })
+        })
+        .collect()
 }
 
 fn batch_tool_allowed(name: &str) -> bool {

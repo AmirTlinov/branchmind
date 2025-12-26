@@ -10,6 +10,7 @@ use bm_core::paths::StepPath;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
 use serde_json::{Value as JsonValue, json};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_BRANCH: &str = "main";
@@ -627,6 +628,21 @@ pub struct StepDetail {
     pub perf_confirmed: bool,
     pub docs_confirmed: bool,
     pub completed: bool,
+    pub blocked: bool,
+    pub block_reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepListRow {
+    pub step_id: String,
+    pub path: String,
+    pub title: String,
+    pub completed: bool,
+    pub criteria_confirmed: bool,
+    pub tests_confirmed: bool,
+    pub security_confirmed: bool,
+    pub perf_confirmed: bool,
+    pub docs_confirmed: bool,
     pub blocked: bool,
     pub block_reason: Option<String>,
 }
@@ -7667,6 +7683,177 @@ impl SqliteStore {
             },
         )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn list_tasks_for_plan(
+        &self,
+        workspace: &WorkspaceId,
+        plan_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<TaskRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, revision, parent_plan_id, title, description,
+                   status, status_manual, priority, blocked,
+                   assignee, domain, phase, component, context,
+                   criteria_confirmed, tests_confirmed, criteria_auto_confirmed, tests_auto_confirmed,
+                   security_confirmed, perf_confirmed, docs_confirmed,
+                   created_at_ms, updated_at_ms
+            FROM tasks
+            WHERE workspace = ?1 AND parent_plan_id = ?2
+            ORDER BY id ASC
+            LIMIT ?3 OFFSET ?4
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            params![workspace.as_str(), plan_id, limit as i64, offset as i64],
+            |row| {
+                Ok(TaskRow {
+                    id: row.get(0)?,
+                    revision: row.get(1)?,
+                    parent_plan_id: row.get(2)?,
+                    title: row.get(3)?,
+                    description: row.get(4)?,
+                    status: row.get(5)?,
+                    status_manual: row.get::<_, i64>(6)? != 0,
+                    priority: row.get(7)?,
+                    blocked: row.get::<_, i64>(8)? != 0,
+                    assignee: row.get(9)?,
+                    domain: row.get(10)?,
+                    phase: row.get(11)?,
+                    component: row.get(12)?,
+                    context: row.get(13)?,
+                    criteria_confirmed: row.get::<_, i64>(14)? != 0,
+                    tests_confirmed: row.get::<_, i64>(15)? != 0,
+                    criteria_auto_confirmed: row.get::<_, i64>(16)? != 0,
+                    tests_auto_confirmed: row.get::<_, i64>(17)? != 0,
+                    security_confirmed: row.get::<_, i64>(18)? != 0,
+                    perf_confirmed: row.get::<_, i64>(19)? != 0,
+                    docs_confirmed: row.get::<_, i64>(20)? != 0,
+                    created_at_ms: row.get(21)?,
+                    updated_at_ms: row.get(22)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn list_events_for_task(
+        &self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        limit: usize,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT seq, ts_ms, task_id, path, type, payload_json
+            FROM events
+            WHERE workspace = ?1 AND task_id = ?2
+            ORDER BY seq DESC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            params![workspace.as_str(), task_id, limit as i64],
+            |row| {
+                Ok(EventRow {
+                    seq: row.get(0)?,
+                    ts_ms: row.get(1)?,
+                    task_id: row.get(2)?,
+                    path: row.get(3)?,
+                    event_type: row.get(4)?,
+                    payload_json: row.get(5)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn list_task_steps(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        parent_path: Option<&StepPath>,
+        limit: usize,
+    ) -> Result<Vec<StepListRow>, StoreError> {
+        let tx = self.conn.transaction()?;
+        let subtree_ids = if let Some(path) = parent_path {
+            let step_id = resolve_step_id_tx(&tx, workspace.as_str(), task_id, path)?;
+            let ids = collect_step_subtree_ids_tx(&tx, workspace.as_str(), task_id, &step_id)?;
+            Some(ids.into_iter().collect::<HashSet<_>>())
+        } else {
+            None
+        };
+
+        let raw_rows = {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT step_id, title, completed, criteria_confirmed, tests_confirmed,
+                       security_confirmed, perf_confirmed, docs_confirmed, blocked, block_reason
+                FROM steps
+                WHERE workspace=?1 AND task_id=?2
+                "#,
+            )?;
+            let rows = stmt.query_map(params![workspace.as_str(), task_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut steps = Vec::new();
+        for row in raw_rows {
+            let (
+                step_id,
+                title,
+                completed,
+                criteria,
+                tests,
+                security,
+                perf,
+                docs,
+                blocked,
+                block_reason,
+            ) = row;
+            if let Some(ref ids) = subtree_ids {
+                if !ids.contains(&step_id) {
+                    continue;
+                }
+            }
+            let path = step_path_for_step_id_tx(&tx, workspace.as_str(), task_id, &step_id)?;
+            steps.push(StepListRow {
+                step_id,
+                path,
+                title,
+                completed: completed != 0,
+                criteria_confirmed: criteria != 0,
+                tests_confirmed: tests != 0,
+                security_confirmed: security != 0,
+                perf_confirmed: perf != 0,
+                docs_confirmed: docs != 0,
+                blocked: blocked != 0,
+                block_reason,
+            });
+        }
+
+        steps.sort_by(|a, b| a.path.cmp(&b.path));
+        if limit > 0 && steps.len() > limit {
+            steps.truncate(limit);
+        }
+
+        tx.commit()?;
+        Ok(steps)
     }
 
     pub fn count_tasks(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {
