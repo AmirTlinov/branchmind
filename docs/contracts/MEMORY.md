@@ -543,6 +543,115 @@ Semantics:
 - `max_chars` truncates by dropping older cards first; truncation must be explicit.
 - If a precondition fails (unknown target/branch), return a typed error and a single best next action suggestion.
 
+## Parity tools (v0.2)
+
+### VCS-style notes helpers
+
+These tools provide a lightweight, notes-focused VCS surface. They are wrappers over
+`documents` + `doc_entries` and do not alter task semantics.
+
+### `branchmind_commit`
+
+Appends a note entry and returns a commit-like record.
+
+Input: `{ workspace, artifact, message, docs? }`
+
+Semantics:
+
+- `artifact` is stored as the note `content`.
+- `docs` defaults to `notes` when omitted.
+
+### `branchmind_log`
+
+Returns recent commit-like entries.
+
+Input: `{ workspace, ref?, limit? }`
+
+Defaults:
+
+- `ref` defaults to the current checkout branch.
+
+### `branchmind_docs_list`
+
+List known documents for a branch/ref.
+
+Input: `{ workspace, ref? }`
+
+### `branchmind_tag_create` / `branchmind_tag_list` / `branchmind_tag_delete`
+
+Create, list, and delete lightweight tags that point to commit entries.
+
+### `branchmind_reflog`
+
+Returns ref movements for the VCS-style surface.
+
+### `branchmind_reset`
+
+Moves a ref pointer to a specified commit entry.
+
+## Think convenience tools (v0.2)
+
+### `branchmind_think_add_hypothesis` / `branchmind_think_add_question` / `branchmind_think_add_test`
+
+Thin wrappers over `branchmind_think_card` that enforce the corresponding `card.type`
+and normalize fields.
+
+### `branchmind_think_query`
+
+Query thinking cards via graph filters.
+
+Input: `{ workspace, graph_doc?, ref?, ids?, status?, tags_any?, tags_all?, text?, limit? }`
+
+### `branchmind_think_pack`
+
+Bounded low-noise pack: a compact `think_context` + stats summary.
+
+### `branchmind_think_frontier` / `branchmind_think_next`
+
+Return prioritized candidates for next actions (by recency + status).
+
+### `branchmind_think_link` / `branchmind_think_set_status`
+
+Graph edge creation and status updates for card nodes.
+
+### `branchmind_think_pin` / `branchmind_think_pins`
+
+Pin/unpin cards and list pins.
+
+### `branchmind_think_nominal_merge`
+
+Deduplicate highly similar cards into a canonical one (idempotent by `card_id`).
+
+### `branchmind_think_playbook`
+
+Return a deterministic playbook skeleton by name.
+
+### `branchmind_think_subgoal_open` / `branchmind_think_subgoal_close`
+
+Open/close a subgoal card that links a parent question to a child trace.
+
+### `branchmind_think_watch`
+
+Return a bounded watch view (frontier + recent trace steps).
+
+## Trace tools (v0.2)
+
+### `branchmind_trace_step`
+
+Append a structured trace step entry.
+
+### `branchmind_trace_sequential_step`
+
+Append a step in a sequential trace (with ordering metadata).
+
+### `branchmind_trace_hydrate`
+
+Return a bounded trace slice for fast resumption.
+
+### `branchmind_trace_validate`
+
+Validate trace invariants (ordering, required fields).
+
 ## Tool groups (future)
 
 - Repo/workspace:

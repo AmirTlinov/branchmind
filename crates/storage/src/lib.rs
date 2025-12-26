@@ -25,7 +25,13 @@ pub enum StoreError {
     BranchCycle,
     BranchDepthExceeded,
     StepNotFound,
-    CheckpointsNotConfirmed { criteria: bool, tests: bool },
+    CheckpointsNotConfirmed {
+        criteria: bool,
+        tests: bool,
+        security: bool,
+        perf: bool,
+        docs: bool,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -49,10 +55,16 @@ impl std::fmt::Display for StoreError {
             Self::BranchCycle => write!(f, "branch base cycle"),
             Self::BranchDepthExceeded => write!(f, "branch base depth exceeded"),
             Self::StepNotFound => write!(f, "step not found"),
-            Self::CheckpointsNotConfirmed { criteria, tests } => {
+            Self::CheckpointsNotConfirmed {
+                criteria,
+                tests,
+                security,
+                perf,
+                docs,
+            } => {
                 write!(
                     f,
-                    "checkpoints not confirmed (criteria={criteria}, tests={tests})"
+                    "checkpoints not confirmed (criteria={criteria}, tests={tests}, security={security}, perf={perf}, docs={docs})"
                 )
             }
         }
@@ -80,8 +92,29 @@ pub struct PlanRow {
     pub title: String,
     pub contract: Option<String>,
     pub contract_json: Option<String>,
+    pub description: Option<String>,
+    pub context: Option<String>,
+    pub status: String,
+    pub status_manual: bool,
+    pub priority: String,
+    pub plan_doc: Option<String>,
+    pub plan_current: i64,
+    pub criteria_confirmed: bool,
+    pub tests_confirmed: bool,
+    pub criteria_auto_confirmed: bool,
+    pub tests_auto_confirmed: bool,
+    pub security_confirmed: bool,
+    pub perf_confirmed: bool,
+    pub docs_confirmed: bool,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanChecklist {
+    pub doc: Option<String>,
+    pub current: i64,
+    pub steps: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +124,22 @@ pub struct TaskRow {
     pub parent_plan_id: String,
     pub title: String,
     pub description: Option<String>,
+    pub status: String,
+    pub status_manual: bool,
+    pub priority: String,
+    pub blocked: bool,
+    pub assignee: Option<String>,
+    pub domain: Option<String>,
+    pub phase: Option<String>,
+    pub component: Option<String>,
+    pub context: Option<String>,
+    pub criteria_confirmed: bool,
+    pub tests_confirmed: bool,
+    pub criteria_auto_confirmed: bool,
+    pub tests_auto_confirmed: bool,
+    pub security_confirmed: bool,
+    pub perf_confirmed: bool,
+    pub docs_confirmed: bool,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -466,6 +515,9 @@ pub struct StepStatus {
     pub title: String,
     pub criteria_confirmed: bool,
     pub tests_confirmed: bool,
+    pub security_confirmed: bool,
+    pub perf_confirmed: bool,
+    pub docs_confirmed: bool,
     pub completed: bool,
 }
 
@@ -476,6 +528,9 @@ pub struct TaskStepSummary {
     pub open_steps: i64,
     pub missing_criteria: i64,
     pub missing_tests: i64,
+    pub missing_security: i64,
+    pub missing_perf: i64,
+    pub missing_docs: i64,
     pub first_open: Option<StepStatus>,
 }
 
@@ -569,6 +624,20 @@ impl SqliteStore {
               title TEXT NOT NULL,
               contract TEXT,
               contract_json TEXT,
+              description TEXT,
+              context TEXT,
+              status TEXT NOT NULL DEFAULT 'TODO',
+              status_manual INTEGER NOT NULL DEFAULT 0,
+              priority TEXT NOT NULL DEFAULT 'MEDIUM',
+              plan_doc TEXT,
+              plan_current INTEGER NOT NULL DEFAULT 0,
+              criteria_confirmed INTEGER NOT NULL DEFAULT 0,
+              tests_confirmed INTEGER NOT NULL DEFAULT 0,
+              criteria_auto_confirmed INTEGER NOT NULL DEFAULT 0,
+              tests_auto_confirmed INTEGER NOT NULL DEFAULT 1,
+              security_confirmed INTEGER NOT NULL DEFAULT 0,
+              perf_confirmed INTEGER NOT NULL DEFAULT 0,
+              docs_confirmed INTEGER NOT NULL DEFAULT 0,
               created_at_ms INTEGER NOT NULL,
               updated_at_ms INTEGER NOT NULL,
               PRIMARY KEY (workspace, id)
@@ -581,6 +650,22 @@ impl SqliteStore {
               parent_plan_id TEXT NOT NULL,
               title TEXT NOT NULL,
               description TEXT,
+              status TEXT NOT NULL DEFAULT 'TODO',
+              status_manual INTEGER NOT NULL DEFAULT 0,
+              priority TEXT NOT NULL DEFAULT 'MEDIUM',
+              blocked INTEGER NOT NULL DEFAULT 0,
+              assignee TEXT,
+              domain TEXT,
+              phase TEXT,
+              component TEXT,
+              context TEXT,
+              criteria_confirmed INTEGER NOT NULL DEFAULT 0,
+              tests_confirmed INTEGER NOT NULL DEFAULT 0,
+              criteria_auto_confirmed INTEGER NOT NULL DEFAULT 0,
+              tests_auto_confirmed INTEGER NOT NULL DEFAULT 1,
+              security_confirmed INTEGER NOT NULL DEFAULT 0,
+              perf_confirmed INTEGER NOT NULL DEFAULT 0,
+              docs_confirmed INTEGER NOT NULL DEFAULT 0,
               created_at_ms INTEGER NOT NULL,
               updated_at_ms INTEGER NOT NULL,
               PRIMARY KEY (workspace, id)
@@ -665,8 +750,18 @@ impl SqliteStore {
               ordinal INTEGER NOT NULL,
               title TEXT NOT NULL,
               completed INTEGER NOT NULL,
+              completed_at_ms INTEGER,
+              started_at_ms INTEGER,
               criteria_confirmed INTEGER NOT NULL,
               tests_confirmed INTEGER NOT NULL,
+              criteria_auto_confirmed INTEGER NOT NULL DEFAULT 0,
+              tests_auto_confirmed INTEGER NOT NULL DEFAULT 1,
+              security_confirmed INTEGER NOT NULL DEFAULT 0,
+              perf_confirmed INTEGER NOT NULL DEFAULT 0,
+              docs_confirmed INTEGER NOT NULL DEFAULT 0,
+              blocked INTEGER NOT NULL DEFAULT 0,
+              block_reason TEXT,
+              verification_outcome TEXT,
               created_at_ms INTEGER NOT NULL,
               updated_at_ms INTEGER NOT NULL,
               PRIMARY KEY (workspace, step_id)
@@ -703,6 +798,112 @@ impl SqliteStore {
               step_id TEXT NOT NULL,
               ts_ms INTEGER NOT NULL,
               note TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plan_checklist (
+              workspace TEXT NOT NULL,
+              plan_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              PRIMARY KEY (workspace, plan_id, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS task_items (
+              workspace TEXT NOT NULL,
+              entity_kind TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              field TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              text TEXT NOT NULL,
+              PRIMARY KEY (workspace, entity_kind, entity_id, field, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS task_nodes (
+              workspace TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              task_id TEXT NOT NULL,
+              parent_step_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              title TEXT NOT NULL,
+              status TEXT NOT NULL,
+              status_manual INTEGER NOT NULL DEFAULT 0,
+              priority TEXT NOT NULL DEFAULT 'MEDIUM',
+              blocked INTEGER NOT NULL DEFAULT 0,
+              description TEXT,
+              context TEXT,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, node_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS evidence_artifacts (
+              workspace TEXT NOT NULL,
+              entity_kind TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              kind TEXT NOT NULL,
+              command TEXT,
+              stdout TEXT,
+              stderr TEXT,
+              exit_code INTEGER,
+              diff TEXT,
+              content TEXT,
+              url TEXT,
+              external_uri TEXT,
+              meta_json TEXT,
+              PRIMARY KEY (workspace, entity_kind, entity_id, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS evidence_checks (
+              workspace TEXT NOT NULL,
+              entity_kind TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              check_text TEXT NOT NULL,
+              PRIMARY KEY (workspace, entity_kind, entity_id, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS evidence_attachments (
+              workspace TEXT NOT NULL,
+              entity_kind TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              attachment TEXT NOT NULL,
+              PRIMARY KEY (workspace, entity_kind, entity_id, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS checkpoint_notes (
+              workspace TEXT NOT NULL,
+              entity_kind TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              checkpoint TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              note TEXT NOT NULL,
+              PRIMARY KEY (workspace, entity_kind, entity_id, checkpoint, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS checkpoint_evidence (
+              workspace TEXT NOT NULL,
+              entity_kind TEXT NOT NULL,
+              entity_id TEXT NOT NULL,
+              checkpoint TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              ref TEXT NOT NULL,
+              PRIMARY KEY (workspace, entity_kind, entity_id, checkpoint, ordinal)
+            );
+
+            CREATE TABLE IF NOT EXISTS ops_history (
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              workspace TEXT NOT NULL,
+              task_id TEXT,
+              path TEXT,
+              intent TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              before_json TEXT,
+              after_json TEXT,
+              undoable INTEGER NOT NULL DEFAULT 1,
+              undone INTEGER NOT NULL DEFAULT 0,
+              ts_ms INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS graph_node_versions (
@@ -814,8 +1015,53 @@ impl SqliteStore {
             CREATE INDEX IF NOT EXISTS idx_steps_lookup ON steps(workspace, task_id, parent_step_id, ordinal);
             CREATE INDEX IF NOT EXISTS idx_steps_task_completed ON steps(workspace, task_id, completed, created_at_ms);
             CREATE INDEX IF NOT EXISTS idx_step_notes_step_seq ON step_notes(workspace, task_id, step_id, seq);
+            CREATE INDEX IF NOT EXISTS idx_task_items_entity ON task_items(workspace, entity_kind, entity_id, field);
+            CREATE INDEX IF NOT EXISTS idx_task_nodes_parent ON task_nodes(workspace, task_id, parent_step_id, ordinal);
+            CREATE INDEX IF NOT EXISTS idx_ops_history_task ON ops_history(workspace, task_id, seq);
             "#,
         )?;
+        add_column_if_missing(&self.conn, "plans", "description", "TEXT")?;
+        add_column_if_missing(&self.conn, "plans", "context", "TEXT")?;
+        add_column_if_missing(&self.conn, "plans", "status", "TEXT NOT NULL DEFAULT 'TODO'")?;
+        add_column_if_missing(&self.conn, "plans", "status_manual", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "plans", "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")?;
+        add_column_if_missing(&self.conn, "plans", "plan_doc", "TEXT")?;
+        add_column_if_missing(&self.conn, "plans", "plan_current", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "plans", "criteria_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "plans", "tests_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "plans", "criteria_auto_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "plans", "tests_auto_confirmed", "INTEGER NOT NULL DEFAULT 1")?;
+        add_column_if_missing(&self.conn, "plans", "security_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "plans", "perf_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "plans", "docs_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+
+        add_column_if_missing(&self.conn, "tasks", "status", "TEXT NOT NULL DEFAULT 'TODO'")?;
+        add_column_if_missing(&self.conn, "tasks", "status_manual", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "tasks", "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")?;
+        add_column_if_missing(&self.conn, "tasks", "blocked", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "tasks", "assignee", "TEXT")?;
+        add_column_if_missing(&self.conn, "tasks", "domain", "TEXT")?;
+        add_column_if_missing(&self.conn, "tasks", "phase", "TEXT")?;
+        add_column_if_missing(&self.conn, "tasks", "component", "TEXT")?;
+        add_column_if_missing(&self.conn, "tasks", "context", "TEXT")?;
+        add_column_if_missing(&self.conn, "tasks", "criteria_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "tasks", "tests_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "tasks", "criteria_auto_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "tasks", "tests_auto_confirmed", "INTEGER NOT NULL DEFAULT 1")?;
+        add_column_if_missing(&self.conn, "tasks", "security_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "tasks", "perf_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "tasks", "docs_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+
+        add_column_if_missing(&self.conn, "steps", "completed_at_ms", "INTEGER")?;
+        add_column_if_missing(&self.conn, "steps", "started_at_ms", "INTEGER")?;
+        add_column_if_missing(&self.conn, "steps", "criteria_auto_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "steps", "tests_auto_confirmed", "INTEGER NOT NULL DEFAULT 1")?;
+        add_column_if_missing(&self.conn, "steps", "security_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "steps", "perf_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "steps", "docs_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "steps", "blocked", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(&self.conn, "steps", "block_reason", "TEXT")?;
+        add_column_if_missing(&self.conn, "steps", "verification_outcome", "TEXT")?;
         self.conn.execute(
             "INSERT OR IGNORE INTO meta(key, value) VALUES (?1, ?2)",
             params!["schema_version", "v0"],
@@ -944,12 +1190,25 @@ impl SqliteStore {
         id: &str,
         expected_revision: Option<i64>,
         title: Option<String>,
+        description: Option<Option<String>>,
+        context: Option<Option<String>>,
+        priority: Option<String>,
+        tags: Option<Vec<String>>,
+        depends_on: Option<Vec<String>>,
         contract: Option<Option<String>>,
         contract_json: Option<Option<String>>,
         event_type: String,
         event_payload_json: String,
     ) -> Result<(i64, EventRow), StoreError> {
-        if title.is_none() && contract.is_none() && contract_json.is_none() {
+        if title.is_none()
+            && description.is_none()
+            && context.is_none()
+            && priority.is_none()
+            && tags.is_none()
+            && depends_on.is_none()
+            && contract.is_none()
+            && contract_json.is_none()
+        {
             return Err(StoreError::InvalidInput("no fields to edit"));
         }
 
@@ -959,7 +1218,7 @@ impl SqliteStore {
         let row = tx
             .query_row(
                 r#"
-                SELECT revision, title, contract, contract_json
+                SELECT revision, title, contract, contract_json, description, context, priority
                 FROM plans
                 WHERE workspace = ?1 AND id = ?2
                 "#,
@@ -970,12 +1229,24 @@ impl SqliteStore {
                         row.get::<_, String>(1)?,
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
                     ))
                 },
             )
             .optional()?;
 
-        let Some((revision, current_title, current_contract, current_contract_json)) = row else {
+        let Some((
+            revision,
+            current_title,
+            current_contract,
+            current_contract_json,
+            current_description,
+            current_context,
+            current_priority,
+        )) = row
+        else {
             return Err(StoreError::UnknownId);
         };
 
@@ -992,11 +1263,21 @@ impl SqliteStore {
         let new_title = title.unwrap_or(current_title);
         let new_contract = contract.unwrap_or(current_contract);
         let new_contract_json = contract_json.unwrap_or(current_contract_json);
+        let new_description = description.unwrap_or(current_description);
+        let new_context = context.unwrap_or(current_context);
+        let new_priority = priority.unwrap_or(current_priority);
 
         tx.execute(
             r#"
             UPDATE plans
-            SET revision = ?3, title = ?4, contract = ?5, contract_json = ?6, updated_at_ms = ?7
+            SET revision = ?3,
+                title = ?4,
+                contract = ?5,
+                contract_json = ?6,
+                description = ?7,
+                context = ?8,
+                priority = ?9,
+                updated_at_ms = ?10
             WHERE workspace = ?1 AND id = ?2
             "#,
             params![
@@ -1006,9 +1287,18 @@ impl SqliteStore {
                 new_title,
                 new_contract,
                 new_contract_json,
+                new_description,
+                new_context,
+                new_priority,
                 now_ms
             ],
         )?;
+        if let Some(items) = tags {
+            task_items_replace_tx(&tx, workspace.as_str(), "plan", id, "tags", &items)?;
+        }
+        if let Some(items) = depends_on {
+            task_items_replace_tx(&tx, workspace.as_str(), "plan", id, "depends_on", &items)?;
+        }
 
         let event = insert_event_tx(
             &tx,
@@ -1040,10 +1330,28 @@ impl SqliteStore {
         expected_revision: Option<i64>,
         title: Option<String>,
         description: Option<Option<String>>,
+        context: Option<Option<String>>,
+        priority: Option<String>,
+        domain: Option<Option<String>>,
+        phase: Option<Option<String>>,
+        component: Option<Option<String>>,
+        assignee: Option<Option<String>>,
+        tags: Option<Vec<String>>,
+        depends_on: Option<Vec<String>>,
         event_type: String,
         event_payload_json: String,
     ) -> Result<(i64, EventRow), StoreError> {
-        if title.is_none() && description.is_none() {
+        if title.is_none()
+            && description.is_none()
+            && context.is_none()
+            && priority.is_none()
+            && domain.is_none()
+            && phase.is_none()
+            && component.is_none()
+            && assignee.is_none()
+            && tags.is_none()
+            && depends_on.is_none()
+        {
             return Err(StoreError::InvalidInput("no fields to edit"));
         }
 
@@ -1053,7 +1361,7 @@ impl SqliteStore {
         let row = tx
             .query_row(
                 r#"
-                SELECT revision, title, description
+                SELECT revision, title, description, context, priority, domain, phase, component, assignee
                 FROM tasks
                 WHERE workspace = ?1 AND id = ?2
                 "#,
@@ -1063,12 +1371,29 @@ impl SqliteStore {
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
             .optional()?;
 
-        let Some((revision, current_title, current_description)) = row else {
+        let Some((
+            revision,
+            current_title,
+            current_description,
+            current_context,
+            current_priority,
+            current_domain,
+            current_phase,
+            current_component,
+            current_assignee,
+        )) = row
+        else {
             return Err(StoreError::UnknownId);
         };
 
@@ -1084,11 +1409,26 @@ impl SqliteStore {
         let new_revision = revision + 1;
         let new_title = title.unwrap_or(current_title);
         let new_description = description.unwrap_or(current_description);
+        let new_context = context.unwrap_or(current_context);
+        let new_priority = priority.unwrap_or(current_priority);
+        let new_domain = domain.unwrap_or(current_domain);
+        let new_phase = phase.unwrap_or(current_phase);
+        let new_component = component.unwrap_or(current_component);
+        let new_assignee = assignee.unwrap_or(current_assignee);
 
         tx.execute(
             r#"
             UPDATE tasks
-            SET revision = ?3, title = ?4, description = ?5, updated_at_ms = ?6
+            SET revision = ?3,
+                title = ?4,
+                description = ?5,
+                context = ?6,
+                priority = ?7,
+                domain = ?8,
+                phase = ?9,
+                component = ?10,
+                assignee = ?11,
+                updated_at_ms = ?12
             WHERE workspace = ?1 AND id = ?2
             "#,
             params![
@@ -1097,9 +1437,21 @@ impl SqliteStore {
                 new_revision,
                 new_title,
                 new_description,
+                new_context,
+                new_priority,
+                new_domain,
+                new_phase,
+                new_component,
+                new_assignee,
                 now_ms
             ],
         )?;
+        if let Some(items) = tags {
+            task_items_replace_tx(&tx, workspace.as_str(), "task", id, "tags", &items)?;
+        }
+        if let Some(items) = depends_on {
+            task_items_replace_tx(&tx, workspace.as_str(), "task", id, "depends_on", &items)?;
+        }
 
         let event = insert_event_tx(
             &tx,
@@ -1143,6 +1495,164 @@ impl SqliteStore {
         Ok((new_revision, event))
     }
 
+    pub fn set_plan_status(
+        &mut self,
+        workspace: &WorkspaceId,
+        id: &str,
+        expected_revision: Option<i64>,
+        status: &str,
+        status_manual: bool,
+        event_type: String,
+        event_payload_json: String,
+    ) -> Result<(i64, EventRow), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let row = tx
+            .query_row(
+                "SELECT revision, status FROM plans WHERE workspace = ?1 AND id = ?2",
+                params![workspace.as_str(), id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        let Some((revision, _current_status)) = row else {
+            return Err(StoreError::UnknownId);
+        };
+
+        if let Some(expected) = expected_revision {
+            if expected != revision {
+                return Err(StoreError::RevisionMismatch {
+                    expected,
+                    actual: revision,
+                });
+            }
+        }
+
+        let new_revision = revision + 1;
+        tx.execute(
+            r#"
+            UPDATE plans
+            SET revision = ?3, status = ?4, status_manual = ?5, updated_at_ms = ?6
+            WHERE workspace = ?1 AND id = ?2
+            "#,
+            params![
+                workspace.as_str(),
+                id,
+                new_revision,
+                status,
+                if status_manual { 1i64 } else { 0i64 },
+                now_ms
+            ],
+        )?;
+
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(id.to_string()),
+            None,
+            &event_type,
+            &event_payload_json,
+        )?;
+        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, id, TaskKind::Plan, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        tx.commit()?;
+        Ok((new_revision, event))
+    }
+
+    pub fn set_task_status(
+        &mut self,
+        workspace: &WorkspaceId,
+        id: &str,
+        expected_revision: Option<i64>,
+        status: &str,
+        status_manual: bool,
+        require_steps_completed: bool,
+        event_type: String,
+        event_payload_json: String,
+    ) -> Result<(i64, EventRow), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let row = tx
+            .query_row(
+                "SELECT revision, status FROM tasks WHERE workspace = ?1 AND id = ?2",
+                params![workspace.as_str(), id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        let Some((revision, _current_status)) = row else {
+            return Err(StoreError::UnknownId);
+        };
+
+        if let Some(expected) = expected_revision {
+            if expected != revision {
+                return Err(StoreError::RevisionMismatch {
+                    expected,
+                    actual: revision,
+                });
+            }
+        }
+
+        if require_steps_completed {
+            let open_steps: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2 AND completed=0",
+                params![workspace.as_str(), id],
+                |row| row.get(0),
+            )?;
+            if open_steps > 0 {
+                return Err(StoreError::InvalidInput("steps not completed"));
+            }
+        }
+
+        let new_revision = revision + 1;
+        tx.execute(
+            r#"
+            UPDATE tasks
+            SET revision = ?3, status = ?4, status_manual = ?5, updated_at_ms = ?6
+            WHERE workspace = ?1 AND id = ?2
+            "#,
+            params![
+                workspace.as_str(),
+                id,
+                new_revision,
+                status,
+                if status_manual { 1i64 } else { 0i64 },
+                now_ms
+            ],
+        )?;
+
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(id.to_string()),
+            None,
+            &event_type,
+            &event_payload_json,
+        )?;
+        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        tx.commit()?;
+        Ok((new_revision, event))
+    }
+
     pub fn get_plan(
         &self,
         workspace: &WorkspaceId,
@@ -1152,7 +1662,11 @@ impl SqliteStore {
             .conn
             .query_row(
                 r#"
-                SELECT id, revision, title, contract, contract_json, created_at_ms, updated_at_ms
+                SELECT id, revision, title, contract, contract_json, description, context,
+                       status, status_manual, priority, plan_doc, plan_current,
+                       criteria_confirmed, tests_confirmed, criteria_auto_confirmed, tests_auto_confirmed,
+                       security_confirmed, perf_confirmed, docs_confirmed,
+                       created_at_ms, updated_at_ms
                 FROM plans
                 WHERE workspace = ?1 AND id = ?2
                 "#,
@@ -1164,12 +1678,173 @@ impl SqliteStore {
                         title: row.get(2)?,
                         contract: row.get(3)?,
                         contract_json: row.get(4)?,
-                        created_at_ms: row.get(5)?,
-                        updated_at_ms: row.get(6)?,
+                        description: row.get(5)?,
+                        context: row.get(6)?,
+                        status: row.get(7)?,
+                        status_manual: row.get::<_, i64>(8)? != 0,
+                        priority: row.get(9)?,
+                        plan_doc: row.get(10)?,
+                        plan_current: row.get(11)?,
+                        criteria_confirmed: row.get::<_, i64>(12)? != 0,
+                        tests_confirmed: row.get::<_, i64>(13)? != 0,
+                        criteria_auto_confirmed: row.get::<_, i64>(14)? != 0,
+                        tests_auto_confirmed: row.get::<_, i64>(15)? != 0,
+                        security_confirmed: row.get::<_, i64>(16)? != 0,
+                        perf_confirmed: row.get::<_, i64>(17)? != 0,
+                        docs_confirmed: row.get::<_, i64>(18)? != 0,
+                        created_at_ms: row.get(19)?,
+                        updated_at_ms: row.get(20)?,
                     })
                 },
             )
             .optional()?)
+    }
+
+    pub fn plan_checklist_get(
+        &self,
+        workspace: &WorkspaceId,
+        plan_id: &str,
+    ) -> Result<PlanChecklist, StoreError> {
+        let row = self
+            .conn
+            .query_row(
+                r#"
+                SELECT plan_doc, plan_current
+                FROM plans
+                WHERE workspace = ?1 AND id = ?2
+                "#,
+                params![workspace.as_str(), plan_id],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+
+        let Some((plan_doc, plan_current)) = row else {
+            return Err(StoreError::UnknownId);
+        };
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT text
+            FROM plan_checklist
+            WHERE workspace = ?1 AND plan_id = ?2
+            ORDER BY ordinal ASC
+            "#,
+        )?;
+        let rows = stmt.query_map(params![workspace.as_str(), plan_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let steps = rows.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(PlanChecklist {
+            doc: plan_doc,
+            current: plan_current,
+            steps,
+        })
+    }
+
+    pub fn plan_checklist_update(
+        &mut self,
+        workspace: &WorkspaceId,
+        plan_id: &str,
+        expected_revision: Option<i64>,
+        steps: Option<Vec<String>>,
+        current: Option<i64>,
+        doc: Option<String>,
+        advance: bool,
+        event_type: String,
+        event_payload_json: String,
+    ) -> Result<(i64, PlanChecklist, EventRow), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let row = tx
+            .query_row(
+                r#"
+                SELECT revision, plan_doc, plan_current
+                FROM plans
+                WHERE workspace = ?1 AND id = ?2
+                "#,
+                params![workspace.as_str(), plan_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, i64>(2)?)),
+            )
+            .optional()?;
+
+        let Some((revision, current_doc, current_current)) = row else {
+            return Err(StoreError::UnknownId);
+        };
+
+        if let Some(expected) = expected_revision {
+            if expected != revision {
+                return Err(StoreError::RevisionMismatch {
+                    expected,
+                    actual: revision,
+                });
+            }
+        }
+
+        if let Some(items) = steps.as_ref() {
+            tx.execute(
+                "DELETE FROM plan_checklist WHERE workspace = ?1 AND plan_id = ?2",
+                params![workspace.as_str(), plan_id],
+            )?;
+            for (ordinal, text) in items.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO plan_checklist(workspace, plan_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), plan_id, ordinal as i64, text],
+                )?;
+            }
+        }
+
+        let mut next_current = current.unwrap_or(current_current);
+        if advance {
+            next_current = next_current.saturating_add(1);
+        }
+
+        let next_doc = doc.or(current_doc);
+        let new_revision = revision + 1;
+        tx.execute(
+            r#"
+            UPDATE plans
+            SET revision = ?3,
+                plan_doc = ?4,
+                plan_current = ?5,
+                updated_at_ms = ?6
+            WHERE workspace = ?1 AND id = ?2
+            "#,
+            params![
+                workspace.as_str(),
+                plan_id,
+                new_revision,
+                next_doc,
+                next_current,
+                now_ms
+            ],
+        )?;
+
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(plan_id.to_string()),
+            None,
+            &event_type,
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, plan_id, TaskKind::Plan, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        tx.commit()?;
+
+        let checklist = self.plan_checklist_get(workspace, plan_id)?;
+        Ok((new_revision, checklist, event))
     }
 
     pub fn get_task(
@@ -1181,7 +1856,12 @@ impl SqliteStore {
             .conn
             .query_row(
                 r#"
-                SELECT id, revision, parent_plan_id, title, description, created_at_ms, updated_at_ms
+                SELECT id, revision, parent_plan_id, title, description,
+                       status, status_manual, priority, blocked,
+                       assignee, domain, phase, component, context,
+                       criteria_confirmed, tests_confirmed, criteria_auto_confirmed, tests_auto_confirmed,
+                       security_confirmed, perf_confirmed, docs_confirmed,
+                       created_at_ms, updated_at_ms
                 FROM tasks
                 WHERE workspace = ?1 AND id = ?2
                 "#,
@@ -1193,8 +1873,24 @@ impl SqliteStore {
                         parent_plan_id: row.get(2)?,
                         title: row.get(3)?,
                         description: row.get(4)?,
-                        created_at_ms: row.get(5)?,
-                        updated_at_ms: row.get(6)?,
+                        status: row.get(5)?,
+                        status_manual: row.get::<_, i64>(6)? != 0,
+                        priority: row.get(7)?,
+                        blocked: row.get::<_, i64>(8)? != 0,
+                        assignee: row.get(9)?,
+                        domain: row.get(10)?,
+                        phase: row.get(11)?,
+                        component: row.get(12)?,
+                        context: row.get(13)?,
+                        criteria_confirmed: row.get::<_, i64>(14)? != 0,
+                        tests_confirmed: row.get::<_, i64>(15)? != 0,
+                        criteria_auto_confirmed: row.get::<_, i64>(16)? != 0,
+                        tests_auto_confirmed: row.get::<_, i64>(17)? != 0,
+                        security_confirmed: row.get::<_, i64>(18)? != 0,
+                        perf_confirmed: row.get::<_, i64>(19)? != 0,
+                        docs_confirmed: row.get::<_, i64>(20)? != 0,
+                        created_at_ms: row.get(21)?,
+                        updated_at_ms: row.get(22)?,
                     })
                 },
             )
@@ -3771,8 +4467,16 @@ impl SqliteStore {
         path: Option<&StepPath>,
         criteria_confirmed: Option<bool>,
         tests_confirmed: Option<bool>,
+        security_confirmed: Option<bool>,
+        perf_confirmed: Option<bool>,
+        docs_confirmed: Option<bool>,
     ) -> Result<StepOpResult, StoreError> {
-        if criteria_confirmed.is_none() && tests_confirmed.is_none() {
+        if criteria_confirmed.is_none()
+            && tests_confirmed.is_none()
+            && security_confirmed.is_none()
+            && perf_confirmed.is_none()
+            && docs_confirmed.is_none()
+        {
             return Err(StoreError::InvalidInput("no checkpoints to verify"));
         }
 
@@ -3783,26 +4487,33 @@ impl SqliteStore {
             bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
         let (step_id, path) =
             resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
-        if criteria_confirmed.is_some() && tests_confirmed.is_some() {
-            tx.execute(
-                "UPDATE steps SET criteria_confirmed=?4, tests_confirmed=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
-                params![
-                    workspace.as_str(),
-                    task_id,
-                    step_id,
-                    if criteria_confirmed.unwrap() { 1i64 } else { 0i64 },
-                    if tests_confirmed.unwrap() { 1i64 } else { 0i64 },
-                    now_ms
-                ],
-            )?;
-        } else if let Some(v) = criteria_confirmed {
+        if let Some(v) = criteria_confirmed {
             tx.execute(
                 "UPDATE steps SET criteria_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
             )?;
-        } else if let Some(v) = tests_confirmed {
+        }
+        if let Some(v) = tests_confirmed {
             tx.execute(
                 "UPDATE steps SET tests_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
+        if let Some(v) = security_confirmed {
+            tx.execute(
+                "UPDATE steps SET security_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
+        if let Some(v) = perf_confirmed {
+            tx.execute(
+                "UPDATE steps SET perf_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
+        if let Some(v) = docs_confirmed {
+            tx.execute(
+                "UPDATE steps SET docs_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
             )?;
         }
@@ -3812,7 +4523,15 @@ impl SqliteStore {
             path: path.clone(),
         };
         let event_payload_json =
-            build_step_verified_payload(task_id, &step_ref, criteria_confirmed, tests_confirmed);
+            build_step_verified_payload(
+                task_id,
+                &step_ref,
+                criteria_confirmed,
+                tests_confirmed,
+                security_confirmed,
+                perf_confirmed,
+                docs_confirmed,
+            );
         let event = insert_event_tx(
             &tx,
             workspace.as_str(),
@@ -3873,8 +4592,16 @@ impl SqliteStore {
         path: Option<&StepPath>,
         criteria_confirmed: Option<bool>,
         tests_confirmed: Option<bool>,
+        security_confirmed: Option<bool>,
+        perf_confirmed: Option<bool>,
+        docs_confirmed: Option<bool>,
     ) -> Result<StepCloseResult, StoreError> {
-        if criteria_confirmed.is_none() && tests_confirmed.is_none() {
+        if criteria_confirmed.is_none()
+            && tests_confirmed.is_none()
+            && security_confirmed.is_none()
+            && perf_confirmed.is_none()
+            && docs_confirmed.is_none()
+        {
             return Err(StoreError::InvalidInput("no checkpoints to verify"));
         }
 
@@ -3888,61 +4615,118 @@ impl SqliteStore {
 
         let row = tx
             .query_row(
-                "SELECT completed, criteria_confirmed, tests_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                "SELECT completed, criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
             )
             .optional()?;
 
-        let Some((completed, _, _)) = row else {
+        let Some((completed, _, _, _, _, _)) = row else {
             return Err(StoreError::StepNotFound);
         };
         if completed != 0 {
             return Err(StoreError::InvalidInput("step already completed"));
         }
 
-        if criteria_confirmed.is_some() && tests_confirmed.is_some() {
-            tx.execute(
-                "UPDATE steps SET criteria_confirmed=?4, tests_confirmed=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
-                params![
-                    workspace.as_str(),
-                    task_id,
-                    step_id,
-                    if criteria_confirmed.unwrap() { 1i64 } else { 0i64 },
-                    if tests_confirmed.unwrap() { 1i64 } else { 0i64 },
-                    now_ms
-                ],
-            )?;
-        } else if let Some(v) = criteria_confirmed {
+        if let Some(v) = criteria_confirmed {
             tx.execute(
                 "UPDATE steps SET criteria_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
             )?;
-        } else if let Some(v) = tests_confirmed {
+        }
+        if let Some(v) = tests_confirmed {
             tx.execute(
                 "UPDATE steps SET tests_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
             )?;
         }
+        if let Some(v) = security_confirmed {
+            tx.execute(
+                "UPDATE steps SET security_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
+        if let Some(v) = perf_confirmed {
+            tx.execute(
+                "UPDATE steps SET perf_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
+        if let Some(v) = docs_confirmed {
+            tx.execute(
+                "UPDATE steps SET docs_confirmed=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, if v { 1i64 } else { 0i64 }, now_ms],
+            )?;
+        }
 
-        let (criteria_now, tests_now) = tx
+        let (criteria_now, tests_now, security_now, perf_now, docs_now) = tx
             .query_row(
-                "SELECT criteria_confirmed, tests_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                "SELECT criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or(StoreError::StepNotFound)?;
 
-        if criteria_now == 0 || tests_now == 0 {
+        let require_security = security_confirmed.is_some()
+            || checkpoint_required_tx(
+                &tx,
+                workspace.as_str(),
+                "step",
+                &step_id,
+                "security",
+            )?;
+        let require_perf = perf_confirmed.is_some()
+            || checkpoint_required_tx(
+                &tx,
+                workspace.as_str(),
+                "step",
+                &step_id,
+                "perf",
+            )?;
+        let require_docs = docs_confirmed.is_some()
+            || checkpoint_required_tx(
+                &tx,
+                workspace.as_str(),
+                "step",
+                &step_id,
+                "docs",
+            )?;
+
+        if criteria_now == 0
+            || tests_now == 0
+            || (require_security && security_now == 0)
+            || (require_perf && perf_now == 0)
+            || (require_docs && docs_now == 0)
+        {
             return Err(StoreError::CheckpointsNotConfirmed {
                 criteria: criteria_now == 0,
                 tests: tests_now == 0,
+                security: require_security && security_now == 0,
+                perf: require_perf && perf_now == 0,
+                docs: require_docs && docs_now == 0,
             });
         }
 
         tx.execute(
-            "UPDATE steps SET completed=1, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            "UPDATE steps SET completed=1, completed_at_ms=?4, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
             params![workspace.as_str(), task_id, step_id, now_ms],
         )?;
 
@@ -3951,7 +4735,15 @@ impl SqliteStore {
             path: path.clone(),
         };
         let verify_payload_json =
-            build_step_verified_payload(task_id, &step_ref, criteria_confirmed, tests_confirmed);
+            build_step_verified_payload(
+                task_id,
+                &step_ref,
+                criteria_confirmed,
+                tests_confirmed,
+                security_confirmed,
+                perf_confirmed,
+                docs_confirmed,
+            );
         let verify_event = insert_event_tx(
             &tx,
             workspace.as_str(),
@@ -4038,13 +4830,22 @@ impl SqliteStore {
 
         let row = tx
             .query_row(
-                "SELECT completed, criteria_confirmed, tests_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                "SELECT completed, criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
             )
             .optional()?;
 
-        let Some((completed, criteria_confirmed, tests_confirmed)) = row else {
+        let Some((completed, criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed)) = row else {
             return Err(StoreError::StepNotFound);
         };
 
@@ -4052,15 +4853,45 @@ impl SqliteStore {
             return Err(StoreError::InvalidInput("step already completed"));
         }
 
-        if criteria_confirmed == 0 || tests_confirmed == 0 {
+        let require_security = checkpoint_required_tx(
+            &tx,
+            workspace.as_str(),
+            "step",
+            &step_id,
+            "security",
+        )?;
+        let require_perf = checkpoint_required_tx(
+            &tx,
+            workspace.as_str(),
+            "step",
+            &step_id,
+            "perf",
+        )?;
+        let require_docs = checkpoint_required_tx(
+            &tx,
+            workspace.as_str(),
+            "step",
+            &step_id,
+            "docs",
+        )?;
+
+        if criteria_confirmed == 0
+            || tests_confirmed == 0
+            || (require_security && security_confirmed == 0)
+            || (require_perf && perf_confirmed == 0)
+            || (require_docs && docs_confirmed == 0)
+        {
             return Err(StoreError::CheckpointsNotConfirmed {
                 criteria: criteria_confirmed == 0,
                 tests: tests_confirmed == 0,
+                security: require_security && security_confirmed == 0,
+                perf: require_perf && perf_confirmed == 0,
+                docs: require_docs && docs_confirmed == 0,
             });
         }
 
         tx.execute(
-            "UPDATE steps SET completed=1, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            "UPDATE steps SET completed=1, completed_at_ms=?4, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
             params![workspace.as_str(), task_id, step_id, now_ms],
         )?;
 
@@ -4120,6 +4951,225 @@ impl SqliteStore {
         })
     }
 
+    pub fn step_progress(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        completed: bool,
+        force: bool,
+    ) -> Result<StepOpResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        let row = tx
+            .query_row(
+                "SELECT completed, criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((already_completed, criteria, tests, security, perf, docs)) = row else {
+            return Err(StoreError::StepNotFound);
+        };
+
+        if completed {
+            if already_completed != 0 {
+                return Err(StoreError::InvalidInput("step already completed"));
+            }
+            let require_security = checkpoint_required_tx(
+                &tx,
+                workspace.as_str(),
+                "step",
+                &step_id,
+                "security",
+            )?;
+            let require_perf = checkpoint_required_tx(
+                &tx,
+                workspace.as_str(),
+                "step",
+                &step_id,
+                "perf",
+            )?;
+            let require_docs = checkpoint_required_tx(
+                &tx,
+                workspace.as_str(),
+                "step",
+                &step_id,
+                "docs",
+            )?;
+
+            if !force
+                && (criteria == 0
+                    || tests == 0
+                    || (require_security && security == 0)
+                    || (require_perf && perf == 0)
+                    || (require_docs && docs == 0))
+            {
+                return Err(StoreError::CheckpointsNotConfirmed {
+                    criteria: criteria == 0,
+                    tests: tests == 0,
+                    security: require_security && security == 0,
+                    perf: require_perf && perf == 0,
+                    docs: require_docs && docs == 0,
+                });
+            }
+            tx.execute(
+                "UPDATE steps SET completed=1, completed_at_ms=?4, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, now_ms],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE steps SET completed=0, completed_at_ms=NULL, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, now_ms],
+            )?;
+        }
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let (event_type, event_payload_json) = if completed {
+            ("step_done", build_step_done_payload(task_id, &step_ref))
+        } else {
+            (
+                "step_reopened",
+                build_step_reopened_payload(task_id, &step_ref, force),
+            )
+        };
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            event_type,
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        let (snapshot_title, snapshot_completed) =
+            step_snapshot_tx(&tx, workspace.as_str(), task_id, &step_ref.step_id)?;
+        let graph_touched = Self::project_task_graph_step_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &event,
+            task_id,
+            &step_ref,
+            &snapshot_title,
+            snapshot_completed,
+            now_ms,
+        )?;
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
+    pub fn step_block_set(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        blocked: bool,
+        reason: Option<String>,
+    ) -> Result<StepOpResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        let payload_reason = reason.clone();
+        tx.execute(
+            "UPDATE steps SET blocked=?4, block_reason=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            params![
+                workspace.as_str(),
+                task_id,
+                step_id,
+                if blocked { 1i64 } else { 0i64 },
+                if blocked { reason } else { None::<String> },
+                now_ms
+            ],
+        )?;
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let event_payload_json =
+            build_step_block_payload(task_id, &step_ref, blocked, payload_reason.as_deref());
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            if blocked { "step_blocked" } else { "step_unblocked" },
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
     pub fn task_steps_summary(
         &mut self,
         workspace: &WorkspaceId,
@@ -4164,11 +5214,78 @@ impl SqliteStore {
             params![workspace.as_str(), task_id],
             |row| row.get(0),
         )?;
+        let missing_security: i64 = tx.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM steps s
+            WHERE s.workspace=?1
+              AND s.task_id=?2
+              AND s.completed=0
+              AND s.security_confirmed=0
+              AND (
+                EXISTS (
+                  SELECT 1 FROM checkpoint_notes n
+                  WHERE n.workspace=s.workspace AND n.entity_kind='step' AND n.entity_id=s.step_id AND n.checkpoint='security'
+                )
+                OR EXISTS (
+                  SELECT 1 FROM checkpoint_evidence e
+                  WHERE e.workspace=s.workspace AND e.entity_kind='step' AND e.entity_id=s.step_id AND e.checkpoint='security'
+                )
+              )
+            "#,
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
+        let missing_perf: i64 = tx.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM steps s
+            WHERE s.workspace=?1
+              AND s.task_id=?2
+              AND s.completed=0
+              AND s.perf_confirmed=0
+              AND (
+                EXISTS (
+                  SELECT 1 FROM checkpoint_notes n
+                  WHERE n.workspace=s.workspace AND n.entity_kind='step' AND n.entity_id=s.step_id AND n.checkpoint='perf'
+                )
+                OR EXISTS (
+                  SELECT 1 FROM checkpoint_evidence e
+                  WHERE e.workspace=s.workspace AND e.entity_kind='step' AND e.entity_id=s.step_id AND e.checkpoint='perf'
+                )
+              )
+            "#,
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
+        let missing_docs: i64 = tx.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM steps s
+            WHERE s.workspace=?1
+              AND s.task_id=?2
+              AND s.completed=0
+              AND s.docs_confirmed=0
+              AND (
+                EXISTS (
+                  SELECT 1 FROM checkpoint_notes n
+                  WHERE n.workspace=s.workspace AND n.entity_kind='step' AND n.entity_id=s.step_id AND n.checkpoint='docs'
+                )
+                OR EXISTS (
+                  SELECT 1 FROM checkpoint_evidence e
+                  WHERE e.workspace=s.workspace AND e.entity_kind='step' AND e.entity_id=s.step_id AND e.checkpoint='docs'
+                )
+              )
+            "#,
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
 
         let first_open = tx
             .query_row(
                 r#"
-                SELECT step_id, title, completed, criteria_confirmed, tests_confirmed
+                SELECT step_id, title, completed, criteria_confirmed, tests_confirmed,
+                       security_confirmed, perf_confirmed, docs_confirmed
                 FROM steps
                 WHERE workspace=?1 AND task_id=?2 AND completed=0
                 ORDER BY created_at_ms ASC
@@ -4182,11 +5299,14 @@ impl SqliteStore {
                         row.get::<_, i64>(2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )
             .optional()?
-            .map(|(step_id, title, completed, criteria, tests)| {
+            .map(|(step_id, title, completed, criteria, tests, security, perf, docs)| {
                 let path = step_path_for_step_id_tx(&tx, workspace.as_str(), task_id, &step_id)
                     .unwrap_or_else(|_| "s:?".to_string());
                 StepStatus {
@@ -4196,6 +5316,9 @@ impl SqliteStore {
                     completed: completed != 0,
                     criteria_confirmed: criteria != 0,
                     tests_confirmed: tests != 0,
+                    security_confirmed: security != 0,
+                    perf_confirmed: perf != 0,
+                    docs_confirmed: docs != 0,
                 }
             });
 
@@ -4206,6 +5329,9 @@ impl SqliteStore {
             open_steps,
             missing_criteria,
             missing_tests,
+            missing_security,
+            missing_perf,
+            missing_docs,
             first_open,
         })
     }
@@ -4241,7 +5367,11 @@ impl SqliteStore {
     ) -> Result<Vec<PlanRow>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, revision, title, contract, contract_json, created_at_ms, updated_at_ms
+            SELECT id, revision, title, contract, contract_json, description, context,
+                   status, status_manual, priority, plan_doc, plan_current,
+                   criteria_confirmed, tests_confirmed, criteria_auto_confirmed, tests_auto_confirmed,
+                   security_confirmed, perf_confirmed, docs_confirmed,
+                   created_at_ms, updated_at_ms
             FROM plans
             WHERE workspace = ?1
             ORDER BY id ASC
@@ -4257,12 +5387,34 @@ impl SqliteStore {
                     title: row.get(2)?,
                     contract: row.get(3)?,
                     contract_json: row.get(4)?,
-                    created_at_ms: row.get(5)?,
-                    updated_at_ms: row.get(6)?,
+                    description: row.get(5)?,
+                    context: row.get(6)?,
+                    status: row.get(7)?,
+                    status_manual: row.get::<_, i64>(8)? != 0,
+                    priority: row.get(9)?,
+                    plan_doc: row.get(10)?,
+                    plan_current: row.get(11)?,
+                    criteria_confirmed: row.get::<_, i64>(12)? != 0,
+                    tests_confirmed: row.get::<_, i64>(13)? != 0,
+                    criteria_auto_confirmed: row.get::<_, i64>(14)? != 0,
+                    tests_auto_confirmed: row.get::<_, i64>(15)? != 0,
+                    security_confirmed: row.get::<_, i64>(16)? != 0,
+                    perf_confirmed: row.get::<_, i64>(17)? != 0,
+                    docs_confirmed: row.get::<_, i64>(18)? != 0,
+                    created_at_ms: row.get(19)?,
+                    updated_at_ms: row.get(20)?,
                 })
             },
         )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn count_plans(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM plans WHERE workspace = ?1",
+            params![workspace.as_str()],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn list_tasks(
@@ -4273,7 +5425,12 @@ impl SqliteStore {
     ) -> Result<Vec<TaskRow>, StoreError> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, revision, parent_plan_id, title, description, created_at_ms, updated_at_ms
+            SELECT id, revision, parent_plan_id, title, description,
+                   status, status_manual, priority, blocked,
+                   assignee, domain, phase, component, context,
+                   criteria_confirmed, tests_confirmed, criteria_auto_confirmed, tests_auto_confirmed,
+                   security_confirmed, perf_confirmed, docs_confirmed,
+                   created_at_ms, updated_at_ms
             FROM tasks
             WHERE workspace = ?1
             ORDER BY id ASC
@@ -4289,12 +5446,36 @@ impl SqliteStore {
                     parent_plan_id: row.get(2)?,
                     title: row.get(3)?,
                     description: row.get(4)?,
-                    created_at_ms: row.get(5)?,
-                    updated_at_ms: row.get(6)?,
+                    status: row.get(5)?,
+                    status_manual: row.get::<_, i64>(6)? != 0,
+                    priority: row.get(7)?,
+                    blocked: row.get::<_, i64>(8)? != 0,
+                    assignee: row.get(9)?,
+                    domain: row.get(10)?,
+                    phase: row.get(11)?,
+                    component: row.get(12)?,
+                    context: row.get(13)?,
+                    criteria_confirmed: row.get::<_, i64>(14)? != 0,
+                    tests_confirmed: row.get::<_, i64>(15)? != 0,
+                    criteria_auto_confirmed: row.get::<_, i64>(16)? != 0,
+                    tests_auto_confirmed: row.get::<_, i64>(17)? != 0,
+                    security_confirmed: row.get::<_, i64>(18)? != 0,
+                    perf_confirmed: row.get::<_, i64>(19)? != 0,
+                    docs_confirmed: row.get::<_, i64>(20)? != 0,
+                    created_at_ms: row.get(21)?,
+                    updated_at_ms: row.get(22)?,
                 })
             },
         )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn count_tasks(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE workspace = ?1",
+            params![workspace.as_str()],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn list_events(
@@ -6340,6 +7521,28 @@ fn json_escape(value: &str) -> String {
     out
 }
 
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> Result<(), StoreError> {
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {decl}");
+    match conn.execute(&sql, []) {
+        Ok(_) => Ok(()),
+        Err(err) if is_duplicate_column(&err) => Ok(()),
+        Err(err) => Err(StoreError::Sql(err)),
+    }
+}
+
+fn is_duplicate_column(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(e, _)
+            if e.code == rusqlite::ErrorCode::DuplicateColumnName
+    )
+}
+
 fn ensure_workspace_tx(
     tx: &Transaction<'_>,
     workspace: &WorkspaceId,
@@ -6382,52 +7585,12 @@ fn branch_checkout_set_tx(
     Ok(())
 }
 
-fn workspace_has_branch_data_tx(
-    tx: &Transaction<'_>,
-    workspace: &str,
-) -> Result<bool, StoreError> {
-    if tx
-        .query_row(
-            "SELECT 1 FROM branches WHERE workspace=?1 LIMIT 1",
-            params![workspace],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    if tx
-        .query_row(
-            "SELECT 1 FROM reasoning_refs WHERE workspace=?1 LIMIT 1",
-            params![workspace],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    if tx
-        .query_row(
-            "SELECT 1 FROM doc_entries WHERE workspace=?1 LIMIT 1",
-            params![workspace],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    Ok(false)
-}
-
 fn bootstrap_default_branch_tx(
     tx: &Transaction<'_>,
     workspace: &str,
     now_ms: i64,
 ) -> Result<bool, StoreError> {
-    if workspace_has_branch_data_tx(tx, workspace)? {
+    if branch_exists_tx(tx, workspace, DEFAULT_BRANCH)? {
         return Ok(false);
     }
     let base_seq = doc_entries_head_seq_tx(tx, workspace)?.unwrap_or(0);
@@ -6489,6 +7652,125 @@ fn bump_task_revision_tx(
         params![workspace, task_id, next, now_ms],
     )?;
     Ok(next)
+}
+
+fn task_items_list_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    entity_kind: &str,
+    entity_id: &str,
+    field: &str,
+) -> Result<Vec<String>, StoreError> {
+    let mut stmt = tx.prepare(
+        r#"
+        SELECT text
+        FROM task_items
+        WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND field=?4
+        ORDER BY ordinal ASC
+        "#,
+    )?;
+    let rows = stmt.query_map(
+        params![workspace, entity_kind, entity_id, field],
+        |row| row.get::<_, String>(0),
+    )?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn task_items_replace_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    entity_kind: &str,
+    entity_id: &str,
+    field: &str,
+    items: &[String],
+) -> Result<(), StoreError> {
+    tx.execute(
+        "DELETE FROM task_items WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND field=?4",
+        params![workspace, entity_kind, entity_id, field],
+    )?;
+    for (idx, text) in items.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO task_items(workspace, entity_kind, entity_id, field, ordinal, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![workspace, entity_kind, entity_id, field, idx as i64, text],
+        )?;
+    }
+    Ok(())
+}
+
+fn task_items_append_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    entity_kind: &str,
+    entity_id: &str,
+    field: &str,
+    items: &[String],
+) -> Result<(), StoreError> {
+    let max_ordinal: Option<i64> = tx
+        .query_row(
+            "SELECT MAX(ordinal) FROM task_items WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND field=?4",
+            params![workspace, entity_kind, entity_id, field],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let mut next = max_ordinal.unwrap_or(-1) + 1;
+    for text in items {
+        tx.execute(
+            "INSERT INTO task_items(workspace, entity_kind, entity_id, field, ordinal, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![workspace, entity_kind, entity_id, field, next, text],
+        )?;
+        next += 1;
+    }
+    Ok(())
+}
+
+fn task_items_remove_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    entity_kind: &str,
+    entity_id: &str,
+    field: &str,
+    items: &[String],
+) -> Result<(), StoreError> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    for text in items {
+        tx.execute(
+            "DELETE FROM task_items WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND field=?4 AND text=?5",
+            params![workspace, entity_kind, entity_id, field, text],
+        )?;
+    }
+    Ok(())
+}
+
+fn checkpoint_required_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    entity_kind: &str,
+    entity_id: &str,
+    checkpoint: &str,
+) -> Result<bool, StoreError> {
+    let has_note = tx
+        .query_row(
+            "SELECT 1 FROM checkpoint_notes WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND checkpoint=?4 LIMIT 1",
+            params![workspace, entity_kind, entity_id, checkpoint],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if has_note {
+        return Ok(true);
+    }
+    let has_evidence = tx
+        .query_row(
+            "SELECT 1 FROM checkpoint_evidence WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND checkpoint=?4 LIMIT 1",
+            params![workspace, entity_kind, entity_id, checkpoint],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    Ok(has_evidence)
 }
 
 fn resolve_step_id_tx(
@@ -6689,6 +7971,9 @@ fn build_step_verified_payload(
     step: &StepRef,
     criteria_confirmed: Option<bool>,
     tests_confirmed: Option<bool>,
+    security_confirmed: Option<bool>,
+    perf_confirmed: Option<bool>,
+    docs_confirmed: Option<bool>,
 ) -> String {
     let mut out = String::new();
     out.push_str("{\"task\":\"");
@@ -6706,6 +7991,18 @@ fn build_step_verified_payload(
         out.push_str(",\"tests_confirmed\":");
         out.push_str(if v { "true" } else { "false" });
     }
+    if let Some(v) = security_confirmed {
+        out.push_str(",\"security_confirmed\":");
+        out.push_str(if v { "true" } else { "false" });
+    }
+    if let Some(v) = perf_confirmed {
+        out.push_str(",\"perf_confirmed\":");
+        out.push_str(if v { "true" } else { "false" });
+    }
+    if let Some(v) = docs_confirmed {
+        out.push_str(",\"docs_confirmed\":");
+        out.push_str(if v { "true" } else { "false" });
+    }
     out.push('}');
     out
 }
@@ -6715,6 +8012,36 @@ fn build_step_done_payload(task_id: &str, step: &StepRef) -> String {
         "{{\"task\":\"{task_id}\",\"step_id\":\"{}\",\"path\":\"{}\"}}",
         step.step_id, step.path
     )
+}
+
+fn build_step_reopened_payload(task_id: &str, step: &StepRef, force: bool) -> String {
+    format!(
+        "{{\"task\":\"{task_id}\",\"step_id\":\"{}\",\"path\":\"{}\",\"force\":{}}}",
+        step.step_id,
+        step.path,
+        if force { "true" } else { "false" }
+    )
+}
+
+fn build_step_block_payload(
+    task_id: &str,
+    step: &StepRef,
+    blocked: bool,
+    reason: Option<&str>,
+) -> String {
+    let mut out = format!(
+        "{{\"task\":\"{task_id}\",\"step_id\":\"{}\",\"path\":\"{}\",\"blocked\":{}}}",
+        step.step_id,
+        step.path,
+        if blocked { "true" } else { "false" }
+    );
+    if let Some(reason) = reason {
+        out.pop();
+        out.push_str(",\"reason\":\"");
+        out.push_str(reason);
+        out.push_str("\"}");
+    }
+    out
 }
 
 fn insert_event_tx(

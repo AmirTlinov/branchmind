@@ -152,9 +152,14 @@ impl McpServer {
             "tasks_verify" => self.tool_tasks_verify(args),
             "tasks_done" => self.tool_tasks_done(args),
             "tasks_close_step" => self.tool_tasks_close_step(args),
+            "tasks_block" => self.tool_tasks_block(args),
+            "tasks_progress" => self.tool_tasks_progress(args),
             "tasks_edit" => self.tool_tasks_edit(args),
             "tasks_context" => self.tool_tasks_context(args),
             "tasks_delta" => self.tool_tasks_delta(args),
+            "tasks_plan" => self.tool_tasks_plan(args),
+            "tasks_contract" => self.tool_tasks_contract(args),
+            "tasks_complete" => self.tool_tasks_complete(args),
             "tasks_focus_get" => self.tool_tasks_focus_get(args),
             "tasks_focus_set" => self.tool_tasks_focus_set(args),
             "tasks_focus_clear" => self.tool_tasks_focus_clear(args),
@@ -601,6 +606,18 @@ impl McpServer {
             .get("tests")
             .and_then(|v| v.get("confirmed"))
             .and_then(|v| v.as_bool());
+        let security_confirmed = checkpoints
+            .get("security")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
+        let perf_confirmed = checkpoints
+            .get("perf")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
+        let docs_confirmed = checkpoints
+            .get("docs")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
 
         let result = self.store.step_verify(
             &workspace,
@@ -610,6 +627,9 @@ impl McpServer {
             path.as_ref(),
             criteria_confirmed,
             tests_confirmed,
+            security_confirmed,
+            perf_confirmed,
+            docs_confirmed,
         );
 
         match result {
@@ -702,9 +722,17 @@ impl McpServer {
                     }
                 }),
             ),
-            Err(StoreError::CheckpointsNotConfirmed { criteria, tests }) => ai_error_with(
+            Err(StoreError::CheckpointsNotConfirmed {
+                criteria,
+                tests,
+                security,
+                perf,
+                docs,
+            }) => ai_error_with(
                 "CHECKPOINTS_NOT_CONFIRMED",
-                &format!("missing: criteria={criteria} tests={tests}"),
+                &format!(
+                    "missing: criteria={criteria} tests={tests} security={security} perf={perf} docs={docs}"
+                ),
                 Some("Confirm missing checkpoints via tasks_verify before closing the step."),
                 vec![suggest_call(
                     "tasks_verify",
@@ -715,7 +743,13 @@ impl McpServer {
                         "task": task_id,
                         "step_id": step_id,
                         "path": args_obj.get("path").cloned().unwrap_or(Value::Null),
-                        "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } }
+                        "checkpoints": {
+                            "criteria": { "confirmed": true },
+                            "tests": { "confirmed": true },
+                            "security": { "confirmed": true },
+                            "perf": { "confirmed": true },
+                            "docs": { "confirmed": true }
+                        }
                     }),
                 )],
             ),
@@ -777,6 +811,18 @@ impl McpServer {
             .get("tests")
             .and_then(|v| v.get("confirmed"))
             .and_then(|v| v.as_bool());
+        let security_confirmed = checkpoints
+            .get("security")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
+        let perf_confirmed = checkpoints
+            .get("perf")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
+        let docs_confirmed = checkpoints
+            .get("docs")
+            .and_then(|v| v.get("confirmed"))
+            .and_then(|v| v.as_bool());
 
         let result = self.store.step_close(
             &workspace,
@@ -786,6 +832,9 @@ impl McpServer {
             path.as_ref(),
             criteria_confirmed,
             tests_confirmed,
+            security_confirmed,
+            perf_confirmed,
+            docs_confirmed,
         );
 
         match result {
@@ -806,9 +855,17 @@ impl McpServer {
                     })).collect::<Vec<_>>()
                 }),
             ),
-            Err(StoreError::CheckpointsNotConfirmed { criteria, tests }) => ai_error_with(
+            Err(StoreError::CheckpointsNotConfirmed {
+                criteria,
+                tests,
+                security,
+                perf,
+                docs,
+            }) => ai_error_with(
                 "CHECKPOINTS_NOT_CONFIRMED",
-                &format!("missing: criteria={criteria} tests={tests}"),
+                &format!(
+                    "missing: criteria={criteria} tests={tests} security={security} perf={perf} docs={docs}"
+                ),
                 Some("Confirm missing checkpoints before closing the step."),
                 vec![suggest_call(
                     "tasks_close_step",
@@ -819,7 +876,215 @@ impl McpServer {
                         "task": task_id,
                         "step_id": step_id,
                         "path": args_obj.get("path").cloned().unwrap_or(Value::Null),
-                        "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } }
+                        "checkpoints": {
+                            "criteria": { "confirmed": true },
+                            "tests": { "confirmed": true },
+                            "security": { "confirmed": true },
+                            "perf": { "confirmed": true },
+                            "docs": { "confirmed": true }
+                        }
+                    }),
+                )],
+            ),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_block(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if step_id.is_none() && path.is_none() {
+            return ai_error("INVALID_INPUT", "step_id or path is required");
+        }
+        let blocked = args_obj
+            .get("blocked")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let reason = match optional_string(args_obj, "reason") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let reason_out = reason.clone();
+
+        let result = self.store.step_block_set(
+            &workspace,
+            &task_id,
+            expected_revision,
+            step_id.as_deref(),
+            path.as_ref(),
+            blocked,
+            reason,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "block",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "step": { "step_id": out.step.step_id, "path": out.step.path },
+                    "blocked": blocked,
+                    "reason": reason_out,
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_progress(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if step_id.is_none() && path.is_none() {
+            return ai_error("INVALID_INPUT", "step_id or path is required");
+        }
+        let completed = match args_obj.get("completed") {
+            Some(v) => match v.as_bool() {
+                Some(value) => value,
+                None => return ai_error("INVALID_INPUT", "completed must be a boolean"),
+            },
+            None => true,
+        };
+        let force = args_obj
+            .get("force")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let result = self.store.step_progress(
+            &workspace,
+            &task_id,
+            expected_revision,
+            step_id.as_deref(),
+            path.as_ref(),
+            completed,
+            force,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "progress",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "step": { "step_id": out.step.step_id, "path": out.step.path },
+                    "completed": completed,
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::CheckpointsNotConfirmed {
+                criteria,
+                tests,
+                security,
+                perf,
+                docs,
+            }) => ai_error_with(
+                "CHECKPOINTS_NOT_CONFIRMED",
+                &format!(
+                    "missing: criteria={criteria} tests={tests} security={security} perf={perf} docs={docs}"
+                ),
+                Some("Confirm missing checkpoints before completing the step."),
+                vec![suggest_call(
+                    "tasks_verify",
+                    "Confirm required checkpoints for this step.",
+                    "high",
+                    json!({
+                        "workspace": workspace.as_str(),
+                        "task": task_id,
+                        "step_id": step_id,
+                        "path": args_obj.get("path").cloned().unwrap_or(Value::Null),
+                        "checkpoints": {
+                            "criteria": { "confirmed": true },
+                            "tests": { "confirmed": true },
+                            "security": { "confirmed": true },
+                            "perf": { "confirmed": true },
+                            "docs": { "confirmed": true }
+                        }
                     }),
                 )],
             ),
@@ -878,6 +1143,26 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let context = match optional_nullable_string(args_obj, "context") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let priority = match optional_string(args_obj, "priority") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let new_domain = match optional_nullable_string(args_obj, "new_domain") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let tags = match optional_string_array(args_obj, "tags") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let depends_on = match optional_string_array(args_obj, "depends_on") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let contract = match optional_nullable_string(args_obj, "contract") {
             Ok(v) => v,
@@ -892,10 +1177,18 @@ impl McpServer {
 
         match kind {
             TaskKind::Plan => {
-                if description.is_some() {
-                    return ai_error("INVALID_INPUT", "description is not valid for kind=plan");
+                if new_domain.is_some() {
+                    return ai_error("INVALID_INPUT", "new_domain is not valid for kind=plan");
                 }
-                if title.is_none() && contract.is_none() && contract_json.is_none() {
+                if title.is_none()
+                    && description.is_none()
+                    && context.is_none()
+                    && priority.is_none()
+                    && tags.is_none()
+                    && depends_on.is_none()
+                    && contract.is_none()
+                    && contract_json.is_none()
+                {
                     return ai_error("INVALID_INPUT", "no fields to edit");
                 }
             }
@@ -906,7 +1199,14 @@ impl McpServer {
                         "contract fields are not valid for kind=task",
                     );
                 }
-                if title.is_none() && description.is_none() {
+                if title.is_none()
+                    && description.is_none()
+                    && context.is_none()
+                    && priority.is_none()
+                    && new_domain.is_none()
+                    && tags.is_none()
+                    && depends_on.is_none()
+                {
                     return ai_error("INVALID_INPUT", "no fields to edit");
                 }
             }
@@ -919,6 +1219,39 @@ impl McpServer {
 
         match kind {
             TaskKind::Plan => {
+                if let Some(ref value) = description {
+                    patch.insert(
+                        "description".to_string(),
+                        match value {
+                            Some(v) => Value::String(v.clone()),
+                            None => Value::Null,
+                        },
+                    );
+                }
+                if let Some(ref value) = context {
+                    patch.insert(
+                        "context".to_string(),
+                        match value {
+                            Some(v) => Value::String(v.clone()),
+                            None => Value::Null,
+                        },
+                    );
+                }
+                if let Some(ref value) = priority {
+                    patch.insert("priority".to_string(), Value::String(value.clone()));
+                }
+                if let Some(ref items) = tags {
+                    patch.insert(
+                        "tags".to_string(),
+                        Value::Array(items.iter().map(|v| Value::String(v.clone())).collect()),
+                    );
+                }
+                if let Some(ref items) = depends_on {
+                    patch.insert(
+                        "depends_on".to_string(),
+                        Value::Array(items.iter().map(|v| Value::String(v.clone())).collect()),
+                    );
+                }
                 if let Some(ref value) = contract {
                     patch.insert(
                         "contract".to_string(),
@@ -948,6 +1281,39 @@ impl McpServer {
                         },
                     );
                 }
+                if let Some(ref value) = context {
+                    patch.insert(
+                        "context".to_string(),
+                        match value {
+                            Some(v) => Value::String(v.clone()),
+                            None => Value::Null,
+                        },
+                    );
+                }
+                if let Some(ref value) = priority {
+                    patch.insert("priority".to_string(), Value::String(value.clone()));
+                }
+                if let Some(ref value) = new_domain {
+                    patch.insert(
+                        "domain".to_string(),
+                        match value {
+                            Some(v) => Value::String(v.clone()),
+                            None => Value::Null,
+                        },
+                    );
+                }
+                if let Some(ref items) = tags {
+                    patch.insert(
+                        "tags".to_string(),
+                        Value::Array(items.iter().map(|v| Value::String(v.clone())).collect()),
+                    );
+                }
+                if let Some(ref items) = depends_on {
+                    patch.insert(
+                        "depends_on".to_string(),
+                        Value::Array(items.iter().map(|v| Value::String(v.clone())).collect()),
+                    );
+                }
             }
         }
 
@@ -964,6 +1330,11 @@ impl McpServer {
                 &task_id,
                 expected_revision,
                 title,
+                description,
+                context,
+                priority,
+                tags,
+                depends_on,
                 contract,
                 contract_json,
                 event_type.clone(),
@@ -975,6 +1346,14 @@ impl McpServer {
                 expected_revision,
                 title,
                 description,
+                context,
+                priority,
+                new_domain,
+                None,
+                None,
+                None,
+                tags,
+                depends_on,
                 event_type.clone(),
                 event_payload_json,
             ),
@@ -1027,36 +1406,145 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let plans_limit = args_obj
+            .get("plans_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(50);
+        let plans_cursor = args_obj
+            .get("plans_cursor")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(0);
+        let tasks_limit = args_obj
+            .get("tasks_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(50);
+        let tasks_cursor = args_obj
+            .get("tasks_cursor")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(0);
 
-        let plans = match self.store.list_plans(&workspace, 50, 0) {
+        let plans_total = match self.store.count_plans(&workspace) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
-        let tasks = match self.store.list_tasks(&workspace, 50, 0) {
+        let tasks_total = match self.store.count_tasks(&workspace) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
+
+        let plans = match self
+            .store
+            .list_plans(&workspace, plans_limit, plans_cursor)
+        {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let tasks = match self
+            .store
+            .list_tasks(&workspace, tasks_limit, tasks_cursor)
+        {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let plans_out = plans
+            .into_iter()
+            .map(|p| {
+                let checklist = self
+                    .store
+                    .plan_checklist_get(&workspace, &p.id)
+                    .ok();
+                let progress = checklist
+                    .as_ref()
+                    .map(|c| format!("{}/{}", c.current, c.steps.len()))
+                    .unwrap_or_else(|| "0/0".to_string());
+                json!({
+                    "id": p.id,
+                    "kind": "plan",
+                    "title": p.title,
+                    "revision": p.revision,
+                    "contract_versions_count": 0,
+                    "criteria_confirmed": p.criteria_confirmed,
+                    "tests_confirmed": p.tests_confirmed,
+                    "criteria_auto_confirmed": p.criteria_auto_confirmed,
+                    "tests_auto_confirmed": p.tests_auto_confirmed,
+                    "security_confirmed": p.security_confirmed,
+                    "perf_confirmed": p.perf_confirmed,
+                    "docs_confirmed": p.docs_confirmed,
+                    "plan_progress": progress
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut by_status = std::collections::BTreeMap::new();
+        let tasks_out = tasks
+            .into_iter()
+            .map(|t| {
+                *by_status.entry(t.status.clone()).or_insert(0usize) += 1;
+                let summary = self
+                    .store
+                    .task_steps_summary(&workspace, &t.id)
+                    .ok();
+                let steps_count = summary.as_ref().map(|s| s.total_steps).unwrap_or(0);
+                let progress = if steps_count == 0 {
+                    0
+                } else {
+                    ((summary.as_ref().map(|s| s.completed_steps).unwrap_or(0) as f64)
+                        / (steps_count as f64)
+                        * 100.0)
+                        .round() as i64
+                };
+                json!({
+                    "id": t.id,
+                    "kind": "task",
+                    "title": t.title,
+                    "revision": t.revision,
+                    "status": t.status,
+                    "status_code": t.status,
+                    "progress": progress,
+                    "criteria_confirmed": t.criteria_confirmed,
+                    "tests_confirmed": t.tests_confirmed,
+                    "criteria_auto_confirmed": t.criteria_auto_confirmed,
+                    "tests_auto_confirmed": t.tests_auto_confirmed,
+                    "security_confirmed": t.security_confirmed,
+                    "perf_confirmed": t.perf_confirmed,
+                    "docs_confirmed": t.docs_confirmed,
+                    "parent": t.parent_plan_id,
+                    "steps_count": steps_count
+                })
+            })
+            .collect::<Vec<_>>();
 
         let mut result = json!({
-            "workspace": workspace.as_str(),
-            "plans": plans.into_iter().map(|p| json!({
-                "id": p.id,
-                "revision": p.revision,
-                "title": p.title,
-                "contract": p.contract,
-                "contract_data": parse_json_or_null(p.contract_json),
-                "created_at_ms": p.created_at_ms,
-                "updated_at_ms": p.updated_at_ms
-            })).collect::<Vec<_>>(),
-            "tasks": tasks.into_iter().map(|t| json!({
-                "id": t.id,
-                "revision": t.revision,
-                "parent": t.parent_plan_id,
-                "title": t.title,
-                "description": t.description,
-                "created_at_ms": t.created_at_ms,
-                "updated_at_ms": t.updated_at_ms
-            })).collect::<Vec<_>>()
+            "counts": {
+                "plans": plans_total,
+                "tasks": tasks_total
+            },
+            "by_status": {
+                "DONE": by_status.get("DONE").copied().unwrap_or(0),
+                "ACTIVE": by_status.get("ACTIVE").copied().unwrap_or(0),
+                "TODO": by_status.get("TODO").copied().unwrap_or(0)
+            },
+            "plans": plans_out,
+            "tasks": tasks_out,
+            "plans_pagination": {
+                "cursor": plans_cursor,
+                "next_cursor": if plans_cursor + plans_limit < plans_total as usize { Some(plans_cursor + plans_limit) } else { None },
+                "total": plans_total,
+                "count": plans_out.len(),
+                "limit": plans_limit
+            },
+            "tasks_pagination": {
+                "cursor": tasks_cursor,
+                "next_cursor": if tasks_cursor + tasks_limit < tasks_total as usize { Some(tasks_cursor + tasks_limit) } else { None },
+                "total": tasks_total,
+                "count": tasks_out.len(),
+                "limit": tasks_limit
+            }
         });
 
         redact_value(&mut result, 6);
@@ -1133,6 +1621,339 @@ impl McpServer {
         }
 
         ai_ok("delta", result)
+    }
+
+    fn tool_tasks_plan(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let plan_id = match require_string(args_obj, "plan") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let steps = match optional_string_array(args_obj, "steps") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let current = match optional_i64(args_obj, "current") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let advance = match optional_bool(args_obj, "advance") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+
+        let payload = json!({
+            "steps": steps,
+            "current": current,
+            "doc": doc,
+            "advance": advance
+        });
+
+        let result = self.store.plan_checklist_update(
+            &workspace,
+            &plan_id,
+            expected_revision,
+            steps,
+            current,
+            doc,
+            advance,
+            "plan_updated".to_string(),
+            payload.to_string(),
+        );
+
+        match result {
+            Ok((revision, checklist, _event)) => {
+                let plan = match self.store.get_plan(&workspace, &plan_id) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => return ai_error("UNKNOWN_ID", "Unknown plan id"),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                let progress = format!("{}/{}", checklist.current, checklist.steps.len());
+                ai_ok(
+                    "plan",
+                    json!({
+                        "plan": {
+                            "id": plan.id,
+                            "kind": "plan",
+                            "title": plan.title,
+                            "revision": revision,
+                            "contract_versions_count": 0,
+                            "criteria_confirmed": plan.criteria_confirmed,
+                            "tests_confirmed": plan.tests_confirmed,
+                            "criteria_auto_confirmed": plan.criteria_auto_confirmed,
+                            "tests_auto_confirmed": plan.tests_auto_confirmed,
+                            "security_confirmed": plan.security_confirmed,
+                            "perf_confirmed": plan.perf_confirmed,
+                            "docs_confirmed": plan.docs_confirmed,
+                            "plan_progress": progress
+                        }
+                    }),
+                )
+            }
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown plan id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_contract(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let plan_id = match require_string(args_obj, "plan") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let clear = args_obj
+            .get("clear")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let contract = match optional_string(args_obj, "current") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let contract_json = match optional_object_as_json_string(args_obj, "contract_data") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let next_contract = if clear { Some(None) } else { Some(contract) };
+        let next_contract_json = if clear { Some(None) } else { Some(contract_json) };
+
+        let payload = json!({
+            "clear": clear,
+            "contract": contract,
+            "contract_data": parse_json_or_null(contract_json)
+        });
+
+        let result = self.store.edit_plan(
+            &workspace,
+            &plan_id,
+            expected_revision,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            next_contract,
+            next_contract_json,
+            "contract_updated".to_string(),
+            payload.to_string(),
+        );
+
+        match result {
+            Ok((revision, _event)) => {
+                let plan = match self.store.get_plan(&workspace, &plan_id) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => return ai_error("UNKNOWN_ID", "Unknown plan id"),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                ai_ok(
+                    "contract",
+                    json!({
+                        "plan": {
+                            "id": plan.id,
+                            "kind": "plan",
+                            "title": plan.title,
+                            "revision": revision,
+                            "contract_versions_count": 0,
+                            "criteria_confirmed": plan.criteria_confirmed,
+                            "tests_confirmed": plan.tests_confirmed,
+                            "criteria_auto_confirmed": plan.criteria_auto_confirmed,
+                            "tests_auto_confirmed": plan.tests_auto_confirmed,
+                            "security_confirmed": plan.security_confirmed,
+                            "perf_confirmed": plan.perf_confirmed,
+                            "docs_confirmed": plan.docs_confirmed
+                        }
+                    }),
+                )
+            }
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown plan id"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_complete(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let status = args_obj
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("DONE")
+            .to_string();
+
+        let payload = json!({ "status": status });
+
+        if task_id.starts_with("PLAN-") {
+            let result = self.store.set_plan_status(
+                &workspace,
+                &task_id,
+                expected_revision,
+                &status,
+                true,
+                "plan_updated".to_string(),
+                payload.to_string(),
+            );
+            return match result {
+                Ok((revision, _event)) => {
+                    let plan = match self.store.get_plan(&workspace, &task_id) {
+                        Ok(Some(p)) => p,
+                        Ok(None) => return ai_error("UNKNOWN_ID", "Unknown plan id"),
+                        Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                    };
+                    ai_ok(
+                        "complete",
+                        json!({
+                            "plan": {
+                                "id": plan.id,
+                                "kind": "plan",
+                                "title": plan.title,
+                                "revision": revision,
+                                "criteria_confirmed": plan.criteria_confirmed,
+                                "tests_confirmed": plan.tests_confirmed,
+                                "criteria_auto_confirmed": plan.criteria_auto_confirmed,
+                                "tests_auto_confirmed": plan.tests_auto_confirmed,
+                                "security_confirmed": plan.security_confirmed,
+                                "perf_confirmed": plan.perf_confirmed,
+                                "docs_confirmed": plan.docs_confirmed
+                            }
+                        }),
+                    )
+                }
+                Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                    "REVISION_MISMATCH",
+                    &format!("expected={expected} actual={actual}"),
+                    Some("Refresh the current revision and retry with expected_revision."),
+                    vec![suggest_call(
+                        "tasks_context",
+                        "Refresh current revisions for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                ),
+                Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown plan id"),
+                Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+                Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+        }
+
+        if !task_id.starts_with("TASK-") {
+            return ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-");
+        }
+
+        let require_steps_completed = status == "DONE";
+        let result = self.store.set_task_status(
+            &workspace,
+            &task_id,
+            expected_revision,
+            &status,
+            true,
+            require_steps_completed,
+            "task_completed".to_string(),
+            payload.to_string(),
+        );
+
+        match result {
+            Ok((revision, _event)) => {
+                let task = match self.store.get_task(&workspace, &task_id) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => return ai_error("UNKNOWN_ID", "Unknown task id"),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                ai_ok(
+                    "complete",
+                    json!({
+                        "task": {
+                            "id": task.id,
+                            "kind": "task",
+                            "title": task.title,
+                            "revision": revision,
+                            "status": task.status,
+                            "criteria_confirmed": task.criteria_confirmed,
+                            "tests_confirmed": task.tests_confirmed,
+                            "criteria_auto_confirmed": task.criteria_auto_confirmed,
+                            "tests_auto_confirmed": task.tests_auto_confirmed,
+                            "security_confirmed": task.security_confirmed,
+                            "perf_confirmed": task.perf_confirmed,
+                            "docs_confirmed": task.docs_confirmed
+                        }
+                    }),
+                )
+            }
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
     }
 
     fn tool_tasks_focus_get(&mut self, args: Value) -> Value {
@@ -1350,12 +2171,18 @@ impl McpServer {
                         "completed": summary.completed_steps,
                         "missing_criteria": summary.missing_criteria,
                         "missing_tests": summary.missing_tests,
+                        "missing_security": summary.missing_security,
+                        "missing_perf": summary.missing_perf,
+                        "missing_docs": summary.missing_docs,
                         "first_open": summary.first_open.as_ref().map(|s| json!({
                             "step_id": s.step_id,
                             "path": s.path,
                             "title": s.title,
                             "criteria_confirmed": s.criteria_confirmed,
-                            "tests_confirmed": s.tests_confirmed
+                            "tests_confirmed": s.tests_confirmed,
+                            "security_confirmed": s.security_confirmed,
+                            "perf_confirmed": s.perf_confirmed,
+                            "docs_confirmed": s.docs_confirmed
                         }))
                     }));
 
@@ -1374,9 +2201,35 @@ impl McpServer {
                                 summary.missing_tests
                             ));
                         }
+                        if summary.missing_security > 0 {
+                            verify.push(format!(
+                                "Missing security checkpoints: {}",
+                                summary.missing_security
+                            ));
+                        }
+                        if summary.missing_perf > 0 {
+                            verify.push(format!(
+                                "Missing perf checkpoints: {}",
+                                summary.missing_perf
+                            ));
+                        }
+                        if summary.missing_docs > 0 {
+                            verify.push(format!(
+                                "Missing docs checkpoints: {}",
+                                summary.missing_docs
+                            ));
+                        }
 
                         if let Some(first) = summary.first_open {
-                            if !first.criteria_confirmed || !first.tests_confirmed {
+                            let require_security = summary.missing_security > 0;
+                            let require_perf = summary.missing_perf > 0;
+                            let require_docs = summary.missing_docs > 0;
+                            if !first.criteria_confirmed
+                                || !first.tests_confirmed
+                                || (require_security && !first.security_confirmed)
+                                || (require_perf && !first.perf_confirmed)
+                                || (require_docs && !first.docs_confirmed)
+                            {
                                 next.push(format!("Confirm checkpoints for {}", first.path));
                             } else {
                                 next.push(format!("Close next step {}", first.path));
@@ -4588,7 +5441,10 @@ fn tool_definitions() -> Vec<Value> {
                         "type": "object",
                         "properties": {
                             "criteria": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
-                            "tests": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } }
+                            "tests": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
+                            "security": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
+                            "perf": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
+                            "docs": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } }
                         }
                     }
                 },
@@ -4625,11 +5481,48 @@ fn tool_definitions() -> Vec<Value> {
                         "type": "object",
                         "properties": {
                             "criteria": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
-                            "tests": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } }
+                            "tests": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
+                            "security": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
+                            "perf": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } },
+                            "docs": { "type": "object", "properties": { "confirmed": { "type": "boolean" } } }
                         }
                     }
                 },
                 "required": ["workspace", "task", "checkpoints"]
+            }
+        }),
+        json!({
+            "name": "tasks_block",
+            "description": "Block/unblock a step path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "blocked": { "type": "boolean" },
+                    "reason": { "type": "string" }
+                },
+                "required": ["workspace", "task"]
+            }
+        }),
+        json!({
+            "name": "tasks_progress",
+            "description": "Mark a step path completed/uncompleted (respects checkpoints unless force=true).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "completed": { "type": "boolean" },
+                    "force": { "type": "boolean" }
+                },
+                "required": ["workspace", "task"]
             }
         }),
         json!({
@@ -4643,8 +5536,60 @@ fn tool_definitions() -> Vec<Value> {
                     "expected_revision": { "type": "integer" },
                     "title": { "type": "string" },
                     "description": { "type": "string" },
+                    "context": { "type": "string" },
+                    "priority": { "type": "string" },
+                    "new_domain": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "depends_on": { "type": "array", "items": { "type": "string" } },
                     "contract": { "type": "string" },
                     "contract_data": { "type": "object" }
+                },
+                "required": ["workspace", "task"]
+            }
+        }),
+        json!({
+            "name": "tasks_plan",
+            "description": "Update plan checklist (`doc`, `steps`, `current`) and/or `advance=true`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "steps": { "type": "array", "items": { "type": "string" } },
+                    "current": { "type": "integer" },
+                    "doc": { "type": "string" },
+                    "advance": { "type": "boolean" }
+                },
+                "required": ["workspace", "plan"]
+            }
+        }),
+        json!({
+            "name": "tasks_contract",
+            "description": "Set or clear a plan contract.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "current": { "type": "string" },
+                    "contract_data": { "type": "object" },
+                    "clear": { "type": "boolean" }
+                },
+                "required": ["workspace", "plan"]
+            }
+        }),
+        json!({
+            "name": "tasks_complete",
+            "description": "Set status for a plan/task (TODO/ACTIVE/DONE).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "status": { "type": "string", "enum": ["TODO", "ACTIVE", "DONE"] }
                 },
                 "required": ["workspace", "task"]
             }
@@ -4656,7 +5601,19 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
-                    "max_chars": { "type": "integer" }
+                    "max_chars": { "type": "integer" },
+                    "include_all": { "type": "boolean" },
+                    "plan": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plans_limit": { "type": "integer" },
+                    "plans_cursor": { "type": "integer" },
+                    "plans_status": { "type": "string" },
+                    "tasks_limit": { "type": "integer" },
+                    "tasks_cursor": { "type": "integer" },
+                    "tasks_parent": { "type": "string" },
+                    "tasks_status": { "type": "string" },
+                    "domain": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["workspace"]
             }
@@ -5013,15 +5970,11 @@ fn parse_think_card(workspace: &WorkspaceId, value: Value) -> Result<ParsedThink
             if raw.starts_with('{') {
                 if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(raw) {
                     obj
-                } else if looks_like_card_dsl(raw) {
-                    parse_think_card_dsl(raw)?
                 } else {
                     let mut obj = serde_json::Map::new();
                     obj.insert("text".to_string(), Value::String(raw.to_string()));
                     obj
                 }
-            } else if looks_like_card_dsl(raw) {
-                parse_think_card_dsl(raw)?
             } else {
                 let mut obj = serde_json::Map::new();
                 obj.insert("text".to_string(), Value::String(raw.to_string()));
@@ -5038,44 +5991,6 @@ fn parse_think_card(workspace: &WorkspaceId, value: Value) -> Result<ParsedThink
     };
 
     normalize_think_card(workspace, raw_obj)
-}
-
-fn looks_like_card_dsl(raw: &str) -> bool {
-    let mut seen = false;
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        seen = true;
-        if !line.contains(':') {
-            return false;
-        }
-    }
-    seen
-}
-
-fn parse_think_card_dsl(raw: &str) -> Result<serde_json::Map<String, Value>, Value> {
-    let mut out = serde_json::Map::new();
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "card DSL must be 'key: value' lines",
-            ));
-        };
-        let key = key.trim();
-        let value = value.trim();
-        if key.is_empty() {
-            return Err(ai_error("INVALID_INPUT", "card DSL key must not be empty"));
-        }
-        out.insert(key.to_string(), Value::String(value.to_string()));
-    }
-    Ok(out)
 }
 
 fn normalize_think_card(
@@ -5291,9 +6206,15 @@ fn format_store_error(err: StoreError) -> String {
         StoreError::BranchCycle => "Branch base cycle".to_string(),
         StoreError::BranchDepthExceeded => "Branch base depth exceeded".to_string(),
         StoreError::StepNotFound => "Step not found".to_string(),
-        StoreError::CheckpointsNotConfirmed { criteria, tests } => {
-            format!("Checkpoints not confirmed: criteria={criteria} tests={tests}")
-        }
+        StoreError::CheckpointsNotConfirmed {
+            criteria,
+            tests,
+            security,
+            perf,
+            docs,
+        } => format!(
+            "Checkpoints not confirmed: criteria={criteria} tests={tests} security={security} perf={perf} docs={docs}"
+        ),
     }
 }
 

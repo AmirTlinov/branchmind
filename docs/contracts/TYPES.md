@@ -100,6 +100,55 @@ Graph merge conflicts are first-class entities with deterministic IDs.
 
 ```json
 { "type": "string", "pattern": "^CONFLICT-[0-9a-f]{32}$" }
+
+## Task enums (v0.2)
+
+### TaskStatus
+
+```json
+{ "type": "string", "enum": ["TODO", "ACTIVE", "DONE"] }
+```
+
+### Priority
+
+```json
+{ "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] }
+```
+
+### Tags
+
+```json
+{ "type": "array", "items": { "type": "string" } }
+```
+
+## Evidence artifacts (v0.2)
+
+Artifacts are bounded and sanitized on output.
+
+```json
+{
+  "kind": "cmd_output|diff|url",
+  "command": "string?",
+  "stdout": "string?",
+  "stderr": "string?",
+  "exit_code": 0,
+  "diff": "string?",
+  "content": "string?",
+  "url": "string?",
+  "external_uri": "string?",
+  "meta": {}
+}
+```
+
+## Patch operation (v0.2)
+
+```json
+{
+  "op": "set|unset|append|remove",
+  "field": "string",
+  "value": "any?"
+}
+```
 ```
 
 ## Optimistic concurrency

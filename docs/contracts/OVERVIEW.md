@@ -23,6 +23,7 @@ Many MCP clients require tool names to match `^[a-zA-Z0-9_-]+$`.
 - `TASKS.md` — task execution surface (`tasks_*`)
 - `MEMORY.md` — reasoning memory surface (branching, notes, graph, traces)
 - `INTEGRATION.md` — how tasks and memory stay consistent (events, refs, conflicts)
+- `PARITY.md` — parity target with apply_task + branchmind tool surfaces
 
 Related:
 

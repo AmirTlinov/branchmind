@@ -110,6 +110,19 @@ Typical task-step event types (v0):
 - `step_verified`
 - `step_done`
 
+Additional event types (v0.2 parity):
+
+- `task_patched`
+- `task_completed`
+- `task_deleted`
+- `step_reopened`
+- `step_blocked` / `step_unblocked`
+- `plan_updated`
+- `contract_updated`
+- `evidence_captured`
+- `batch_applied`
+- `undo_applied` / `redo_applied`
+
 ## Conflicts lifecycle (discoverable)
 
 When a merge conflict exists, it must be discoverable via a query:
