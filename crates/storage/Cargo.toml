@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 bm_core = { path = "../core" }
 rusqlite = "0.33"
+serde_json = "1"

@@ -489,6 +489,13 @@ pub struct StepRef {
 }
 
 #[derive(Clone, Debug)]
+enum OpsHistoryTarget {
+    Task { title: Option<String> },
+    Step { step: StepRef },
+    TaskNode,
+}
+
+#[derive(Clone, Debug)]
 pub struct StepOpResult {
     pub task_revision: i64,
     pub step: StepRef,
@@ -5214,7 +5221,7 @@ impl SqliteStore {
     }
 
     pub fn step_detail(
-        &self,
+        &mut self,
         workspace: &WorkspaceId,
         task_id: &str,
         step_id: Option<&str>,
@@ -5279,7 +5286,7 @@ impl SqliteStore {
     }
 
     pub fn task_node_detail(
-        &self,
+        &mut self,
         workspace: &WorkspaceId,
         task_id: &str,
         node_id: Option<&str>,
@@ -5687,6 +5694,20 @@ impl SqliteStore {
             "success_criteria": before_items.success_criteria.clone()
         });
 
+        let has_title = patch.title.is_some();
+        let has_status = patch.status.is_some();
+        let has_status_manual = patch.status_manual.is_some();
+        let has_priority = patch.priority.is_some();
+        let has_blocked = patch.blocked.is_some();
+        let has_description = patch.description.is_some();
+        let has_context = patch.context.is_some();
+        let has_blockers = patch.blockers.is_some();
+        let has_dependencies = patch.dependencies.is_some();
+        let has_next_steps = patch.next_steps.is_some();
+        let has_problems = patch.problems.is_some();
+        let has_risks = patch.risks.is_some();
+        let has_success_criteria = patch.success_criteria.is_some();
+
         let mut next_title = current_title;
         let mut next_status = current_status;
         let mut next_status_manual = current_status_manual != 0;
@@ -5758,7 +5779,7 @@ impl SqliteStore {
                 .unwrap_or_else(|| before_items.success_criteria.clone()),
         };
 
-        if patch.blockers.is_some() {
+        if has_blockers {
             task_items_replace_tx(
                 &tx,
                 workspace.as_str(),
@@ -5768,7 +5789,7 @@ impl SqliteStore {
                 &next_items.blockers,
             )?;
         }
-        if patch.dependencies.is_some() {
+        if has_dependencies {
             task_items_replace_tx(
                 &tx,
                 workspace.as_str(),
@@ -5778,7 +5799,7 @@ impl SqliteStore {
                 &next_items.dependencies,
             )?;
         }
-        if patch.next_steps.is_some() {
+        if has_next_steps {
             task_items_replace_tx(
                 &tx,
                 workspace.as_str(),
@@ -5788,7 +5809,7 @@ impl SqliteStore {
                 &next_items.next_steps,
             )?;
         }
-        if patch.problems.is_some() {
+        if has_problems {
             task_items_replace_tx(
                 &tx,
                 workspace.as_str(),
@@ -5798,7 +5819,7 @@ impl SqliteStore {
                 &next_items.problems,
             )?;
         }
-        if patch.risks.is_some() {
+        if has_risks {
             task_items_replace_tx(
                 &tx,
                 workspace.as_str(),
@@ -5808,7 +5829,7 @@ impl SqliteStore {
                 &next_items.risks,
             )?;
         }
-        if patch.success_criteria.is_some() {
+        if has_success_criteria {
             task_items_replace_tx(
                 &tx,
                 workspace.as_str(),
@@ -5820,43 +5841,43 @@ impl SqliteStore {
         }
 
         let mut fields = Vec::new();
-        if patch.title.is_some() {
+        if has_title {
             fields.push("title");
         }
-        if patch.status.is_some() {
+        if has_status {
             fields.push("status");
         }
-        if patch.status_manual.is_some() {
+        if has_status_manual {
             fields.push("status_manual");
         }
-        if patch.priority.is_some() {
+        if has_priority {
             fields.push("priority");
         }
-        if patch.blocked.is_some() {
+        if has_blocked {
             fields.push("blocked");
         }
-        if patch.description.is_some() {
+        if has_description {
             fields.push("description");
         }
-        if patch.context.is_some() {
+        if has_context {
             fields.push("context");
         }
-        if patch.blockers.is_some() {
+        if has_blockers {
             fields.push("blockers");
         }
-        if patch.dependencies.is_some() {
+        if has_dependencies {
             fields.push("dependencies");
         }
-        if patch.next_steps.is_some() {
+        if has_next_steps {
             fields.push("next_steps");
         }
-        if patch.problems.is_some() {
+        if has_problems {
             fields.push("problems");
         }
-        if patch.risks.is_some() {
+        if has_risks {
             fields.push("risks");
         }
-        if patch.success_criteria.is_some() {
+        if has_success_criteria {
             fields.push("success_criteria");
         }
 
@@ -6317,12 +6338,12 @@ impl SqliteStore {
         let (step_id, path) =
             resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
 
-        let detail = {
+        let (detail, before_completed_at_ms) = {
             let row = tx
                 .query_row(
                     r#"
                     SELECT title, criteria_confirmed, tests_confirmed, security_confirmed,
-                           perf_confirmed, docs_confirmed, completed, blocked, block_reason
+                           perf_confirmed, docs_confirmed, completed, completed_at_ms, blocked, block_reason
                     FROM steps
                     WHERE workspace=?1 AND task_id=?2 AND step_id=?3
                     "#,
@@ -6336,8 +6357,9 @@ impl SqliteStore {
                             row.get::<_, i64>(4)?,
                             row.get::<_, i64>(5)?,
                             row.get::<_, i64>(6)?,
-                            row.get::<_, i64>(7)?,
-                            row.get::<_, Option<String>>(8)?,
+                            row.get::<_, Option<i64>>(7)?,
+                            row.get::<_, i64>(8)?,
+                            row.get::<_, Option<String>>(9)?,
                         ))
                     },
                 )
@@ -6350,13 +6372,14 @@ impl SqliteStore {
                 perf,
                 docs,
                 completed,
+                completed_at_ms,
                 blocked,
                 block_reason,
             )) = row
             else {
                 return Err(StoreError::StepNotFound);
             };
-            StepDetail {
+            let detail = StepDetail {
                 step_id: step_id.clone(),
                 path: path.clone(),
                 title,
@@ -6376,7 +6399,8 @@ impl SqliteStore {
                 completed: completed != 0,
                 blocked: blocked != 0,
                 block_reason,
-            }
+            };
+            (detail, completed_at_ms)
         };
 
         let before_snapshot = json!({
@@ -6393,6 +6417,7 @@ impl SqliteStore {
             "perf_confirmed": detail.perf_confirmed,
             "docs_confirmed": detail.docs_confirmed,
             "completed": detail.completed,
+            "completed_at_ms": before_completed_at_ms,
             "blocked": detail.blocked,
             "block_reason": detail.block_reason
         });
@@ -6472,12 +6497,12 @@ impl SqliteStore {
             &event,
         )?;
 
-        let after_detail = {
+        let (after_detail, after_completed_at_ms) = {
             let row = tx
                 .query_row(
                     r#"
                     SELECT title, criteria_confirmed, tests_confirmed, security_confirmed,
-                           perf_confirmed, docs_confirmed, completed, blocked, block_reason
+                           perf_confirmed, docs_confirmed, completed, completed_at_ms, blocked, block_reason
                     FROM steps
                     WHERE workspace=?1 AND task_id=?2 AND step_id=?3
                     "#,
@@ -6491,8 +6516,9 @@ impl SqliteStore {
                             row.get::<_, i64>(4)?,
                             row.get::<_, i64>(5)?,
                             row.get::<_, i64>(6)?,
-                            row.get::<_, i64>(7)?,
-                            row.get::<_, Option<String>>(8)?,
+                            row.get::<_, Option<i64>>(7)?,
+                            row.get::<_, i64>(8)?,
+                            row.get::<_, Option<String>>(9)?,
                         ))
                     },
                 )
@@ -6505,13 +6531,14 @@ impl SqliteStore {
                 perf,
                 docs,
                 completed,
+                completed_at_ms,
                 blocked,
                 block_reason,
             )) = row
             else {
                 return Err(StoreError::StepNotFound);
             };
-            StepDetail {
+            let detail = StepDetail {
                 step_id: step_id.clone(),
                 path: path.clone(),
                 title,
@@ -6531,7 +6558,8 @@ impl SqliteStore {
                 completed: completed != 0,
                 blocked: blocked != 0,
                 block_reason,
-            }
+            };
+            (detail, completed_at_ms)
         };
 
         let after_snapshot = json!({
@@ -6548,6 +6576,7 @@ impl SqliteStore {
             "perf_confirmed": after_detail.perf_confirmed,
             "docs_confirmed": after_detail.docs_confirmed,
             "completed": after_detail.completed,
+            "completed_at_ms": after_completed_at_ms,
             "blocked": after_detail.blocked,
             "block_reason": after_detail.block_reason
         });
@@ -6607,6 +6636,7 @@ impl SqliteStore {
         path: Option<&StepPath>,
         completed: bool,
         force: bool,
+        record_undo: bool,
     ) -> Result<StepOpResult, StoreError> {
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
@@ -6618,24 +6648,34 @@ impl SqliteStore {
 
         let row = tx
             .query_row(
-                "SELECT completed, criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                "SELECT completed, completed_at_ms, criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
                 params![workspace.as_str(), task_id, step_id],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(1)?,
                         row.get::<_, i64>(2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
                     ))
                 },
             )
             .optional()?;
 
-        let Some((already_completed, criteria, tests, security, perf, docs)) = row else {
+        let Some((already_completed, completed_at_ms, criteria, tests, security, perf, docs)) = row
+        else {
             return Err(StoreError::StepNotFound);
         };
+
+        let before_snapshot = json!({
+            "task": task_id,
+            "step_id": step_id,
+            "path": path.to_string(),
+            "completed": already_completed != 0,
+            "completed_at_ms": completed_at_ms
+        });
 
         if completed {
             if already_completed != 0 {
@@ -6674,6 +6714,14 @@ impl SqliteStore {
             )?;
         }
 
+        let after_snapshot = json!({
+            "task": task_id,
+            "step_id": step_id,
+            "path": path.to_string(),
+            "completed": completed,
+            "completed_at_ms": if completed { Some(now_ms) } else { None }
+        });
+
         let step_ref = StepRef {
             step_id: step_id.clone(),
             path: path.clone(),
@@ -6705,6 +6753,21 @@ impl SqliteStore {
             &reasoning_ref.trace_doc,
             &event,
         )?;
+
+        if record_undo {
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                Some(path.clone()),
+                "step_progress",
+                &event_payload_json,
+                Some(&before_snapshot.to_string()),
+                Some(&after_snapshot.to_string()),
+                true,
+                now_ms,
+            )?;
+        }
 
         let (snapshot_title, snapshot_completed) =
             step_snapshot_tx(&tx, workspace.as_str(), task_id, &step_ref.step_id)?;
@@ -6746,6 +6809,7 @@ impl SqliteStore {
         path: Option<&StepPath>,
         blocked: bool,
         reason: Option<String>,
+        record_undo: bool,
     ) -> Result<StepOpResult, StoreError> {
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
@@ -6755,6 +6819,25 @@ impl SqliteStore {
         let (step_id, path) =
             resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
 
+        let row = tx
+            .query_row(
+                "SELECT blocked, block_reason FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+        let Some((before_blocked, before_reason)) = row else {
+            return Err(StoreError::StepNotFound);
+        };
+
+        let before_snapshot = json!({
+            "task": task_id,
+            "step_id": step_id,
+            "path": path.to_string(),
+            "blocked": before_blocked != 0,
+            "block_reason": before_reason
+        });
+
         let payload_reason = reason.clone();
         tx.execute(
             "UPDATE steps SET blocked=?4, block_reason=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
@@ -6763,10 +6846,18 @@ impl SqliteStore {
                 task_id,
                 step_id,
                 if blocked { 1i64 } else { 0i64 },
-                if blocked { reason } else { None::<String> },
+                if blocked { reason.clone() } else { None::<String> },
                 now_ms
             ],
         )?;
+
+        let after_snapshot = json!({
+            "task": task_id,
+            "step_id": step_id,
+            "path": path.to_string(),
+            "blocked": blocked,
+            "block_reason": if blocked { reason.clone() } else { None }
+        });
 
         let step_ref = StepRef {
             step_id: step_id.clone(),
@@ -6797,6 +6888,21 @@ impl SqliteStore {
             &reasoning_ref.trace_doc,
             &event,
         )?;
+
+        if record_undo {
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                Some(path.clone()),
+                "step_block_set",
+                &event_payload_json,
+                Some(&before_snapshot.to_string()),
+                Some(&after_snapshot.to_string()),
+                true,
+                now_ms,
+            )?;
+        }
 
         tx.commit()?;
         Ok(StepOpResult {
@@ -7440,7 +7546,7 @@ impl SqliteStore {
     }
 
     pub fn task_items_list(
-        &self,
+        &mut self,
         workspace: &WorkspaceId,
         entity_kind: &str,
         entity_id: &str,
@@ -7609,6 +7715,207 @@ impl SqliteStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    pub fn ops_history_list(
+        &self,
+        workspace: &WorkspaceId,
+        task_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<OpsHistoryRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT seq, ts_ms, task_id, path, intent, payload_json, before_json, after_json, undoable, undone
+            FROM ops_history
+            WHERE workspace=?1 AND (?2 IS NULL OR task_id=?2)
+            ORDER BY seq DESC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            params![workspace.as_str(), task_id, limit as i64],
+            |row| {
+                Ok(OpsHistoryRow {
+                    seq: row.get(0)?,
+                    ts_ms: row.get(1)?,
+                    task_id: row.get(2)?,
+                    path: row.get(3)?,
+                    intent: row.get(4)?,
+                    payload_json: row.get(5)?,
+                    before_json: row.get(6)?,
+                    after_json: row.get(7)?,
+                    undoable: row.get::<_, i64>(8)? != 0,
+                    undone: row.get::<_, i64>(9)? != 0,
+                })
+            },
+        )?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn ops_history_undo(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: Option<&str>,
+    ) -> Result<(OpsHistoryRow, EventRow), StoreError> {
+        self.ops_history_apply(workspace, task_id, true)
+    }
+
+    pub fn ops_history_redo(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: Option<&str>,
+    ) -> Result<(OpsHistoryRow, EventRow), StoreError> {
+        self.ops_history_apply(workspace, task_id, false)
+    }
+
+    fn ops_history_apply(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: Option<&str>,
+        undo: bool,
+    ) -> Result<(OpsHistoryRow, EventRow), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        let undone_flag = if undo { 0i64 } else { 1i64 };
+        let row = {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT seq, ts_ms, task_id, path, intent, payload_json, before_json, after_json, undoable, undone
+                FROM ops_history
+                WHERE workspace=?1 AND undoable=1 AND undone=?2 AND (?3 IS NULL OR task_id=?3)
+                ORDER BY seq DESC
+                LIMIT 1
+                "#,
+            )?;
+            stmt.query_row(
+                params![workspace.as_str(), undone_flag, task_id],
+                |row| {
+                    Ok(OpsHistoryRow {
+                        seq: row.get(0)?,
+                        ts_ms: row.get(1)?,
+                        task_id: row.get(2)?,
+                        path: row.get(3)?,
+                        intent: row.get(4)?,
+                        payload_json: row.get(5)?,
+                        before_json: row.get(6)?,
+                        after_json: row.get(7)?,
+                        undoable: row.get::<_, i64>(8)? != 0,
+                        undone: row.get::<_, i64>(9)? != 0,
+                    })
+                },
+            )
+            .optional()?
+        };
+        let Some(row) = row else {
+            return Err(StoreError::InvalidInput("no undoable operations"));
+        };
+
+        let snapshot_json = if undo {
+            row.before_json.as_deref()
+        } else {
+            row.after_json.as_deref()
+        }
+        .ok_or(StoreError::InvalidInput("snapshot missing"))?;
+        let snapshot: JsonValue =
+            serde_json::from_str(snapshot_json).map_err(|_| StoreError::InvalidInput("snapshot invalid"))?;
+
+        let target = match row.intent.as_str() {
+            "task_detail_patch" => apply_task_detail_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
+            "step_patch" => apply_step_patch_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
+            "step_progress" => apply_step_progress_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
+            "step_block_set" => apply_step_block_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
+            "task_node_patch" => apply_task_node_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
+            _ => return Err(StoreError::InvalidInput("undo not supported for intent")),
+        };
+
+        tx.execute(
+            "UPDATE ops_history SET undone=?3 WHERE workspace=?1 AND seq=?2",
+            params![workspace.as_str(), row.seq, if undo { 1i64 } else { 0i64 }],
+        )?;
+
+        let event_payload_json = build_undo_redo_payload(
+            row.seq,
+            row.intent.as_str(),
+            row.task_id.as_deref(),
+            row.path.as_deref(),
+            undo,
+        );
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            row.task_id.clone(),
+            row.path.clone(),
+            if undo { "undo_applied" } else { "redo_applied" },
+            &event_payload_json,
+        )?;
+
+        if let Some(task_id) = row.task_id.as_deref() {
+            let kind = parse_plan_or_task_kind(task_id)?;
+            let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, task_id, kind, now_ms)?;
+            let _ = ingest_task_event_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.trace_doc,
+                &event,
+            )?;
+
+            match target {
+                OpsHistoryTarget::Task { title } => {
+                    if let Some(title) = title {
+                        let touched = Self::project_task_graph_task_node_tx(
+                            &tx,
+                            workspace.as_str(),
+                            &reasoning_ref,
+                            &event,
+                            task_id,
+                            &title,
+                            now_ms,
+                        )?;
+                        if touched {
+                            touch_document_tx(
+                                &tx,
+                                workspace.as_str(),
+                                &reasoning_ref.branch,
+                                &reasoning_ref.graph_doc,
+                                now_ms,
+                            )?;
+                        }
+                    }
+                }
+                OpsHistoryTarget::Step { step } => {
+                    let (snapshot_title, snapshot_completed) =
+                        step_snapshot_tx(&tx, workspace.as_str(), task_id, &step.step_id)?;
+                    let graph_touched = Self::project_task_graph_step_node_tx(
+                        &tx,
+                        workspace.as_str(),
+                        &reasoning_ref,
+                        &event,
+                        task_id,
+                        &step,
+                        &snapshot_title,
+                        snapshot_completed,
+                        now_ms,
+                    )?;
+                    if graph_touched {
+                        touch_document_tx(
+                            &tx,
+                            workspace.as_str(),
+                            &reasoning_ref.branch,
+                            &reasoning_ref.graph_doc,
+                            now_ms,
+                        )?;
+                    }
+                }
+                OpsHistoryTarget::TaskNode => {}
+            }
+        }
+
+        tx.commit()?;
+        Ok((row, event))
+    }
+
     pub fn workspace_exists(&self, workspace: &WorkspaceId) -> Result<bool, StoreError> {
         Ok(self
             .conn
@@ -7656,6 +7963,492 @@ impl SqliteStore {
             )
             .optional()?)
     }
+}
+
+fn snapshot_required_str(snapshot: &JsonValue, field: &str) -> Result<String, StoreError> {
+    snapshot
+        .get(field)
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .ok_or_else(|| StoreError::InvalidInput("snapshot missing string field"))
+}
+
+fn snapshot_required_bool(snapshot: &JsonValue, field: &str) -> Result<bool, StoreError> {
+    snapshot
+        .get(field)
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| StoreError::InvalidInput("snapshot missing boolean field"))
+}
+
+fn snapshot_optional_string(snapshot: &JsonValue, field: &str) -> Result<Option<String>, StoreError> {
+    match snapshot.get(field) {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(JsonValue::String(value)) => Ok(Some(value.clone())),
+        _ => Err(StoreError::InvalidInput("snapshot invalid string field")),
+    }
+}
+
+fn snapshot_optional_i64(snapshot: &JsonValue, field: &str) -> Result<Option<i64>, StoreError> {
+    match snapshot.get(field) {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .ok_or(StoreError::InvalidInput("snapshot invalid integer field"))
+            .map(Some),
+    }
+}
+
+fn snapshot_optional_json_string(
+    snapshot: &JsonValue,
+    field: &str,
+) -> Result<Option<String>, StoreError> {
+    match snapshot.get(field) {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(value) => Ok(Some(value.to_string())),
+    }
+}
+
+fn snapshot_required_vec(snapshot: &JsonValue, field: &str) -> Result<Vec<String>, StoreError> {
+    let Some(array) = snapshot.get(field).and_then(|v| v.as_array()) else {
+        return Err(StoreError::InvalidInput("snapshot missing array field"));
+    };
+    let mut out = Vec::with_capacity(array.len());
+    for value in array {
+        let Some(text) = value.as_str() else {
+            return Err(StoreError::InvalidInput("snapshot array must be strings"));
+        };
+        out.push(text.to_string());
+    }
+    Ok(out)
+}
+
+fn apply_task_detail_snapshot_tx(
+    tx: &Transaction<'_>,
+    workspace: &WorkspaceId,
+    snapshot: &JsonValue,
+    now_ms: i64,
+) -> Result<OpsHistoryTarget, StoreError> {
+    let kind_raw = snapshot_required_str(snapshot, "kind")?;
+    let kind = match kind_raw.as_str() {
+        "plan" => TaskKind::Plan,
+        "task" => TaskKind::Task,
+        _ => return Err(StoreError::InvalidInput("snapshot kind invalid")),
+    };
+    let task_id = snapshot_required_str(snapshot, "task")?;
+    let title = snapshot_required_str(snapshot, "title")?;
+    let description = snapshot_optional_string(snapshot, "description")?;
+    let context = snapshot_optional_string(snapshot, "context")?;
+    let priority = snapshot_required_str(snapshot, "priority")?;
+    let contract = snapshot_optional_string(snapshot, "contract")?;
+    let contract_json = snapshot_optional_json_string(snapshot, "contract_data")?;
+    let domain = snapshot_optional_string(snapshot, "domain")?;
+    let phase = snapshot_optional_string(snapshot, "phase")?;
+    let component = snapshot_optional_string(snapshot, "component")?;
+    let assignee = snapshot_optional_string(snapshot, "assignee")?;
+    let tags = snapshot_required_vec(snapshot, "tags")?;
+    let depends_on = snapshot_required_vec(snapshot, "depends_on")?;
+
+    match kind {
+        TaskKind::Plan => {
+            bump_plan_revision_tx(tx, workspace.as_str(), &task_id, None, now_ms)?;
+            let changed = tx.execute(
+                r#"
+                UPDATE plans
+                SET title=?3, description=?4, context=?5, priority=?6, contract=?7, contract_json=?8, updated_at_ms=?9
+                WHERE workspace=?1 AND id=?2
+                "#,
+                params![
+                    workspace.as_str(),
+                    task_id,
+                    title,
+                    description,
+                    context,
+                    priority,
+                    contract,
+                    contract_json,
+                    now_ms
+                ],
+            )?;
+            if changed == 0 {
+                return Err(StoreError::UnknownId);
+            }
+        }
+        TaskKind::Task => {
+            bump_task_revision_tx(tx, workspace.as_str(), &task_id, None, now_ms)?;
+            let changed = tx.execute(
+                r#"
+                UPDATE tasks
+                SET title=?3, description=?4, context=?5, priority=?6,
+                    domain=?7, phase=?8, component=?9, assignee=?10, updated_at_ms=?11
+                WHERE workspace=?1 AND id=?2
+                "#,
+                params![
+                    workspace.as_str(),
+                    task_id,
+                    title,
+                    description,
+                    context,
+                    priority,
+                    domain,
+                    phase,
+                    component,
+                    assignee,
+                    now_ms
+                ],
+            )?;
+            if changed == 0 {
+                return Err(StoreError::UnknownId);
+            }
+        }
+    }
+
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        kind.as_str(),
+        &task_id,
+        "tags",
+        &tags,
+    )?;
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        kind.as_str(),
+        &task_id,
+        "depends_on",
+        &depends_on,
+    )?;
+
+    Ok(OpsHistoryTarget::Task {
+        title: if matches!(kind, TaskKind::Task) {
+            Some(title)
+        } else {
+            None
+        },
+    })
+}
+
+fn apply_step_patch_snapshot_tx(
+    tx: &Transaction<'_>,
+    workspace: &WorkspaceId,
+    snapshot: &JsonValue,
+    now_ms: i64,
+) -> Result<OpsHistoryTarget, StoreError> {
+    let task_id = snapshot_required_str(snapshot, "task")?;
+    let step_id = snapshot_required_str(snapshot, "step_id")?;
+    let path = snapshot_required_str(snapshot, "path")?;
+    let title = snapshot_required_str(snapshot, "title")?;
+    let success_criteria = snapshot_required_vec(snapshot, "success_criteria")?;
+    let tests = snapshot_required_vec(snapshot, "tests")?;
+    let blockers = snapshot_required_vec(snapshot, "blockers")?;
+    let criteria_confirmed = snapshot_required_bool(snapshot, "criteria_confirmed")?;
+    let tests_confirmed = snapshot_required_bool(snapshot, "tests_confirmed")?;
+    let security_confirmed = snapshot_required_bool(snapshot, "security_confirmed")?;
+    let perf_confirmed = snapshot_required_bool(snapshot, "perf_confirmed")?;
+    let docs_confirmed = snapshot_required_bool(snapshot, "docs_confirmed")?;
+    let completed = snapshot_required_bool(snapshot, "completed")?;
+    let completed_at_ms = snapshot_optional_i64(snapshot, "completed_at_ms")?;
+    let blocked = snapshot_required_bool(snapshot, "blocked")?;
+    let block_reason = snapshot_optional_string(snapshot, "block_reason")?;
+
+    bump_task_revision_tx(tx, workspace.as_str(), &task_id, None, now_ms)?;
+
+    if completed {
+        if let Some(completed_at_ms) = completed_at_ms {
+            let changed = tx.execute(
+                r#"
+                UPDATE steps
+                SET title=?4, criteria_confirmed=?5, tests_confirmed=?6, security_confirmed=?7,
+                    perf_confirmed=?8, docs_confirmed=?9, completed=?10, completed_at_ms=?11,
+                    blocked=?12, block_reason=?13, updated_at_ms=?14
+                WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+                "#,
+                params![
+                    workspace.as_str(),
+                    task_id,
+                    step_id,
+                    title,
+                    if criteria_confirmed { 1i64 } else { 0i64 },
+                    if tests_confirmed { 1i64 } else { 0i64 },
+                    if security_confirmed { 1i64 } else { 0i64 },
+                    if perf_confirmed { 1i64 } else { 0i64 },
+                    if docs_confirmed { 1i64 } else { 0i64 },
+                    1i64,
+                    completed_at_ms,
+                    if blocked { 1i64 } else { 0i64 },
+                    if blocked { block_reason.clone() } else { None },
+                    now_ms
+                ],
+            )?;
+            if changed == 0 {
+                return Err(StoreError::StepNotFound);
+            }
+        } else {
+            let changed = tx.execute(
+                r#"
+                UPDATE steps
+                SET title=?4, criteria_confirmed=?5, tests_confirmed=?6, security_confirmed=?7,
+                    perf_confirmed=?8, docs_confirmed=?9, completed=?10,
+                    blocked=?11, block_reason=?12, updated_at_ms=?13
+                WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+                "#,
+                params![
+                    workspace.as_str(),
+                    task_id,
+                    step_id,
+                    title,
+                    if criteria_confirmed { 1i64 } else { 0i64 },
+                    if tests_confirmed { 1i64 } else { 0i64 },
+                    if security_confirmed { 1i64 } else { 0i64 },
+                    if perf_confirmed { 1i64 } else { 0i64 },
+                    if docs_confirmed { 1i64 } else { 0i64 },
+                    1i64,
+                    if blocked { 1i64 } else { 0i64 },
+                    if blocked { block_reason.clone() } else { None },
+                    now_ms
+                ],
+            )?;
+            if changed == 0 {
+                return Err(StoreError::StepNotFound);
+            }
+        }
+    } else {
+        let changed = tx.execute(
+            r#"
+            UPDATE steps
+            SET title=?4, criteria_confirmed=?5, tests_confirmed=?6, security_confirmed=?7,
+                perf_confirmed=?8, docs_confirmed=?9, completed=?10, completed_at_ms=NULL,
+                blocked=?11, block_reason=?12, updated_at_ms=?13
+            WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+            "#,
+            params![
+                workspace.as_str(),
+                task_id,
+                step_id,
+                title,
+                if criteria_confirmed { 1i64 } else { 0i64 },
+                if tests_confirmed { 1i64 } else { 0i64 },
+                if security_confirmed { 1i64 } else { 0i64 },
+                if perf_confirmed { 1i64 } else { 0i64 },
+                if docs_confirmed { 1i64 } else { 0i64 },
+                0i64,
+                if blocked { 1i64 } else { 0i64 },
+                if blocked { block_reason.clone() } else { None },
+                now_ms
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::StepNotFound);
+        }
+    }
+
+    tx.execute(
+        "DELETE FROM step_criteria WHERE workspace=?1 AND step_id=?2",
+        params![workspace.as_str(), step_id],
+    )?;
+    for (idx, text) in success_criteria.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO step_criteria(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+            params![workspace.as_str(), step_id, idx as i64, text],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM step_tests WHERE workspace=?1 AND step_id=?2",
+        params![workspace.as_str(), step_id],
+    )?;
+    for (idx, text) in tests.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO step_tests(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+            params![workspace.as_str(), step_id, idx as i64, text],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM step_blockers WHERE workspace=?1 AND step_id=?2",
+        params![workspace.as_str(), step_id],
+    )?;
+    for (idx, text) in blockers.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO step_blockers(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+            params![workspace.as_str(), step_id, idx as i64, text],
+        )?;
+    }
+
+    Ok(OpsHistoryTarget::Step {
+        step: StepRef { step_id, path },
+    })
+}
+
+fn apply_step_progress_snapshot_tx(
+    tx: &Transaction<'_>,
+    workspace: &WorkspaceId,
+    snapshot: &JsonValue,
+    now_ms: i64,
+) -> Result<OpsHistoryTarget, StoreError> {
+    let task_id = snapshot_required_str(snapshot, "task")?;
+    let step_id = snapshot_required_str(snapshot, "step_id")?;
+    let path = snapshot_required_str(snapshot, "path")?;
+    let completed = snapshot_required_bool(snapshot, "completed")?;
+    let completed_at_ms = snapshot_optional_i64(snapshot, "completed_at_ms")?;
+
+    bump_task_revision_tx(tx, workspace.as_str(), &task_id, None, now_ms)?;
+
+    if completed {
+        let ts = completed_at_ms.unwrap_or(now_ms);
+        let changed = tx.execute(
+            "UPDATE steps SET completed=1, completed_at_ms=?4, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            params![workspace.as_str(), task_id, step_id, ts],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::StepNotFound);
+        }
+    } else {
+        let changed = tx.execute(
+            "UPDATE steps SET completed=0, completed_at_ms=NULL, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+            params![workspace.as_str(), task_id, step_id, now_ms],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::StepNotFound);
+        }
+    }
+
+    Ok(OpsHistoryTarget::Step {
+        step: StepRef { step_id, path },
+    })
+}
+
+fn apply_step_block_snapshot_tx(
+    tx: &Transaction<'_>,
+    workspace: &WorkspaceId,
+    snapshot: &JsonValue,
+    now_ms: i64,
+) -> Result<OpsHistoryTarget, StoreError> {
+    let task_id = snapshot_required_str(snapshot, "task")?;
+    let step_id = snapshot_required_str(snapshot, "step_id")?;
+    let path = snapshot_required_str(snapshot, "path")?;
+    let blocked = snapshot_required_bool(snapshot, "blocked")?;
+    let block_reason = snapshot_optional_string(snapshot, "block_reason")?;
+
+    bump_task_revision_tx(tx, workspace.as_str(), &task_id, None, now_ms)?;
+
+    let changed = tx.execute(
+        "UPDATE steps SET blocked=?4, block_reason=?5, updated_at_ms=?6 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+        params![
+            workspace.as_str(),
+            task_id,
+            step_id,
+            if blocked { 1i64 } else { 0i64 },
+            if blocked { block_reason.clone() } else { None },
+            now_ms
+        ],
+    )?;
+    if changed == 0 {
+        return Err(StoreError::StepNotFound);
+    }
+
+    Ok(OpsHistoryTarget::Step {
+        step: StepRef { step_id, path },
+    })
+}
+
+fn apply_task_node_snapshot_tx(
+    tx: &Transaction<'_>,
+    workspace: &WorkspaceId,
+    snapshot: &JsonValue,
+    now_ms: i64,
+) -> Result<OpsHistoryTarget, StoreError> {
+    let task_id = snapshot_required_str(snapshot, "task")?;
+    let node_id = snapshot_required_str(snapshot, "node_id")?;
+    let title = snapshot_required_str(snapshot, "title")?;
+    let status = snapshot_required_str(snapshot, "status")?;
+    let status_manual = snapshot_required_bool(snapshot, "status_manual")?;
+    let priority = snapshot_required_str(snapshot, "priority")?;
+    let blocked = snapshot_required_bool(snapshot, "blocked")?;
+    let description = snapshot_optional_string(snapshot, "description")?;
+    let context = snapshot_optional_string(snapshot, "context")?;
+    let blockers = snapshot_required_vec(snapshot, "blockers")?;
+    let dependencies = snapshot_required_vec(snapshot, "dependencies")?;
+    let next_steps = snapshot_required_vec(snapshot, "next_steps")?;
+    let problems = snapshot_required_vec(snapshot, "problems")?;
+    let risks = snapshot_required_vec(snapshot, "risks")?;
+    let success_criteria = snapshot_required_vec(snapshot, "success_criteria")?;
+
+    bump_task_revision_tx(tx, workspace.as_str(), &task_id, None, now_ms)?;
+
+    let changed = tx.execute(
+        r#"
+        UPDATE task_nodes
+        SET title=?4, status=?5, status_manual=?6, priority=?7, blocked=?8,
+            description=?9, context=?10, updated_at_ms=?11
+        WHERE workspace=?1 AND task_id=?2 AND node_id=?3
+        "#,
+        params![
+            workspace.as_str(),
+            task_id,
+            node_id,
+            title,
+            status,
+            if status_manual { 1i64 } else { 0i64 },
+            priority,
+            if blocked { 1i64 } else { 0i64 },
+            description,
+            context,
+            now_ms
+        ],
+    )?;
+    if changed == 0 {
+        return Err(StoreError::UnknownId);
+    }
+
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        "task_node",
+        &node_id,
+        "blockers",
+        &blockers,
+    )?;
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        "task_node",
+        &node_id,
+        "dependencies",
+        &dependencies,
+    )?;
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        "task_node",
+        &node_id,
+        "next_steps",
+        &next_steps,
+    )?;
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        "task_node",
+        &node_id,
+        "problems",
+        &problems,
+    )?;
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        "task_node",
+        &node_id,
+        "risks",
+        &risks,
+    )?;
+    task_items_replace_tx(
+        tx,
+        workspace.as_str(),
+        "task_node",
+        &node_id,
+        "success_criteria",
+        &success_criteria,
+    )?;
+
+    Ok(OpsHistoryTarget::TaskNode)
 }
 
 fn now_ms() -> i64 {
@@ -9629,11 +10422,12 @@ fn add_column_if_missing(
 }
 
 fn is_duplicate_column(err: &rusqlite::Error) -> bool {
-    matches!(
-        err,
-        rusqlite::Error::SqliteFailure(e, _)
-            if e.code == rusqlite::ErrorCode::DuplicateColumnName
-    )
+    match err {
+        rusqlite::Error::SqliteFailure(_, Some(message)) => {
+            message.contains("duplicate column name")
+        }
+        _ => false,
+    }
 }
 
 fn ensure_workspace_tx(
@@ -10490,6 +11284,34 @@ fn build_step_block_payload(
     out
 }
 
+fn build_undo_redo_payload(
+    op_seq: i64,
+    intent: &str,
+    task_id: Option<&str>,
+    path: Option<&str>,
+    undo: bool,
+) -> String {
+    let mut out = String::new();
+    out.push_str("{\"op_seq\":");
+    out.push_str(&op_seq.to_string());
+    out.push_str(",\"intent\":\"");
+    out.push_str(intent);
+    out.push_str("\",\"undo\":");
+    out.push_str(if undo { "true" } else { "false" });
+    if let Some(task_id) = task_id {
+        out.push_str(",\"task\":\"");
+        out.push_str(task_id);
+        out.push('"');
+    }
+    if let Some(path) = path {
+        out.push_str(",\"path\":\"");
+        out.push_str(path);
+        out.push('"');
+    }
+    out.push('}');
+    out
+}
+
 fn insert_event_tx(
     tx: &Transaction<'_>,
     workspace: &str,
@@ -10554,6 +11376,16 @@ fn ops_history_insert_tx(
 fn parse_event_id(event_id: &str) -> Option<i64> {
     let digits = event_id.strip_prefix("evt_")?;
     digits.parse::<i64>().ok()
+}
+
+fn parse_plan_or_task_kind(id: &str) -> Result<TaskKind, StoreError> {
+    if id.starts_with("PLAN-") {
+        Ok(TaskKind::Plan)
+    } else if id.starts_with("TASK-") {
+        Ok(TaskKind::Task)
+    } else {
+        Err(StoreError::InvalidInput("task must start with PLAN- or TASK-"))
+    }
 }
 
 fn parse_json_or_null(value: Option<String>) -> JsonValue {

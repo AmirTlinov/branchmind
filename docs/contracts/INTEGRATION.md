@@ -122,7 +122,6 @@ Additional event types (v0.2 parity):
 - `plan_updated`
 - `contract_updated`
 - `evidence_captured`
-- `batch_applied`
 - `undo_applied` / `redo_applied`
 
 ## Conflicts lifecycle (discoverable)

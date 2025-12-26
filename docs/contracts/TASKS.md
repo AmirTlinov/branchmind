@@ -198,12 +198,14 @@ Semantics:
 
 Run multiple task operations atomically.
 
-Input: `{ workspace, operations:[...], atomic? }`
+Input: `{ workspace, operations:[{ tool, args }...], atomic? }`
 
 Semantics:
 
-- If `atomic=true`, any failure rolls back all operations.
-- Each operation is equivalent to a single tool call.
+- If `atomic=true`, any failure rolls back all operations. Atomic mode requires undoable
+  tools only (currently: `tasks_patch`, `tasks_task_define`, `tasks_progress`, `tasks_block`).
+- Each operation is equivalent to a single tool call; `workspace` is injected if omitted
+  in `args`.
 
 ### `tasks_history`
 
@@ -218,7 +220,7 @@ Apply the most recent undoable operation (or redo).
 Semantics:
 
 - Undo/redo are deterministic and version-gated.
-- Not all operations are undoable; non-undoable intents are skipped with a warning.
+- Not all operations are undoable; if none exist, the call errors.
 
 ## Evidence (v0.2)
 
