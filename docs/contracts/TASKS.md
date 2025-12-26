@@ -123,6 +123,8 @@ Input:
   "task": "TASK-001",
   "kind": "task_detail|step|task",
   "path": "s:0",
+  "step_id": "STEP-XXXX",
+  "task_node_id": "NODE-XXXX",
   "ops": [ { "op": "set|unset|append|remove", "field": "title", "value": "..." } ]
 }
 ```
@@ -131,7 +133,7 @@ Semantics:
 
 - `kind=task_detail` targets plan/task root metadata.
 - `kind=step` targets a step (by `path` or `step_id`).
-- `kind=task` targets a task node inside a step plan.
+- `kind=task` targets a task node inside a step plan (path `s:0.t:1`).
 - All mutations emit events and are checkpoint-aware where applicable.
 
 ### `tasks_progress`
@@ -276,6 +278,8 @@ Input: `{ workspace, task, parent_step, title, ... }`
 Update a task node inside a step plan.
 
 Input: `{ workspace, task, path, ... }`
+
+Notes: task node `path` uses `s:0.t:1` (parent step path + `.t:<ordinal>`).
 
 ### `tasks_task_delete`
 

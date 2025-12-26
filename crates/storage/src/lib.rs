@@ -1,11 +1,15 @@
 #![forbid(unsafe_code)]
 
-use bm_core::graph::{ConflictId, GraphNodeId, GraphRel, GraphTagError, GraphType, normalize_tags as core_normalize_tags};
+use bm_core::graph::{
+    ConflictId, GraphNodeId, GraphRel, GraphTagError, GraphType,
+    normalize_tags as core_normalize_tags,
+};
 use bm_core::ids::WorkspaceId;
 use bm_core::model::{ReasoningRef, TaskKind};
 use bm_core::paths::StepPath;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
+use serde_json::{Value as JsonValue, json};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_BRANCH: &str = "main";
@@ -15,7 +19,10 @@ pub enum StoreError {
     Io(std::io::Error),
     Sql(rusqlite::Error),
     InvalidInput(&'static str),
-    RevisionMismatch { expected: i64, actual: i64 },
+    RevisionMismatch {
+        expected: i64,
+        actual: i64,
+    },
     UnknownId,
     UnknownBranch,
     UnknownConflict,
@@ -503,6 +510,71 @@ pub struct DecomposeResult {
 }
 
 #[derive(Clone, Debug)]
+pub struct TaskDetailPatch {
+    pub title: Option<String>,
+    pub description: Option<Option<String>>,
+    pub context: Option<Option<String>>,
+    pub priority: Option<String>,
+    pub contract: Option<Option<String>>,
+    pub contract_json: Option<Option<String>>,
+    pub domain: Option<Option<String>>,
+    pub phase: Option<Option<String>>,
+    pub component: Option<Option<String>>,
+    pub assignee: Option<Option<String>>,
+    pub tags: Option<Vec<String>>,
+    pub depends_on: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepPatch {
+    pub title: Option<String>,
+    pub success_criteria: Option<Vec<String>>,
+    pub tests: Option<Vec<String>>,
+    pub blockers: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskNodePatch {
+    pub title: Option<String>,
+    pub status: Option<String>,
+    pub status_manual: Option<bool>,
+    pub priority: Option<String>,
+    pub blocked: Option<bool>,
+    pub description: Option<Option<String>>,
+    pub context: Option<Option<String>>,
+    pub blockers: Option<Vec<String>>,
+    pub dependencies: Option<Vec<String>>,
+    pub next_steps: Option<Vec<String>>,
+    pub problems: Option<Vec<String>>,
+    pub risks: Option<Vec<String>>,
+    pub success_criteria: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TaskNodeItems {
+    pub blockers: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub next_steps: Vec<String>,
+    pub problems: Vec<String>,
+    pub risks: Vec<String>,
+    pub success_criteria: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EvidenceArtifactInput {
+    pub kind: String,
+    pub command: Option<String>,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub exit_code: Option<i64>,
+    pub diff: Option<String>,
+    pub content: Option<String>,
+    pub url: Option<String>,
+    pub external_uri: Option<String>,
+    pub meta_json: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct NewStep {
     pub title: String,
     pub success_criteria: Vec<String>,
@@ -535,6 +607,73 @@ pub struct TaskStepSummary {
 }
 
 #[derive(Clone, Debug)]
+pub struct StepDetail {
+    pub step_id: String,
+    pub path: String,
+    pub title: String,
+    pub success_criteria: Vec<String>,
+    pub tests: Vec<String>,
+    pub blockers: Vec<String>,
+    pub criteria_confirmed: bool,
+    pub tests_confirmed: bool,
+    pub security_confirmed: bool,
+    pub perf_confirmed: bool,
+    pub docs_confirmed: bool,
+    pub completed: bool,
+    pub blocked: bool,
+    pub block_reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskNodeRow {
+    pub node_id: String,
+    pub task_id: String,
+    pub parent_step_id: String,
+    pub ordinal: i64,
+    pub title: String,
+    pub status: String,
+    pub status_manual: bool,
+    pub priority: String,
+    pub blocked: bool,
+    pub description: Option<String>,
+    pub context: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskNodeDetail {
+    pub row: TaskNodeRow,
+    pub path: String,
+    pub blockers: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub next_steps: Vec<String>,
+    pub problems: Vec<String>,
+    pub risks: Vec<String>,
+    pub success_criteria: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskNodeRef {
+    pub node_id: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskNodeOpResult {
+    pub task_revision: i64,
+    pub node: TaskNodeRef,
+    pub event: EventRow,
+}
+
+#[derive(Clone, Debug)]
+pub struct EvidenceCaptureResult {
+    pub revision: i64,
+    pub step: Option<StepRef>,
+    pub event: EventRow,
+}
+
+#[derive(Clone, Debug)]
 pub struct EventRow {
     pub seq: i64,
     pub ts_ms: i64,
@@ -548,6 +687,20 @@ impl EventRow {
     pub fn event_id(&self) -> String {
         format!("evt_{:016}", self.seq)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct OpsHistoryRow {
+    pub seq: i64,
+    pub ts_ms: i64,
+    pub task_id: Option<String>,
+    pub path: Option<String>,
+    pub intent: String,
+    pub payload_json: String,
+    pub before_json: Option<String>,
+    pub after_json: Option<String>,
+    pub undoable: bool,
+    pub undone: bool,
 }
 
 #[derive(Debug)]
@@ -1022,43 +1175,173 @@ impl SqliteStore {
         )?;
         add_column_if_missing(&self.conn, "plans", "description", "TEXT")?;
         add_column_if_missing(&self.conn, "plans", "context", "TEXT")?;
-        add_column_if_missing(&self.conn, "plans", "status", "TEXT NOT NULL DEFAULT 'TODO'")?;
-        add_column_if_missing(&self.conn, "plans", "status_manual", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "plans", "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "status",
+            "TEXT NOT NULL DEFAULT 'TODO'",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "status_manual",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "priority",
+            "TEXT NOT NULL DEFAULT 'MEDIUM'",
+        )?;
         add_column_if_missing(&self.conn, "plans", "plan_doc", "TEXT")?;
-        add_column_if_missing(&self.conn, "plans", "plan_current", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "plans", "criteria_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "plans", "tests_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "plans", "criteria_auto_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "plans", "tests_auto_confirmed", "INTEGER NOT NULL DEFAULT 1")?;
-        add_column_if_missing(&self.conn, "plans", "security_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "plans", "perf_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "plans", "docs_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "plan_current",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "criteria_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "tests_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "criteria_auto_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "tests_auto_confirmed",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "security_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "perf_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "plans",
+            "docs_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
 
-        add_column_if_missing(&self.conn, "tasks", "status", "TEXT NOT NULL DEFAULT 'TODO'")?;
-        add_column_if_missing(&self.conn, "tasks", "status_manual", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "tasks", "priority", "TEXT NOT NULL DEFAULT 'MEDIUM'")?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "status",
+            "TEXT NOT NULL DEFAULT 'TODO'",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "status_manual",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "priority",
+            "TEXT NOT NULL DEFAULT 'MEDIUM'",
+        )?;
         add_column_if_missing(&self.conn, "tasks", "blocked", "INTEGER NOT NULL DEFAULT 0")?;
         add_column_if_missing(&self.conn, "tasks", "assignee", "TEXT")?;
         add_column_if_missing(&self.conn, "tasks", "domain", "TEXT")?;
         add_column_if_missing(&self.conn, "tasks", "phase", "TEXT")?;
         add_column_if_missing(&self.conn, "tasks", "component", "TEXT")?;
         add_column_if_missing(&self.conn, "tasks", "context", "TEXT")?;
-        add_column_if_missing(&self.conn, "tasks", "criteria_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "tasks", "tests_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "tasks", "criteria_auto_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "tasks", "tests_auto_confirmed", "INTEGER NOT NULL DEFAULT 1")?;
-        add_column_if_missing(&self.conn, "tasks", "security_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "tasks", "perf_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "tasks", "docs_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "criteria_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "tests_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "criteria_auto_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "tests_auto_confirmed",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "security_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "perf_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "tasks",
+            "docs_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
 
         add_column_if_missing(&self.conn, "steps", "completed_at_ms", "INTEGER")?;
         add_column_if_missing(&self.conn, "steps", "started_at_ms", "INTEGER")?;
-        add_column_if_missing(&self.conn, "steps", "criteria_auto_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "steps", "tests_auto_confirmed", "INTEGER NOT NULL DEFAULT 1")?;
-        add_column_if_missing(&self.conn, "steps", "security_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "steps", "perf_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
-        add_column_if_missing(&self.conn, "steps", "docs_confirmed", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column_if_missing(
+            &self.conn,
+            "steps",
+            "criteria_auto_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "steps",
+            "tests_auto_confirmed",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "steps",
+            "security_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "steps",
+            "perf_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &self.conn,
+            "steps",
+            "docs_confirmed",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
         add_column_if_missing(&self.conn, "steps", "blocked", "INTEGER NOT NULL DEFAULT 0")?;
         add_column_if_missing(&self.conn, "steps", "block_reason", "TEXT")?;
         add_column_if_missing(&self.conn, "steps", "verification_outcome", "TEXT")?;
@@ -1765,7 +2048,13 @@ impl SqliteStore {
                 WHERE workspace = ?1 AND id = ?2
                 "#,
                 params![workspace.as_str(), plan_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, i64>(2)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
             )
             .optional()?;
 
@@ -4522,16 +4811,15 @@ impl SqliteStore {
             step_id: step_id.clone(),
             path: path.clone(),
         };
-        let event_payload_json =
-            build_step_verified_payload(
-                task_id,
-                &step_ref,
-                criteria_confirmed,
-                tests_confirmed,
-                security_confirmed,
-                perf_confirmed,
-                docs_confirmed,
-            );
+        let event_payload_json = build_step_verified_payload(
+            task_id,
+            &step_ref,
+            criteria_confirmed,
+            tests_confirmed,
+            security_confirmed,
+            perf_confirmed,
+            docs_confirmed,
+        );
         let event = insert_event_tx(
             &tx,
             workspace.as_str(),
@@ -4686,29 +4974,11 @@ impl SqliteStore {
             .ok_or(StoreError::StepNotFound)?;
 
         let require_security = security_confirmed.is_some()
-            || checkpoint_required_tx(
-                &tx,
-                workspace.as_str(),
-                "step",
-                &step_id,
-                "security",
-            )?;
+            || checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "security")?;
         let require_perf = perf_confirmed.is_some()
-            || checkpoint_required_tx(
-                &tx,
-                workspace.as_str(),
-                "step",
-                &step_id,
-                "perf",
-            )?;
+            || checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "perf")?;
         let require_docs = docs_confirmed.is_some()
-            || checkpoint_required_tx(
-                &tx,
-                workspace.as_str(),
-                "step",
-                &step_id,
-                "docs",
-            )?;
+            || checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "docs")?;
 
         if criteria_now == 0
             || tests_now == 0
@@ -4734,16 +5004,15 @@ impl SqliteStore {
             step_id: step_id.clone(),
             path: path.clone(),
         };
-        let verify_payload_json =
-            build_step_verified_payload(
-                task_id,
-                &step_ref,
-                criteria_confirmed,
-                tests_confirmed,
-                security_confirmed,
-                perf_confirmed,
-                docs_confirmed,
-            );
+        let verify_payload_json = build_step_verified_payload(
+            task_id,
+            &step_ref,
+            criteria_confirmed,
+            tests_confirmed,
+            security_confirmed,
+            perf_confirmed,
+            docs_confirmed,
+        );
         let verify_event = insert_event_tx(
             &tx,
             workspace.as_str(),
@@ -4845,7 +5114,15 @@ impl SqliteStore {
             )
             .optional()?;
 
-        let Some((completed, criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed, docs_confirmed)) = row else {
+        let Some((
+            completed,
+            criteria_confirmed,
+            tests_confirmed,
+            security_confirmed,
+            perf_confirmed,
+            docs_confirmed,
+        )) = row
+        else {
             return Err(StoreError::StepNotFound);
         };
 
@@ -4853,27 +5130,12 @@ impl SqliteStore {
             return Err(StoreError::InvalidInput("step already completed"));
         }
 
-        let require_security = checkpoint_required_tx(
-            &tx,
-            workspace.as_str(),
-            "step",
-            &step_id,
-            "security",
-        )?;
-        let require_perf = checkpoint_required_tx(
-            &tx,
-            workspace.as_str(),
-            "step",
-            &step_id,
-            "perf",
-        )?;
-        let require_docs = checkpoint_required_tx(
-            &tx,
-            workspace.as_str(),
-            "step",
-            &step_id,
-            "docs",
-        )?;
+        let require_security =
+            checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "security")?;
+        let require_perf =
+            checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "perf")?;
+        let require_docs =
+            checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "docs")?;
 
         if criteria_confirmed == 0
             || tests_confirmed == 0
@@ -4951,6 +5213,1391 @@ impl SqliteStore {
         })
     }
 
+    pub fn step_detail(
+        &self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+    ) -> Result<StepDetail, StoreError> {
+        let tx = self.conn.transaction()?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+        let row = tx
+            .query_row(
+                r#"
+                SELECT title, criteria_confirmed, tests_confirmed,
+                       security_confirmed, perf_confirmed, docs_confirmed,
+                       completed, blocked, block_reason
+                FROM steps
+                WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+                "#,
+                params![workspace.as_str(), task_id, step_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((title, criteria, tests, security, perf, docs, completed, blocked, block_reason)) =
+            row
+        else {
+            return Err(StoreError::StepNotFound);
+        };
+
+        let success_criteria =
+            step_items_list_tx(&tx, workspace.as_str(), &step_id, "step_criteria")?;
+        let tests_list = step_items_list_tx(&tx, workspace.as_str(), &step_id, "step_tests")?;
+        let blockers = step_items_list_tx(&tx, workspace.as_str(), &step_id, "step_blockers")?;
+
+        tx.commit()?;
+        Ok(StepDetail {
+            step_id,
+            path,
+            title,
+            success_criteria,
+            tests: tests_list,
+            blockers,
+            criteria_confirmed: criteria != 0,
+            tests_confirmed: tests != 0,
+            security_confirmed: security != 0,
+            perf_confirmed: perf != 0,
+            docs_confirmed: docs != 0,
+            completed: completed != 0,
+            blocked: blocked != 0,
+            block_reason,
+        })
+    }
+
+    pub fn task_node_detail(
+        &self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        node_id: Option<&str>,
+        parent_path: Option<&StepPath>,
+        ordinal: Option<i64>,
+    ) -> Result<TaskNodeDetail, StoreError> {
+        let tx = self.conn.transaction()?;
+        let (node_id, path, _parent_step_id, _ordinal) = resolve_task_node_selector_tx(
+            &tx,
+            workspace.as_str(),
+            task_id,
+            node_id,
+            parent_path,
+            ordinal,
+        )?;
+        let row = tx
+            .query_row(
+                r#"
+                SELECT node_id, task_id, parent_step_id, ordinal, title, status, status_manual,
+                       priority, blocked, description, context, created_at_ms, updated_at_ms
+                FROM task_nodes
+                WHERE workspace=?1 AND task_id=?2 AND node_id=?3
+                "#,
+                params![workspace.as_str(), task_id, node_id],
+                |row| {
+                    Ok(TaskNodeRow {
+                        node_id: row.get(0)?,
+                        task_id: row.get(1)?,
+                        parent_step_id: row.get(2)?,
+                        ordinal: row.get(3)?,
+                        title: row.get(4)?,
+                        status: row.get(5)?,
+                        status_manual: row.get::<_, i64>(6)? != 0,
+                        priority: row.get(7)?,
+                        blocked: row.get::<_, i64>(8)? != 0,
+                        description: row.get(9)?,
+                        context: row.get(10)?,
+                        created_at_ms: row.get(11)?,
+                        updated_at_ms: row.get(12)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Err(StoreError::UnknownId);
+        };
+
+        let blockers = task_items_list_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &row.node_id,
+            "blockers",
+        )?;
+        let dependencies = task_items_list_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &row.node_id,
+            "dependencies",
+        )?;
+        let next_steps = task_items_list_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &row.node_id,
+            "next_steps",
+        )?;
+        let problems = task_items_list_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &row.node_id,
+            "problems",
+        )?;
+        let risks =
+            task_items_list_tx(&tx, workspace.as_str(), "task_node", &row.node_id, "risks")?;
+        let success_criteria = task_items_list_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &row.node_id,
+            "success_criteria",
+        )?;
+
+        tx.commit()?;
+        Ok(TaskNodeDetail {
+            row,
+            path,
+            blockers,
+            dependencies,
+            next_steps,
+            problems,
+            risks,
+            success_criteria,
+        })
+    }
+
+    pub fn task_node_add(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        parent_path: &StepPath,
+        title: String,
+        status: String,
+        status_manual: bool,
+        priority: String,
+        blocked: bool,
+        description: Option<String>,
+        context: Option<String>,
+        items: TaskNodeItems,
+        record_undo: bool,
+    ) -> Result<TaskNodeOpResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let parent_step_id = resolve_step_id_tx(&tx, workspace.as_str(), task_id, parent_path)?;
+        let ordinal: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(ordinal), -1) FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3",
+            params![workspace.as_str(), task_id, parent_step_id],
+            |row| row.get(0),
+        )?;
+        let ordinal = ordinal + 1;
+        let seq = next_counter_tx(&tx, workspace.as_str(), "task_node_seq")?;
+        let node_id = format!("NODE-{seq:08X}");
+
+        tx.execute(
+            r#"
+            INSERT INTO task_nodes(
+                workspace, node_id, task_id, parent_step_id, ordinal,
+                title, status, status_manual, priority, blocked, description, context,
+                created_at_ms, updated_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            "#,
+            params![
+                workspace.as_str(),
+                node_id,
+                task_id,
+                parent_step_id,
+                ordinal,
+                title,
+                status,
+                if status_manual { 1i64 } else { 0i64 },
+                priority,
+                if blocked { 1i64 } else { 0i64 },
+                description,
+                context,
+                now_ms,
+                now_ms
+            ],
+        )?;
+
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &node_id,
+            "blockers",
+            &items.blockers,
+        )?;
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &node_id,
+            "dependencies",
+            &items.dependencies,
+        )?;
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &node_id,
+            "next_steps",
+            &items.next_steps,
+        )?;
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &node_id,
+            "problems",
+            &items.problems,
+        )?;
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &node_id,
+            "risks",
+            &items.risks,
+        )?;
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            "task_node",
+            &node_id,
+            "success_criteria",
+            &items.success_criteria,
+        )?;
+
+        let path = task_node_path_for_parent_tx(
+            &tx,
+            workspace.as_str(),
+            task_id,
+            &parent_step_id,
+            ordinal,
+        )?;
+        let event_payload_json =
+            build_task_node_added_payload(task_id, &node_id, &path, &parent_path.to_string());
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "task_node_added",
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        if record_undo {
+            let after_snapshot = json!({
+                "task": task_id,
+                "node_id": node_id.clone(),
+                "path": path.clone(),
+                "title": title,
+                "status": status,
+                "status_manual": status_manual,
+                "priority": priority,
+                "blocked": blocked,
+                "description": description,
+                "context": context,
+                "blockers": items.blockers,
+                "dependencies": items.dependencies,
+                "next_steps": items.next_steps,
+                "problems": items.problems,
+                "risks": items.risks,
+                "success_criteria": items.success_criteria
+            });
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                Some(path.clone()),
+                "task_node_add",
+                &event_payload_json,
+                None,
+                Some(&after_snapshot.to_string()),
+                false,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(TaskNodeOpResult {
+            task_revision,
+            node: TaskNodeRef { node_id, path },
+            event,
+        })
+    }
+
+    pub fn task_node_patch(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        node_id: Option<&str>,
+        parent_path: Option<&StepPath>,
+        ordinal: Option<i64>,
+        patch: TaskNodePatch,
+        record_undo: bool,
+    ) -> Result<TaskNodeOpResult, StoreError> {
+        if patch.title.is_none()
+            && patch.status.is_none()
+            && patch.status_manual.is_none()
+            && patch.priority.is_none()
+            && patch.blocked.is_none()
+            && patch.description.is_none()
+            && patch.context.is_none()
+            && patch.blockers.is_none()
+            && patch.dependencies.is_none()
+            && patch.next_steps.is_none()
+            && patch.problems.is_none()
+            && patch.risks.is_none()
+            && patch.success_criteria.is_none()
+        {
+            return Err(StoreError::InvalidInput("no fields to edit"));
+        }
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (node_id, path, _parent_step_id, _ordinal) = resolve_task_node_selector_tx(
+            &tx,
+            workspace.as_str(),
+            task_id,
+            node_id,
+            parent_path,
+            ordinal,
+        )?;
+
+        let row = tx
+            .query_row(
+                r#"
+                SELECT title, status, status_manual, priority, blocked, description, context
+                FROM task_nodes
+                WHERE workspace=?1 AND task_id=?2 AND node_id=?3
+                "#,
+                params![workspace.as_str(), task_id, node_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            current_title,
+            current_status,
+            current_status_manual,
+            current_priority,
+            current_blocked,
+            current_description,
+            current_context,
+        )) = row
+        else {
+            return Err(StoreError::UnknownId);
+        };
+
+        let before_items = TaskNodeItems {
+            blockers: task_items_list_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "blockers",
+            )?,
+            dependencies: task_items_list_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "dependencies",
+            )?,
+            next_steps: task_items_list_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "next_steps",
+            )?,
+            problems: task_items_list_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "problems",
+            )?,
+            risks: task_items_list_tx(&tx, workspace.as_str(), "task_node", &node_id, "risks")?,
+            success_criteria: task_items_list_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "success_criteria",
+            )?,
+        };
+
+        let before_snapshot = json!({
+            "task": task_id,
+            "node_id": node_id.clone(),
+            "path": path.clone(),
+            "title": current_title,
+            "status": current_status,
+            "status_manual": current_status_manual != 0,
+            "priority": current_priority,
+            "blocked": current_blocked != 0,
+            "description": current_description,
+            "context": current_context,
+            "blockers": before_items.blockers.clone(),
+            "dependencies": before_items.dependencies.clone(),
+            "next_steps": before_items.next_steps.clone(),
+            "problems": before_items.problems.clone(),
+            "risks": before_items.risks.clone(),
+            "success_criteria": before_items.success_criteria.clone()
+        });
+
+        let mut next_title = current_title;
+        let mut next_status = current_status;
+        let mut next_status_manual = current_status_manual != 0;
+        let mut next_priority = current_priority;
+        let mut next_blocked = current_blocked != 0;
+        let mut next_description = current_description;
+        let mut next_context = current_context;
+
+        if let Some(value) = patch.title {
+            next_title = value;
+        }
+        if let Some(value) = patch.status {
+            next_status = value;
+        }
+        if let Some(value) = patch.status_manual {
+            next_status_manual = value;
+        }
+        if let Some(value) = patch.priority {
+            next_priority = value;
+        }
+        if let Some(value) = patch.blocked {
+            next_blocked = value;
+        }
+        if let Some(value) = patch.description {
+            next_description = value;
+        }
+        if let Some(value) = patch.context {
+            next_context = value;
+        }
+
+        tx.execute(
+            r#"
+            UPDATE task_nodes
+            SET title=?4, status=?5, status_manual=?6, priority=?7, blocked=?8,
+                description=?9, context=?10, updated_at_ms=?11
+            WHERE workspace=?1 AND task_id=?2 AND node_id=?3
+            "#,
+            params![
+                workspace.as_str(),
+                task_id,
+                node_id,
+                next_title,
+                next_status,
+                if next_status_manual { 1i64 } else { 0i64 },
+                next_priority,
+                if next_blocked { 1i64 } else { 0i64 },
+                next_description,
+                next_context,
+                now_ms
+            ],
+        )?;
+
+        let next_items = TaskNodeItems {
+            blockers: patch
+                .blockers
+                .unwrap_or_else(|| before_items.blockers.clone()),
+            dependencies: patch
+                .dependencies
+                .unwrap_or_else(|| before_items.dependencies.clone()),
+            next_steps: patch
+                .next_steps
+                .unwrap_or_else(|| before_items.next_steps.clone()),
+            problems: patch
+                .problems
+                .unwrap_or_else(|| before_items.problems.clone()),
+            risks: patch.risks.unwrap_or_else(|| before_items.risks.clone()),
+            success_criteria: patch
+                .success_criteria
+                .unwrap_or_else(|| before_items.success_criteria.clone()),
+        };
+
+        if patch.blockers.is_some() {
+            task_items_replace_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "blockers",
+                &next_items.blockers,
+            )?;
+        }
+        if patch.dependencies.is_some() {
+            task_items_replace_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "dependencies",
+                &next_items.dependencies,
+            )?;
+        }
+        if patch.next_steps.is_some() {
+            task_items_replace_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "next_steps",
+                &next_items.next_steps,
+            )?;
+        }
+        if patch.problems.is_some() {
+            task_items_replace_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "problems",
+                &next_items.problems,
+            )?;
+        }
+        if patch.risks.is_some() {
+            task_items_replace_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "risks",
+                &next_items.risks,
+            )?;
+        }
+        if patch.success_criteria.is_some() {
+            task_items_replace_tx(
+                &tx,
+                workspace.as_str(),
+                "task_node",
+                &node_id,
+                "success_criteria",
+                &next_items.success_criteria,
+            )?;
+        }
+
+        let mut fields = Vec::new();
+        if patch.title.is_some() {
+            fields.push("title");
+        }
+        if patch.status.is_some() {
+            fields.push("status");
+        }
+        if patch.status_manual.is_some() {
+            fields.push("status_manual");
+        }
+        if patch.priority.is_some() {
+            fields.push("priority");
+        }
+        if patch.blocked.is_some() {
+            fields.push("blocked");
+        }
+        if patch.description.is_some() {
+            fields.push("description");
+        }
+        if patch.context.is_some() {
+            fields.push("context");
+        }
+        if patch.blockers.is_some() {
+            fields.push("blockers");
+        }
+        if patch.dependencies.is_some() {
+            fields.push("dependencies");
+        }
+        if patch.next_steps.is_some() {
+            fields.push("next_steps");
+        }
+        if patch.problems.is_some() {
+            fields.push("problems");
+        }
+        if patch.risks.is_some() {
+            fields.push("risks");
+        }
+        if patch.success_criteria.is_some() {
+            fields.push("success_criteria");
+        }
+
+        let event_payload_json = build_task_node_defined_payload(task_id, &node_id, &path, &fields);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "task_node_defined",
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        if record_undo {
+            let after_snapshot = json!({
+                "task": task_id,
+                "node_id": node_id.clone(),
+                "path": path.clone(),
+                "title": next_title,
+                "status": next_status,
+                "status_manual": next_status_manual,
+                "priority": next_priority,
+                "blocked": next_blocked,
+                "description": next_description,
+                "context": next_context,
+                "blockers": next_items.blockers.clone(),
+                "dependencies": next_items.dependencies.clone(),
+                "next_steps": next_items.next_steps.clone(),
+                "problems": next_items.problems.clone(),
+                "risks": next_items.risks.clone(),
+                "success_criteria": next_items.success_criteria.clone()
+            });
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                Some(path.clone()),
+                "task_node_patch",
+                &event_payload_json,
+                Some(&before_snapshot.to_string()),
+                Some(&after_snapshot.to_string()),
+                true,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(TaskNodeOpResult {
+            task_revision,
+            node: TaskNodeRef { node_id, path },
+            event,
+        })
+    }
+
+    pub fn task_node_delete(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        node_id: Option<&str>,
+        parent_path: Option<&StepPath>,
+        ordinal: Option<i64>,
+        record_undo: bool,
+    ) -> Result<TaskNodeOpResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (node_id, path, _parent_step_id, _ordinal) = resolve_task_node_selector_tx(
+            &tx,
+            workspace.as_str(),
+            task_id,
+            node_id,
+            parent_path,
+            ordinal,
+        )?;
+
+        tx.execute(
+            "DELETE FROM task_items WHERE workspace=?1 AND entity_kind='task_node' AND entity_id=?2",
+            params![workspace.as_str(), node_id],
+        )?;
+        tx.execute(
+            "DELETE FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND node_id=?3",
+            params![workspace.as_str(), task_id, node_id],
+        )?;
+
+        let event_payload_json = build_task_node_deleted_payload(task_id, &node_id, &path);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "task_node_deleted",
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        if record_undo {
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                Some(path.clone()),
+                "task_node_delete",
+                &event_payload_json,
+                None,
+                None,
+                false,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(TaskNodeOpResult {
+            task_revision,
+            node: TaskNodeRef { node_id, path },
+            event,
+        })
+    }
+
+    pub fn task_detail_patch(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        kind: TaskKind,
+        patch: TaskDetailPatch,
+        event_type: String,
+        event_payload_json: String,
+        record_undo: bool,
+    ) -> Result<(i64, EventRow), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        let (
+            mut title,
+            mut description,
+            mut context,
+            mut priority,
+            mut contract,
+            mut contract_json,
+        );
+        let (mut domain, mut phase, mut component, mut assignee);
+
+        match kind {
+            TaskKind::Plan => {
+                let row = tx
+                    .query_row(
+                        "SELECT title, description, context, priority, contract, contract_json FROM plans WHERE workspace=?1 AND id=?2",
+                        params![workspace.as_str(), task_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, Option<String>>(5)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let Some((t, d, c, p, ct, cj)) = row else {
+                    return Err(StoreError::UnknownId);
+                };
+                title = t;
+                description = d;
+                context = c;
+                priority = p;
+                contract = ct;
+                contract_json = cj;
+                domain = None;
+                phase = None;
+                component = None;
+                assignee = None;
+            }
+            TaskKind::Task => {
+                let row = tx
+                    .query_row(
+                        "SELECT title, description, context, priority, domain, phase, component, assignee FROM tasks WHERE workspace=?1 AND id=?2",
+                        params![workspace.as_str(), task_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, Option<String>>(5)?,
+                                row.get::<_, Option<String>>(6)?,
+                                row.get::<_, Option<String>>(7)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let Some((t, d, c, p, dm, ph, comp, asg)) = row else {
+                    return Err(StoreError::UnknownId);
+                };
+                title = t;
+                description = d;
+                context = c;
+                priority = p;
+                domain = dm;
+                phase = ph;
+                component = comp;
+                assignee = asg;
+                contract = None;
+                contract_json = None;
+            }
+        }
+
+        let tags = task_items_list_tx(&tx, workspace.as_str(), kind.as_str(), task_id, "tags")?;
+        let depends_on = task_items_list_tx(
+            &tx,
+            workspace.as_str(),
+            kind.as_str(),
+            task_id,
+            "depends_on",
+        )?;
+
+        let before_snapshot = json!({
+            "kind": kind.as_str(),
+            "task": task_id,
+            "title": title,
+            "description": description,
+            "context": context,
+            "priority": priority,
+            "contract": contract,
+            "contract_data": parse_json_or_null(contract_json.clone()),
+            "domain": domain,
+            "phase": phase,
+            "component": component,
+            "assignee": assignee,
+            "tags": tags,
+            "depends_on": depends_on
+        });
+
+        if let Some(v) = patch.title {
+            title = v;
+        }
+        if let Some(v) = patch.description {
+            description = v;
+        }
+        if let Some(v) = patch.context {
+            context = v;
+        }
+        if let Some(v) = patch.priority {
+            priority = v;
+        }
+        if let Some(v) = patch.contract {
+            contract = v;
+        }
+        if let Some(v) = patch.contract_json {
+            contract_json = v;
+        }
+        if let Some(v) = patch.domain {
+            domain = v;
+        }
+        if let Some(v) = patch.phase {
+            phase = v;
+        }
+        if let Some(v) = patch.component {
+            component = v;
+        }
+        if let Some(v) = patch.assignee {
+            assignee = v;
+        }
+        let next_tags = patch.tags.unwrap_or_else(|| tags.clone());
+        let next_depends = patch.depends_on.unwrap_or_else(|| depends_on.clone());
+
+        let revision = match kind {
+            TaskKind::Plan => {
+                bump_plan_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?
+            }
+            TaskKind::Task => {
+                bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?
+            }
+        };
+
+        match kind {
+            TaskKind::Plan => {
+                tx.execute(
+                    r#"
+                    UPDATE plans
+                    SET title=?3, description=?4, context=?5, priority=?6, contract=?7, contract_json=?8, updated_at_ms=?9
+                    WHERE workspace=?1 AND id=?2
+                    "#,
+                    params![
+                        workspace.as_str(),
+                        task_id,
+                        title,
+                        description,
+                        context,
+                        priority,
+                        contract,
+                        contract_json,
+                        now_ms
+                    ],
+                )?;
+            }
+            TaskKind::Task => {
+                tx.execute(
+                    r#"
+                    UPDATE tasks
+                    SET title=?3, description=?4, context=?5, priority=?6,
+                        domain=?7, phase=?8, component=?9, assignee=?10, updated_at_ms=?11
+                    WHERE workspace=?1 AND id=?2
+                    "#,
+                    params![
+                        workspace.as_str(),
+                        task_id,
+                        title,
+                        description,
+                        context,
+                        priority,
+                        domain,
+                        phase,
+                        component,
+                        assignee,
+                        now_ms
+                    ],
+                )?;
+            }
+        }
+
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            kind.as_str(),
+            task_id,
+            "tags",
+            &next_tags,
+        )?;
+        task_items_replace_tx(
+            &tx,
+            workspace.as_str(),
+            kind.as_str(),
+            task_id,
+            "depends_on",
+            &next_depends,
+        )?;
+
+        let after_snapshot = json!({
+            "kind": kind.as_str(),
+            "task": task_id,
+            "title": title,
+            "description": description,
+            "context": context,
+            "priority": priority,
+            "contract": contract,
+            "contract_data": parse_json_or_null(contract_json.clone()),
+            "domain": domain,
+            "phase": phase,
+            "component": component,
+            "assignee": assignee,
+            "tags": next_tags,
+            "depends_on": next_depends
+        });
+
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            None,
+            &event_type,
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, task_id, kind, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        if record_undo {
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                None,
+                "task_detail_patch",
+                &event_payload_json,
+                Some(&before_snapshot.to_string()),
+                Some(&after_snapshot.to_string()),
+                true,
+                now_ms,
+            )?;
+        }
+
+        if matches!(kind, TaskKind::Task) {
+            let touched = Self::project_task_graph_task_node_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref,
+                &event,
+                task_id,
+                &title,
+                now_ms,
+            )?;
+            if touched {
+                touch_document_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &reasoning_ref.branch,
+                    &reasoning_ref.graph_doc,
+                    now_ms,
+                )?;
+            }
+        }
+
+        tx.commit()?;
+        Ok((revision, event))
+    }
+
+    pub fn step_patch(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        patch: StepPatch,
+        event_payload_json: String,
+        record_undo: bool,
+    ) -> Result<StepOpResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        let detail = {
+            let row = tx
+                .query_row(
+                    r#"
+                    SELECT title, criteria_confirmed, tests_confirmed, security_confirmed,
+                           perf_confirmed, docs_confirmed, completed, blocked, block_reason
+                    FROM steps
+                    WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+                    "#,
+                    params![workspace.as_str(), task_id, step_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, Option<String>>(8)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((
+                title,
+                criteria,
+                tests,
+                security,
+                perf,
+                docs,
+                completed,
+                blocked,
+                block_reason,
+            )) = row
+            else {
+                return Err(StoreError::StepNotFound);
+            };
+            StepDetail {
+                step_id: step_id.clone(),
+                path: path.clone(),
+                title,
+                success_criteria: step_items_list_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &step_id,
+                    "step_criteria",
+                )?,
+                tests: step_items_list_tx(&tx, workspace.as_str(), &step_id, "step_tests")?,
+                blockers: step_items_list_tx(&tx, workspace.as_str(), &step_id, "step_blockers")?,
+                criteria_confirmed: criteria != 0,
+                tests_confirmed: tests != 0,
+                security_confirmed: security != 0,
+                perf_confirmed: perf != 0,
+                docs_confirmed: docs != 0,
+                completed: completed != 0,
+                blocked: blocked != 0,
+                block_reason,
+            }
+        };
+
+        let before_snapshot = json!({
+            "task": task_id,
+            "step_id": detail.step_id,
+            "path": detail.path,
+            "title": detail.title,
+            "success_criteria": detail.success_criteria,
+            "tests": detail.tests,
+            "blockers": detail.blockers,
+            "criteria_confirmed": detail.criteria_confirmed,
+            "tests_confirmed": detail.tests_confirmed,
+            "security_confirmed": detail.security_confirmed,
+            "perf_confirmed": detail.perf_confirmed,
+            "docs_confirmed": detail.docs_confirmed,
+            "completed": detail.completed,
+            "blocked": detail.blocked,
+            "block_reason": detail.block_reason
+        });
+
+        if let Some(title) = patch.title {
+            tx.execute(
+                "UPDATE steps SET title=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, title, now_ms],
+            )?;
+        }
+        if let Some(items) = patch.success_criteria {
+            tx.execute(
+                "DELETE FROM step_criteria WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            for (i, text) in items.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO step_criteria(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), step_id, i as i64, text],
+                )?;
+            }
+            tx.execute(
+                "UPDATE steps SET criteria_confirmed=0, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, now_ms],
+            )?;
+        }
+        if let Some(items) = patch.tests {
+            tx.execute(
+                "DELETE FROM step_tests WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            for (i, text) in items.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO step_tests(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), step_id, i as i64, text],
+                )?;
+            }
+            tx.execute(
+                "UPDATE steps SET tests_confirmed=0, updated_at_ms=?4 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, now_ms],
+            )?;
+        }
+        if let Some(items) = patch.blockers {
+            tx.execute(
+                "DELETE FROM step_blockers WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            for (i, text) in items.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO step_blockers(workspace, step_id, ordinal, text) VALUES (?1, ?2, ?3, ?4)",
+                    params![workspace.as_str(), step_id, i as i64, text],
+                )?;
+            }
+        }
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_defined",
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        let after_detail = {
+            let row = tx
+                .query_row(
+                    r#"
+                    SELECT title, criteria_confirmed, tests_confirmed, security_confirmed,
+                           perf_confirmed, docs_confirmed, completed, blocked, block_reason
+                    FROM steps
+                    WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+                    "#,
+                    params![workspace.as_str(), task_id, step_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, Option<String>>(8)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((
+                title,
+                criteria,
+                tests,
+                security,
+                perf,
+                docs,
+                completed,
+                blocked,
+                block_reason,
+            )) = row
+            else {
+                return Err(StoreError::StepNotFound);
+            };
+            StepDetail {
+                step_id: step_id.clone(),
+                path: path.clone(),
+                title,
+                success_criteria: step_items_list_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &step_id,
+                    "step_criteria",
+                )?,
+                tests: step_items_list_tx(&tx, workspace.as_str(), &step_id, "step_tests")?,
+                blockers: step_items_list_tx(&tx, workspace.as_str(), &step_id, "step_blockers")?,
+                criteria_confirmed: criteria != 0,
+                tests_confirmed: tests != 0,
+                security_confirmed: security != 0,
+                perf_confirmed: perf != 0,
+                docs_confirmed: docs != 0,
+                completed: completed != 0,
+                blocked: blocked != 0,
+                block_reason,
+            }
+        };
+
+        let after_snapshot = json!({
+            "task": task_id,
+            "step_id": after_detail.step_id,
+            "path": after_detail.path,
+            "title": after_detail.title,
+            "success_criteria": after_detail.success_criteria,
+            "tests": after_detail.tests,
+            "blockers": after_detail.blockers,
+            "criteria_confirmed": after_detail.criteria_confirmed,
+            "tests_confirmed": after_detail.tests_confirmed,
+            "security_confirmed": after_detail.security_confirmed,
+            "perf_confirmed": after_detail.perf_confirmed,
+            "docs_confirmed": after_detail.docs_confirmed,
+            "completed": after_detail.completed,
+            "blocked": after_detail.blocked,
+            "block_reason": after_detail.block_reason
+        });
+
+        if record_undo {
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                Some(path.clone()),
+                "step_patch",
+                &event_payload_json,
+                Some(&before_snapshot.to_string()),
+                Some(&after_snapshot.to_string()),
+                true,
+                now_ms,
+            )?;
+        }
+
+        let (snapshot_title, snapshot_completed) =
+            step_snapshot_tx(&tx, workspace.as_str(), task_id, &step_ref.step_id)?;
+        let graph_touched = Self::project_task_graph_step_node_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref,
+            &event,
+            task_id,
+            &step_ref,
+            &snapshot_title,
+            snapshot_completed,
+            now_ms,
+        )?;
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
     pub fn step_progress(
         &mut self,
         workspace: &WorkspaceId,
@@ -4994,27 +6641,12 @@ impl SqliteStore {
             if already_completed != 0 {
                 return Err(StoreError::InvalidInput("step already completed"));
             }
-            let require_security = checkpoint_required_tx(
-                &tx,
-                workspace.as_str(),
-                "step",
-                &step_id,
-                "security",
-            )?;
-            let require_perf = checkpoint_required_tx(
-                &tx,
-                workspace.as_str(),
-                "step",
-                &step_id,
-                "perf",
-            )?;
-            let require_docs = checkpoint_required_tx(
-                &tx,
-                workspace.as_str(),
-                "step",
-                &step_id,
-                "docs",
-            )?;
+            let require_security =
+                checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "security")?;
+            let require_perf =
+                checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "perf")?;
+            let require_docs =
+                checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "docs")?;
 
             if !force
                 && (criteria == 0
@@ -5148,7 +6780,11 @@ impl SqliteStore {
             now_ms,
             Some(task_id.to_string()),
             Some(path.clone()),
-            if blocked { "step_blocked" } else { "step_unblocked" },
+            if blocked {
+                "step_blocked"
+            } else {
+                "step_unblocked"
+            },
             &event_payload_json,
         )?;
 
@@ -5168,6 +6804,448 @@ impl SqliteStore {
             step: step_ref,
             event,
         })
+    }
+
+    pub fn evidence_capture(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        artifacts: Vec<EvidenceArtifactInput>,
+        checks: Vec<String>,
+        attachments: Vec<String>,
+    ) -> Result<EvidenceCaptureResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let (entity_kind, entity_id, path, revision, reasoning_kind) = if step_id.is_some()
+            || path.is_some()
+        {
+            let task_revision =
+                bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+            let (step_id, path) =
+                resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+            (
+                "step".to_string(),
+                step_id,
+                Some(path),
+                task_revision,
+                TaskKind::Task,
+            )
+        } else if task_id.starts_with("PLAN-") {
+            let revision =
+                bump_plan_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+            (
+                "plan".to_string(),
+                task_id.to_string(),
+                None,
+                revision,
+                TaskKind::Plan,
+            )
+        } else if task_id.starts_with("TASK-") {
+            let revision =
+                bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+            (
+                "task".to_string(),
+                task_id.to_string(),
+                None,
+                revision,
+                TaskKind::Task,
+            )
+        } else {
+            return Err(StoreError::InvalidInput(
+                "task must start with PLAN- or TASK-",
+            ));
+        };
+
+        if !artifacts.is_empty() {
+            let base_ordinal: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(ordinal), -1) FROM evidence_artifacts WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3",
+                params![workspace.as_str(), entity_kind, entity_id],
+                |row| row.get(0),
+            )?;
+            for (idx, artifact) in artifacts.iter().enumerate() {
+                let ordinal = base_ordinal + idx as i64 + 1;
+                tx.execute(
+                    r#"
+                    INSERT INTO evidence_artifacts(
+                        workspace, entity_kind, entity_id, ordinal, kind,
+                        command, stdout, stderr, exit_code, diff, content, url, external_uri, meta_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                    "#,
+                    params![
+                        workspace.as_str(),
+                        entity_kind,
+                        entity_id,
+                        ordinal,
+                        artifact.kind,
+                        artifact.command,
+                        artifact.stdout,
+                        artifact.stderr,
+                        artifact.exit_code,
+                        artifact.diff,
+                        artifact.content,
+                        artifact.url,
+                        artifact.external_uri,
+                        artifact.meta_json
+                    ],
+                )?;
+            }
+        }
+
+        if !checks.is_empty() {
+            let base_ordinal: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(ordinal), -1) FROM evidence_checks WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3",
+                params![workspace.as_str(), entity_kind, entity_id],
+                |row| row.get(0),
+            )?;
+            for (idx, check) in checks.iter().enumerate() {
+                let ordinal = base_ordinal + idx as i64 + 1;
+                tx.execute(
+                    "INSERT INTO evidence_checks(workspace, entity_kind, entity_id, ordinal, check_text) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![workspace.as_str(), entity_kind, entity_id, ordinal, check],
+                )?;
+            }
+        }
+
+        if !attachments.is_empty() {
+            let base_ordinal: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(ordinal), -1) FROM evidence_attachments WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3",
+                params![workspace.as_str(), entity_kind, entity_id],
+                |row| row.get(0),
+            )?;
+            for (idx, attachment) in attachments.iter().enumerate() {
+                let ordinal = base_ordinal + idx as i64 + 1;
+                tx.execute(
+                    "INSERT INTO evidence_attachments(workspace, entity_kind, entity_id, ordinal, attachment) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![workspace.as_str(), entity_kind, entity_id, ordinal, attachment],
+                )?;
+            }
+        }
+
+        let event_payload_json = build_evidence_captured_payload(
+            task_id,
+            &entity_kind,
+            &entity_id,
+            path.as_deref(),
+            artifacts.len(),
+            checks.len(),
+            attachments.len(),
+        );
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            path.clone(),
+            "evidence_captured",
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, reasoning_kind, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        tx.commit()?;
+        Ok(EvidenceCaptureResult {
+            revision,
+            step: path.map(|p| StepRef {
+                step_id: entity_id,
+                path: p,
+            }),
+            event,
+        })
+    }
+
+    pub fn step_delete(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        expected_revision: Option<i64>,
+        step_id: Option<&str>,
+        path: Option<&StepPath>,
+        record_undo: bool,
+    ) -> Result<StepOpResult, StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+
+        let task_revision =
+            bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
+        let (step_id, path) =
+            resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+
+        let step_ids = collect_step_subtree_ids_tx(&tx, workspace.as_str(), task_id, &step_id)?;
+
+        for step_id in step_ids.iter() {
+            tx.execute(
+                "DELETE FROM step_criteria WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM step_tests WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM step_blockers WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM step_notes WHERE workspace=?1 AND step_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM evidence_artifacts WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM evidence_checks WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM evidence_attachments WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM checkpoint_notes WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+            tx.execute(
+                "DELETE FROM checkpoint_evidence WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+                params![workspace.as_str(), step_id],
+            )?;
+
+            let node_ids = {
+                let mut stmt = tx.prepare(
+                    "SELECT node_id FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3",
+                )?;
+                let rows = stmt
+                    .query_map(params![workspace.as_str(), task_id, step_id], |row| {
+                        row.get::<_, String>(0)
+                    })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for node_id in node_ids {
+                tx.execute(
+                    "DELETE FROM task_items WHERE workspace=?1 AND entity_kind='task_node' AND entity_id=?2",
+                    params![workspace.as_str(), node_id],
+                )?;
+            }
+            tx.execute(
+                "DELETE FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3",
+                params![workspace.as_str(), task_id, step_id],
+            )?;
+        }
+
+        for step_id in step_ids.iter() {
+            tx.execute(
+                "DELETE FROM steps WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id],
+            )?;
+        }
+
+        let step_ref = StepRef {
+            step_id: step_id.clone(),
+            path: path.clone(),
+        };
+        let event_payload_json = build_step_deleted_payload(task_id, &step_ref);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(task_id.to_string()),
+            Some(path.clone()),
+            "step_deleted",
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref =
+            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        if record_undo {
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(task_id),
+                Some(path.clone()),
+                "step_delete",
+                &event_payload_json,
+                None,
+                None,
+                false,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(StepOpResult {
+            task_revision,
+            step: step_ref,
+            event,
+        })
+    }
+
+    pub fn task_root_delete(
+        &mut self,
+        workspace: &WorkspaceId,
+        id: &str,
+        record_undo: bool,
+    ) -> Result<(TaskKind, EventRow), StoreError> {
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        let kind = if id.starts_with("PLAN-") {
+            TaskKind::Plan
+        } else if id.starts_with("TASK-") {
+            TaskKind::Task
+        } else {
+            return Err(StoreError::InvalidInput(
+                "task must start with PLAN- or TASK-",
+            ));
+        };
+
+        if matches!(kind, TaskKind::Plan) {
+            let exists = tx
+                .query_row(
+                    "SELECT 1 FROM plans WHERE workspace=?1 AND id=?2",
+                    params![workspace.as_str(), id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !exists {
+                return Err(StoreError::UnknownId);
+            }
+            let task_ids = {
+                let mut stmt =
+                    tx.prepare("SELECT id FROM tasks WHERE workspace=?1 AND parent_plan_id=?2")?;
+                let rows = stmt.query_map(params![workspace.as_str(), id], |row| {
+                    row.get::<_, String>(0)
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for task_id in task_ids.iter() {
+                delete_task_rows_tx(&tx, workspace.as_str(), task_id)?;
+                let event_payload_json = build_task_deleted_payload(task_id, TaskKind::Task);
+                let task_event = insert_event_tx(
+                    &tx,
+                    workspace.as_str(),
+                    now_ms,
+                    Some(task_id.to_string()),
+                    None,
+                    "task_deleted",
+                    &event_payload_json,
+                )?;
+                let reasoning_ref =
+                    ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
+                let _ = ingest_task_event_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &reasoning_ref.branch,
+                    &reasoning_ref.trace_doc,
+                    &task_event,
+                )?;
+            }
+
+            tx.execute(
+                "DELETE FROM plan_checklist WHERE workspace=?1 AND plan_id=?2",
+                params![workspace.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM task_items WHERE workspace=?1 AND entity_kind='plan' AND entity_id=?2",
+                params![workspace.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM evidence_artifacts WHERE workspace=?1 AND entity_kind='plan' AND entity_id=?2",
+                params![workspace.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM evidence_checks WHERE workspace=?1 AND entity_kind='plan' AND entity_id=?2",
+                params![workspace.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM evidence_attachments WHERE workspace=?1 AND entity_kind='plan' AND entity_id=?2",
+                params![workspace.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM checkpoint_notes WHERE workspace=?1 AND entity_kind='plan' AND entity_id=?2",
+                params![workspace.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM checkpoint_evidence WHERE workspace=?1 AND entity_kind='plan' AND entity_id=?2",
+                params![workspace.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM plans WHERE workspace=?1 AND id=?2",
+                params![workspace.as_str(), id],
+            )?;
+        } else {
+            let exists = tx
+                .query_row(
+                    "SELECT 1 FROM tasks WHERE workspace=?1 AND id=?2",
+                    params![workspace.as_str(), id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !exists {
+                return Err(StoreError::UnknownId);
+            }
+            delete_task_rows_tx(&tx, workspace.as_str(), id)?;
+        }
+
+        let event_payload_json = build_task_deleted_payload(id, kind);
+        let event = insert_event_tx(
+            &tx,
+            workspace.as_str(),
+            now_ms,
+            Some(id.to_string()),
+            None,
+            "task_deleted",
+            &event_payload_json,
+        )?;
+
+        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, id, kind, now_ms)?;
+        let _ = ingest_task_event_tx(
+            &tx,
+            workspace.as_str(),
+            &reasoning_ref.branch,
+            &reasoning_ref.trace_doc,
+            &event,
+        )?;
+
+        if record_undo {
+            ops_history_insert_tx(
+                &tx,
+                workspace.as_str(),
+                Some(id),
+                None,
+                "task_delete",
+                &event_payload_json,
+                None,
+                None,
+                false,
+                now_ms,
+            )?;
+        }
+
+        tx.commit()?;
+        Ok((kind, event))
     }
 
     pub fn task_steps_summary(
@@ -5306,21 +7384,23 @@ impl SqliteStore {
                 },
             )
             .optional()?
-            .map(|(step_id, title, completed, criteria, tests, security, perf, docs)| {
-                let path = step_path_for_step_id_tx(&tx, workspace.as_str(), task_id, &step_id)
-                    .unwrap_or_else(|_| "s:?".to_string());
-                StepStatus {
-                    step_id,
-                    path,
-                    title,
-                    completed: completed != 0,
-                    criteria_confirmed: criteria != 0,
-                    tests_confirmed: tests != 0,
-                    security_confirmed: security != 0,
-                    perf_confirmed: perf != 0,
-                    docs_confirmed: docs != 0,
-                }
-            });
+            .map(
+                |(step_id, title, completed, criteria, tests, security, perf, docs)| {
+                    let path = step_path_for_step_id_tx(&tx, workspace.as_str(), task_id, &step_id)
+                        .unwrap_or_else(|_| "s:?".to_string());
+                    StepStatus {
+                        step_id,
+                        path,
+                        title,
+                        completed: completed != 0,
+                        criteria_confirmed: criteria != 0,
+                        tests_confirmed: tests != 0,
+                        security_confirmed: security != 0,
+                        perf_confirmed: perf != 0,
+                        docs_confirmed: docs != 0,
+                    }
+                },
+            );
 
         tx.commit()?;
         Ok(TaskStepSummary {
@@ -5357,6 +7437,19 @@ impl SqliteStore {
             row.get::<_, String>(0)
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn task_items_list(
+        &self,
+        workspace: &WorkspaceId,
+        entity_kind: &str,
+        entity_id: &str,
+        field: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        let tx = self.conn.transaction()?;
+        let items = task_items_list_tx(&tx, workspace.as_str(), entity_kind, entity_id, field)?;
+        tx.commit()?;
+        Ok(items)
     }
 
     pub fn list_plans(
@@ -7654,6 +9747,39 @@ fn bump_task_revision_tx(
     Ok(next)
 }
 
+fn bump_plan_revision_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    plan_id: &str,
+    expected_revision: Option<i64>,
+    now_ms: i64,
+) -> Result<i64, StoreError> {
+    let current: i64 = tx
+        .query_row(
+            "SELECT revision FROM plans WHERE workspace=?1 AND id=?2",
+            params![workspace, plan_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(StoreError::UnknownId)?;
+
+    if let Some(expected) = expected_revision {
+        if expected != current {
+            return Err(StoreError::RevisionMismatch {
+                expected,
+                actual: current,
+            });
+        }
+    }
+
+    let next = current + 1;
+    tx.execute(
+        "UPDATE plans SET revision=?3, updated_at_ms=?4 WHERE workspace=?1 AND id=?2",
+        params![workspace, plan_id, next, now_ms],
+    )?;
+    Ok(next)
+}
+
 fn task_items_list_tx(
     tx: &Transaction<'_>,
     workspace: &str,
@@ -7669,10 +9795,32 @@ fn task_items_list_tx(
         ORDER BY ordinal ASC
         "#,
     )?;
-    let rows = stmt.query_map(
-        params![workspace, entity_kind, entity_id, field],
-        |row| row.get::<_, String>(0),
-    )?;
+    let rows = stmt.query_map(params![workspace, entity_kind, entity_id, field], |row| {
+        row.get::<_, String>(0)
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn step_items_list_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    step_id: &str,
+    table: &str,
+) -> Result<Vec<String>, StoreError> {
+    let sql = match table {
+        "step_criteria" => {
+            "SELECT text FROM step_criteria WHERE workspace=?1 AND step_id=?2 ORDER BY ordinal ASC"
+        }
+        "step_tests" => {
+            "SELECT text FROM step_tests WHERE workspace=?1 AND step_id=?2 ORDER BY ordinal ASC"
+        }
+        "step_blockers" => {
+            "SELECT text FROM step_blockers WHERE workspace=?1 AND step_id=?2 ORDER BY ordinal ASC"
+        }
+        _ => return Err(StoreError::InvalidInput("unknown step items table")),
+    };
+    let mut stmt = tx.prepare(sql)?;
+    let rows = stmt.query_map(params![workspace, step_id], |row| row.get::<_, String>(0))?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
@@ -7874,6 +10022,217 @@ fn resolve_step_selector_tx(
     }
 }
 
+fn task_node_path_for_parent_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    parent_step_id: &str,
+    ordinal: i64,
+) -> Result<String, StoreError> {
+    let step_path = step_path_for_step_id_tx(tx, workspace, task_id, parent_step_id)?;
+    Ok(format!("{step_path}.t:{ordinal}"))
+}
+
+fn resolve_task_node_id_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    parent_step_id: &str,
+    ordinal: i64,
+) -> Result<String, StoreError> {
+    tx.query_row(
+        "SELECT node_id FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3 AND ordinal=?4",
+        params![workspace, task_id, parent_step_id, ordinal],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .ok_or(StoreError::UnknownId)
+}
+
+fn resolve_task_node_selector_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    node_id: Option<&str>,
+    parent_path: Option<&StepPath>,
+    ordinal: Option<i64>,
+) -> Result<(String, String, String, i64), StoreError> {
+    match (node_id, parent_path, ordinal) {
+        (Some(node_id), _, _) => {
+            let row = tx
+                .query_row(
+                    "SELECT parent_step_id, ordinal FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND node_id=?3",
+                    params![workspace, task_id, node_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .optional()?;
+            let Some((parent_step_id, ordinal)) = row else {
+                return Err(StoreError::UnknownId);
+            };
+            let path =
+                task_node_path_for_parent_tx(tx, workspace, task_id, &parent_step_id, ordinal)?;
+            Ok((node_id.to_string(), path, parent_step_id, ordinal))
+        }
+        (None, Some(parent_path), Some(ordinal)) => {
+            let parent_step_id = resolve_step_id_tx(tx, workspace, task_id, parent_path)?;
+            let node_id =
+                resolve_task_node_id_tx(tx, workspace, task_id, &parent_step_id, ordinal)?;
+            let path =
+                task_node_path_for_parent_tx(tx, workspace, task_id, &parent_step_id, ordinal)?;
+            Ok((node_id, path, parent_step_id, ordinal))
+        }
+        _ => Err(StoreError::InvalidInput("task node selector is required")),
+    }
+}
+
+fn collect_step_subtree_ids_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+    root_step_id: &str,
+) -> Result<Vec<String>, StoreError> {
+    let mut out = Vec::new();
+    let mut stack = vec![root_step_id.to_string()];
+    while let Some(current) = stack.pop() {
+        out.push(current.clone());
+        let mut stmt = tx.prepare(
+            "SELECT step_id FROM steps WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3",
+        )?;
+        let rows = stmt.query_map(params![workspace, task_id, current], |row| {
+            row.get::<_, String>(0)
+        })?;
+        for step_id in rows {
+            stack.push(step_id?);
+        }
+    }
+    Ok(out)
+}
+
+fn delete_task_rows_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+) -> Result<(), StoreError> {
+    let step_ids = {
+        let mut stmt = tx.prepare("SELECT step_id FROM steps WHERE workspace=?1 AND task_id=?2")?;
+        let rows = stmt.query_map(params![workspace, task_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    for step_id in step_ids.iter() {
+        tx.execute(
+            "DELETE FROM step_criteria WHERE workspace=?1 AND step_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM step_tests WHERE workspace=?1 AND step_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM step_blockers WHERE workspace=?1 AND step_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM step_notes WHERE workspace=?1 AND step_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM evidence_artifacts WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM evidence_checks WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM evidence_attachments WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM checkpoint_notes WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+            params![workspace, step_id],
+        )?;
+        tx.execute(
+            "DELETE FROM checkpoint_evidence WHERE workspace=?1 AND entity_kind='step' AND entity_id=?2",
+            params![workspace, step_id],
+        )?;
+
+        let node_ids = {
+            let mut stmt = tx.prepare(
+                "SELECT node_id FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3",
+            )?;
+            let rows = stmt.query_map(params![workspace, task_id, step_id], |row| {
+                row.get::<_, String>(0)
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for node_id in node_ids {
+            tx.execute(
+                "DELETE FROM task_items WHERE workspace=?1 AND entity_kind='task_node' AND entity_id=?2",
+                params![workspace, node_id],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM task_nodes WHERE workspace=?1 AND task_id=?2 AND parent_step_id=?3",
+            params![workspace, task_id, step_id],
+        )?;
+    }
+
+    tx.execute(
+        "DELETE FROM steps WHERE workspace=?1 AND task_id=?2",
+        params![workspace, task_id],
+    )?;
+
+    let node_ids = {
+        let mut stmt =
+            tx.prepare("SELECT node_id FROM task_nodes WHERE workspace=?1 AND task_id=?2")?;
+        let rows = stmt.query_map(params![workspace, task_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for node_id in node_ids {
+        tx.execute(
+            "DELETE FROM task_items WHERE workspace=?1 AND entity_kind='task_node' AND entity_id=?2",
+            params![workspace, node_id],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM task_nodes WHERE workspace=?1 AND task_id=?2",
+        params![workspace, task_id],
+    )?;
+
+    tx.execute(
+        "DELETE FROM task_items WHERE workspace=?1 AND entity_kind='task' AND entity_id=?2",
+        params![workspace, task_id],
+    )?;
+    tx.execute(
+        "DELETE FROM evidence_artifacts WHERE workspace=?1 AND entity_kind='task' AND entity_id=?2",
+        params![workspace, task_id],
+    )?;
+    tx.execute(
+        "DELETE FROM evidence_checks WHERE workspace=?1 AND entity_kind='task' AND entity_id=?2",
+        params![workspace, task_id],
+    )?;
+    tx.execute(
+        "DELETE FROM evidence_attachments WHERE workspace=?1 AND entity_kind='task' AND entity_id=?2",
+        params![workspace, task_id],
+    )?;
+    tx.execute(
+        "DELETE FROM checkpoint_notes WHERE workspace=?1 AND entity_kind='task' AND entity_id=?2",
+        params![workspace, task_id],
+    )?;
+    tx.execute(
+        "DELETE FROM checkpoint_evidence WHERE workspace=?1 AND entity_kind='task' AND entity_id=?2",
+        params![workspace, task_id],
+    )?;
+
+    tx.execute(
+        "DELETE FROM tasks WHERE workspace=?1 AND id=?2",
+        params![workspace, task_id],
+    )?;
+
+    Ok(())
+}
+
 fn next_counter_tx(tx: &Transaction<'_>, workspace: &str, name: &str) -> Result<i64, StoreError> {
     let current: i64 = tx
         .query_row(
@@ -7923,6 +10282,93 @@ fn build_steps_added_payload(
         out.push_str("\"}");
     }
     out.push_str("]}");
+    out
+}
+
+fn build_task_node_added_payload(
+    task_id: &str,
+    node_id: &str,
+    path: &str,
+    parent_path: &str,
+) -> String {
+    format!(
+        "{{\"task\":\"{task_id}\",\"node_id\":\"{node_id}\",\"path\":\"{path}\",\"parent_path\":\"{parent_path}\"}}"
+    )
+}
+
+fn build_task_node_defined_payload(
+    task_id: &str,
+    node_id: &str,
+    path: &str,
+    fields: &[&str],
+) -> String {
+    let mut out = String::new();
+    out.push_str("{\"task\":\"");
+    out.push_str(task_id);
+    out.push_str("\",\"node_id\":\"");
+    out.push_str(node_id);
+    out.push_str("\",\"path\":\"");
+    out.push_str(path);
+    out.push_str("\",\"fields\":[");
+    for (i, field) in fields.iter().enumerate() {
+        if i != 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(field);
+        out.push('"');
+    }
+    out.push_str("]}");
+    out
+}
+
+fn build_task_node_deleted_payload(task_id: &str, node_id: &str, path: &str) -> String {
+    format!("{{\"task\":\"{task_id}\",\"node_id\":\"{node_id}\",\"path\":\"{path}\"}}")
+}
+
+fn build_step_deleted_payload(task_id: &str, step: &StepRef) -> String {
+    format!(
+        "{{\"task\":\"{task_id}\",\"step_id\":\"{}\",\"path\":\"{}\"}}",
+        step.step_id, step.path
+    )
+}
+
+fn build_task_deleted_payload(task_id: &str, kind: TaskKind) -> String {
+    format!("{{\"task\":\"{task_id}\",\"kind\":\"{}\"}}", kind.as_str())
+}
+
+fn build_evidence_captured_payload(
+    task_id: &str,
+    entity_kind: &str,
+    entity_id: &str,
+    path: Option<&str>,
+    artifacts_count: usize,
+    checks_count: usize,
+    attachments_count: usize,
+) -> String {
+    let mut out = String::new();
+    out.push_str("{\"task\":\"");
+    out.push_str(task_id);
+    out.push_str("\",\"entity_kind\":\"");
+    out.push_str(entity_kind);
+    out.push_str("\",\"entity_id\":\"");
+    out.push_str(entity_id);
+    out.push_str("\",\"path\":");
+    match path {
+        Some(path) => {
+            out.push('"');
+            out.push_str(path);
+            out.push('"');
+        }
+        None => out.push_str("null"),
+    }
+    out.push_str(",\"artifacts\":");
+    out.push_str(&artifacts_count.to_string());
+    out.push_str(",\"checks\":");
+    out.push_str(&checks_count.to_string());
+    out.push_str(",\"attachments\":");
+    out.push_str(&attachments_count.to_string());
+    out.push_str("}");
     out
 }
 
@@ -8073,7 +10519,46 @@ fn insert_event_tx(
     })
 }
 
+fn ops_history_insert_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: Option<&str>,
+    path: Option<String>,
+    intent: &str,
+    payload_json: &str,
+    before_json: Option<&str>,
+    after_json: Option<&str>,
+    undoable: bool,
+    now_ms: i64,
+) -> Result<i64, StoreError> {
+    tx.execute(
+        r#"
+        INSERT INTO ops_history(workspace, task_id, path, intent, payload_json, before_json, after_json, undoable, undone, ts_ms)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)
+        "#,
+        params![
+            workspace,
+            task_id,
+            path,
+            intent,
+            payload_json,
+            before_json,
+            after_json,
+            if undoable { 1i64 } else { 0i64 },
+            now_ms
+        ],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
 fn parse_event_id(event_id: &str) -> Option<i64> {
     let digits = event_id.strip_prefix("evt_")?;
     digits.parse::<i64>().ok()
+}
+
+fn parse_json_or_null(value: Option<String>) -> JsonValue {
+    match value {
+        None => JsonValue::Null,
+        Some(raw) => serde_json::from_str(&raw).unwrap_or(JsonValue::Null),
+    }
 }

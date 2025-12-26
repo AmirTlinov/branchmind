@@ -115,8 +115,10 @@ Additional event types (v0.2 parity):
 - `task_patched`
 - `task_completed`
 - `task_deleted`
+- `task_node_added` / `task_node_defined` / `task_node_deleted`
 - `step_reopened`
 - `step_blocked` / `step_unblocked`
+- `step_deleted`
 - `plan_updated`
 - `contract_updated`
 - `evidence_captured`

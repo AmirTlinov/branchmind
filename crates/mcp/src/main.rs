@@ -155,6 +155,12 @@ impl McpServer {
             "tasks_block" => self.tool_tasks_block(args),
             "tasks_progress" => self.tool_tasks_progress(args),
             "tasks_edit" => self.tool_tasks_edit(args),
+            "tasks_patch" => self.tool_tasks_patch(args),
+            "tasks_delete" => self.tool_tasks_delete(args),
+            "tasks_task_add" => self.tool_tasks_task_add(args),
+            "tasks_task_define" => self.tool_tasks_task_define(args),
+            "tasks_task_delete" => self.tool_tasks_task_delete(args),
+            "tasks_evidence_capture" => self.tool_tasks_evidence_capture(args),
             "tasks_context" => self.tool_tasks_context(args),
             "tasks_delta" => self.tool_tasks_delta(args),
             "tasks_plan" => self.tool_tasks_plan(args),
@@ -1394,6 +1400,1457 @@ impl McpServer {
         }
     }
 
+    fn tool_tasks_patch(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let kind = args_obj
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("task_detail");
+
+        let ops_value = args_obj.get("ops").cloned().unwrap_or(Value::Null);
+        let ops = ops_value
+            .as_array()
+            .ok_or_else(|| ai_error("INVALID_INPUT", "ops must be an array"));
+        let Ok(ops) = ops else {
+            return ops.err().unwrap();
+        };
+        if ops.is_empty() {
+            return ai_error("INVALID_INPUT", "ops must not be empty");
+        }
+
+        match kind {
+            "task_detail" => {
+                let kind = match parse_plan_or_task_kind(&task_id) {
+                    Some(v) => v,
+                    None => {
+                        return ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-");
+                    }
+                };
+                let mut patch = bm_storage::TaskDetailPatch {
+                    title: None,
+                    description: None,
+                    context: None,
+                    priority: None,
+                    contract: None,
+                    contract_json: None,
+                    domain: None,
+                    phase: None,
+                    component: None,
+                    assignee: None,
+                    tags: None,
+                    depends_on: None,
+                };
+                let mut tags: Option<Vec<String>> = None;
+                let mut depends: Option<Vec<String>> = None;
+                let mut fields: Vec<String> = Vec::new();
+
+                for op_value in ops {
+                    let Some(op_obj) = op_value.as_object() else {
+                        return ai_error("INVALID_INPUT", "ops entries must be objects");
+                    };
+                    let op_name = match require_string(op_obj, "op") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let field = match require_string(op_obj, "field") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let value = op_obj.get("value");
+
+                    let mut push_field = |name: &str| {
+                        if !fields.iter().any(|f| f == name) {
+                            fields.push(name.to_string());
+                        }
+                    };
+
+                    match field.as_str() {
+                        "title" => {
+                            if op_name != "set" {
+                                return ai_error("INVALID_INPUT", "title supports only set");
+                            }
+                            let Some(Value::String(v)) = value else {
+                                return ai_error("INVALID_INPUT", "title must be a string");
+                            };
+                            patch.title = Some(v.clone());
+                            push_field("title");
+                        }
+                        "description" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let next = match value {
+                                        Some(Value::Null) => None,
+                                        Some(Value::String(v)) => Some(v.clone()),
+                                        _ => {
+                                            return ai_error(
+                                                "INVALID_INPUT",
+                                                "description must be string or null",
+                                            );
+                                        }
+                                    };
+                                    patch.description = Some(next);
+                                }
+                                "unset" => patch.description = Some(None),
+                                _ => {
+                                    return ai_error(
+                                        "INVALID_INPUT",
+                                        "description supports set/unset",
+                                    );
+                                }
+                            }
+                            push_field("description");
+                        }
+                        "context" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let next = match value {
+                                        Some(Value::Null) => None,
+                                        Some(Value::String(v)) => Some(v.clone()),
+                                        _ => {
+                                            return ai_error(
+                                                "INVALID_INPUT",
+                                                "context must be string or null",
+                                            );
+                                        }
+                                    };
+                                    patch.context = Some(next);
+                                }
+                                "unset" => patch.context = Some(None),
+                                _ => {
+                                    return ai_error("INVALID_INPUT", "context supports set/unset");
+                                }
+                            }
+                            push_field("context");
+                        }
+                        "priority" => {
+                            if op_name != "set" {
+                                return ai_error("INVALID_INPUT", "priority supports only set");
+                            }
+                            let Some(Value::String(v)) = value else {
+                                return ai_error("INVALID_INPUT", "priority must be a string");
+                            };
+                            patch.priority = Some(v.clone());
+                            push_field("priority");
+                        }
+                        "contract" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let next = match value {
+                                        Some(Value::Null) => None,
+                                        Some(Value::String(v)) => Some(v.clone()),
+                                        _ => {
+                                            return ai_error(
+                                                "INVALID_INPUT",
+                                                "contract must be string or null",
+                                            );
+                                        }
+                                    };
+                                    patch.contract = Some(next);
+                                }
+                                "unset" => patch.contract = Some(None),
+                                _ => {
+                                    return ai_error("INVALID_INPUT", "contract supports set/unset");
+                                }
+                            }
+                            push_field("contract");
+                        }
+                        "contract_data" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let Some(v) = value else {
+                                        return ai_error(
+                                            "INVALID_INPUT",
+                                            "contract_data requires value",
+                                        );
+                                    };
+                                    if v.is_null() {
+                                        patch.contract_json = Some(None);
+                                    } else {
+                                        patch.contract_json = Some(Some(v.to_string()));
+                                    }
+                                }
+                                "unset" => patch.contract_json = Some(None),
+                                _ => {
+                                    return ai_error(
+                                        "INVALID_INPUT",
+                                        "contract_data supports set/unset",
+                                    );
+                                }
+                            }
+                            push_field("contract_data");
+                        }
+                        "domain" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let next = match value {
+                                        Some(Value::Null) => None,
+                                        Some(Value::String(v)) => Some(v.clone()),
+                                        _ => {
+                                            return ai_error(
+                                                "INVALID_INPUT",
+                                                "domain must be string or null",
+                                            );
+                                        }
+                                    };
+                                    patch.domain = Some(next);
+                                }
+                                "unset" => patch.domain = Some(None),
+                                _ => return ai_error("INVALID_INPUT", "domain supports set/unset"),
+                            }
+                            push_field("domain");
+                        }
+                        "phase" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let next = match value {
+                                        Some(Value::Null) => None,
+                                        Some(Value::String(v)) => Some(v.clone()),
+                                        _ => {
+                                            return ai_error(
+                                                "INVALID_INPUT",
+                                                "phase must be string or null",
+                                            );
+                                        }
+                                    };
+                                    patch.phase = Some(next);
+                                }
+                                "unset" => patch.phase = Some(None),
+                                _ => return ai_error("INVALID_INPUT", "phase supports set/unset"),
+                            }
+                            push_field("phase");
+                        }
+                        "component" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let next = match value {
+                                        Some(Value::Null) => None,
+                                        Some(Value::String(v)) => Some(v.clone()),
+                                        _ => {
+                                            return ai_error(
+                                                "INVALID_INPUT",
+                                                "component must be string or null",
+                                            );
+                                        }
+                                    };
+                                    patch.component = Some(next);
+                                }
+                                "unset" => patch.component = Some(None),
+                                _ => {
+                                    return ai_error(
+                                        "INVALID_INPUT",
+                                        "component supports set/unset",
+                                    );
+                                }
+                            }
+                            push_field("component");
+                        }
+                        "assignee" => {
+                            match op_name.as_str() {
+                                "set" => {
+                                    let next = match value {
+                                        Some(Value::Null) => None,
+                                        Some(Value::String(v)) => Some(v.clone()),
+                                        _ => {
+                                            return ai_error(
+                                                "INVALID_INPUT",
+                                                "assignee must be string or null",
+                                            );
+                                        }
+                                    };
+                                    patch.assignee = Some(next);
+                                }
+                                "unset" => patch.assignee = Some(None),
+                                _ => {
+                                    return ai_error("INVALID_INPUT", "assignee supports set/unset");
+                                }
+                            }
+                            push_field("assignee");
+                        }
+                        "tags" => {
+                            let mut list = if let Some(current) = tags.take() {
+                                current
+                            } else {
+                                match self.store.task_items_list(
+                                    &workspace,
+                                    kind.as_str(),
+                                    &task_id,
+                                    "tags",
+                                ) {
+                                    Ok(v) => v,
+                                    Err(err) => {
+                                        return ai_error("STORE_ERROR", &format_store_error(err));
+                                    }
+                                }
+                            };
+                            if let Err(resp) = apply_list_op(&mut list, &op_name, value, "tags") {
+                                return resp;
+                            }
+                            tags = Some(list);
+                            push_field("tags");
+                        }
+                        "depends_on" => {
+                            let mut list = if let Some(current) = depends.take() {
+                                current
+                            } else {
+                                match self.store.task_items_list(
+                                    &workspace,
+                                    kind.as_str(),
+                                    &task_id,
+                                    "depends_on",
+                                ) {
+                                    Ok(v) => v,
+                                    Err(err) => {
+                                        return ai_error("STORE_ERROR", &format_store_error(err));
+                                    }
+                                }
+                            };
+                            if let Err(resp) =
+                                apply_list_op(&mut list, &op_name, value, "depends_on")
+                            {
+                                return resp;
+                            }
+                            depends = Some(list);
+                            push_field("depends_on");
+                        }
+                        _ => return ai_error("INVALID_INPUT", "unknown task_detail field"),
+                    }
+                }
+
+                if let Some(list) = tags {
+                    patch.tags = Some(list);
+                }
+                if let Some(list) = depends {
+                    patch.depends_on = Some(list);
+                }
+
+                if fields.is_empty() {
+                    return ai_error("INVALID_INPUT", "no fields to patch");
+                }
+
+                let payload = json!({
+                    "task": task_id,
+                    "kind": kind.as_str(),
+                    "fields": fields
+                })
+                .to_string();
+
+                let result = self.store.task_detail_patch(
+                    &workspace,
+                    &task_id,
+                    expected_revision,
+                    kind,
+                    patch,
+                    "task_patched".to_string(),
+                    payload,
+                    true,
+                );
+
+                match result {
+                    Ok((revision, event)) => ai_ok(
+                        "patch",
+                        json!({
+                            "id": task_id,
+                            "kind": kind.as_str(),
+                            "revision": revision,
+                            "event": {
+                                "event_id": event.event_id(),
+                                "ts": ts_ms_to_rfc3339(event.ts_ms),
+                                "ts_ms": event.ts_ms,
+                                "task_id": event.task_id,
+                                "path": event.path,
+                                "type": event.event_type,
+                                "payload": parse_json_or_string(&event.payload_json)
+                            }
+                        }),
+                    ),
+                    Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                        "REVISION_MISMATCH",
+                        &format!("expected={expected} actual={actual}"),
+                        Some("Refresh the current revision and retry with expected_revision."),
+                        vec![suggest_call(
+                            "tasks_context",
+                            "Refresh current revisions for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    ),
+                    Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+                    Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+                    Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+                }
+            }
+            "step" => {
+                let step_id = match optional_string(args_obj, "step_id") {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
+                let path = match optional_step_path(args_obj, "path") {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
+                if step_id.is_none() && path.is_none() {
+                    return ai_error("INVALID_INPUT", "step_id or path is required");
+                }
+
+                let detail = match self.store.step_detail(
+                    &workspace,
+                    &task_id,
+                    step_id.as_deref(),
+                    path.as_ref(),
+                ) {
+                    Ok(v) => v,
+                    Err(StoreError::StepNotFound) => {
+                        return ai_error("UNKNOWN_ID", "Step not found");
+                    }
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+
+                let mut patch = bm_storage::StepPatch {
+                    title: None,
+                    success_criteria: None,
+                    tests: None,
+                    blockers: None,
+                };
+                let mut fields: Vec<&str> = Vec::new();
+                let mut criteria_list = detail.success_criteria.clone();
+                let mut tests_list = detail.tests.clone();
+                let mut blockers_list = detail.blockers.clone();
+
+                for op_value in ops {
+                    let Some(op_obj) = op_value.as_object() else {
+                        return ai_error("INVALID_INPUT", "ops entries must be objects");
+                    };
+                    let op_name = match require_string(op_obj, "op") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let field = match require_string(op_obj, "field") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let value = op_obj.get("value");
+
+                    match field.as_str() {
+                        "title" => {
+                            if op_name != "set" {
+                                return ai_error("INVALID_INPUT", "title supports only set");
+                            }
+                            let Some(Value::String(v)) = value else {
+                                return ai_error("INVALID_INPUT", "title must be a string");
+                            };
+                            patch.title = Some(v.clone());
+                            fields.push("title");
+                        }
+                        "success_criteria" => {
+                            if let Err(resp) = apply_list_op(
+                                &mut criteria_list,
+                                &op_name,
+                                value,
+                                "success_criteria",
+                            ) {
+                                return resp;
+                            }
+                            patch.success_criteria = Some(criteria_list.clone());
+                            fields.push("success_criteria");
+                        }
+                        "tests" => {
+                            if let Err(resp) =
+                                apply_list_op(&mut tests_list, &op_name, value, "tests")
+                            {
+                                return resp;
+                            }
+                            patch.tests = Some(tests_list.clone());
+                            fields.push("tests");
+                        }
+                        "blockers" => {
+                            if let Err(resp) =
+                                apply_list_op(&mut blockers_list, &op_name, value, "blockers")
+                            {
+                                return resp;
+                            }
+                            patch.blockers = Some(blockers_list.clone());
+                            fields.push("blockers");
+                        }
+                        _ => return ai_error("INVALID_INPUT", "unknown step field"),
+                    }
+                }
+
+                if fields.is_empty() {
+                    return ai_error("INVALID_INPUT", "no fields to patch");
+                }
+
+                let payload = json!({
+                    "task": task_id,
+                    "step_id": detail.step_id,
+                    "path": detail.path,
+                    "fields": fields
+                })
+                .to_string();
+
+                let result = self.store.step_patch(
+                    &workspace,
+                    &task_id,
+                    expected_revision,
+                    Some(&detail.step_id),
+                    None,
+                    patch,
+                    payload,
+                    true,
+                );
+
+                match result {
+                    Ok(out) => ai_ok(
+                        "patch",
+                        json!({
+                            "task": task_id,
+                            "revision": out.task_revision,
+                            "step": { "step_id": out.step.step_id, "path": out.step.path },
+                            "event": {
+                                "event_id": out.event.event_id(),
+                                "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                                "ts_ms": out.event.ts_ms,
+                                "task_id": out.event.task_id,
+                                "path": out.event.path,
+                                "type": out.event.event_type,
+                                "payload": parse_json_or_string(&out.event.payload_json)
+                            }
+                        }),
+                    ),
+                    Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+                    Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                        "REVISION_MISMATCH",
+                        &format!("expected={expected} actual={actual}"),
+                        Some("Refresh the current revision and retry with expected_revision."),
+                        vec![suggest_call(
+                            "tasks_context",
+                            "Refresh current revisions for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    ),
+                    Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+                    Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+                    Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+                }
+            }
+            "task" => {
+                let node_id = match optional_string(args_obj, "task_node_id") {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
+                let path = args_obj
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                if node_id.is_none() && path.is_none() {
+                    return ai_error("INVALID_INPUT", "task_node_id or path is required");
+                }
+                let (parent_path, ordinal) = if node_id.is_none() {
+                    let Some(path) = path else {
+                        return ai_error("INVALID_INPUT", "path is required");
+                    };
+                    match parse_task_node_path(&path) {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    }
+                } else {
+                    (StepPath::root(0), 0)
+                };
+
+                let detail = match self.store.task_node_detail(
+                    &workspace,
+                    &task_id,
+                    node_id.as_deref(),
+                    if node_id.is_some() {
+                        None
+                    } else {
+                        Some(&parent_path)
+                    },
+                    if node_id.is_some() {
+                        None
+                    } else {
+                        Some(ordinal)
+                    },
+                ) {
+                    Ok(v) => v,
+                    Err(StoreError::UnknownId) => {
+                        return ai_error("UNKNOWN_ID", "Task node not found");
+                    }
+                    Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+
+                let mut patch = bm_storage::TaskNodePatch {
+                    title: None,
+                    status: None,
+                    status_manual: None,
+                    priority: None,
+                    blocked: None,
+                    description: None,
+                    context: None,
+                    blockers: None,
+                    dependencies: None,
+                    next_steps: None,
+                    problems: None,
+                    risks: None,
+                    success_criteria: None,
+                };
+                let mut blockers_list = detail.blockers.clone();
+                let mut dependencies_list = detail.dependencies.clone();
+                let mut next_steps_list = detail.next_steps.clone();
+                let mut problems_list = detail.problems.clone();
+                let mut risks_list = detail.risks.clone();
+                let mut success_list = detail.success_criteria.clone();
+
+                for op_value in ops {
+                    let Some(op_obj) = op_value.as_object() else {
+                        return ai_error("INVALID_INPUT", "ops entries must be objects");
+                    };
+                    let op_name = match require_string(op_obj, "op") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let field = match require_string(op_obj, "field") {
+                        Ok(v) => v,
+                        Err(resp) => return resp,
+                    };
+                    let value = op_obj.get("value");
+
+                    match field.as_str() {
+                        "title" => {
+                            if op_name != "set" {
+                                return ai_error("INVALID_INPUT", "title supports only set");
+                            }
+                            let Some(Value::String(v)) = value else {
+                                return ai_error("INVALID_INPUT", "title must be a string");
+                            };
+                            patch.title = Some(v.clone());
+                        }
+                        "status" => {
+                            if op_name != "set" {
+                                return ai_error("INVALID_INPUT", "status supports only set");
+                            }
+                            let Some(Value::String(v)) = value else {
+                                return ai_error("INVALID_INPUT", "status must be a string");
+                            };
+                            patch.status = Some(v.clone());
+                        }
+                        "status_manual" => {
+                            if op_name != "set" {
+                                return ai_error(
+                                    "INVALID_INPUT",
+                                    "status_manual supports only set",
+                                );
+                            }
+                            let Some(Value::Bool(v)) = value else {
+                                return ai_error("INVALID_INPUT", "status_manual must be boolean");
+                            };
+                            patch.status_manual = Some(*v);
+                        }
+                        "priority" => {
+                            if op_name != "set" {
+                                return ai_error("INVALID_INPUT", "priority supports only set");
+                            }
+                            let Some(Value::String(v)) = value else {
+                                return ai_error("INVALID_INPUT", "priority must be a string");
+                            };
+                            patch.priority = Some(v.clone());
+                        }
+                        "blocked" => {
+                            if op_name != "set" {
+                                return ai_error("INVALID_INPUT", "blocked supports only set");
+                            }
+                            let Some(Value::Bool(v)) = value else {
+                                return ai_error("INVALID_INPUT", "blocked must be boolean");
+                            };
+                            patch.blocked = Some(*v);
+                        }
+                        "description" => match op_name.as_str() {
+                            "set" => {
+                                let next = match value {
+                                    Some(Value::Null) => None,
+                                    Some(Value::String(v)) => Some(v.clone()),
+                                    _ => {
+                                        return ai_error(
+                                            "INVALID_INPUT",
+                                            "description must be string or null",
+                                        );
+                                    }
+                                };
+                                patch.description = Some(next);
+                            }
+                            "unset" => patch.description = Some(None),
+                            _ => {
+                                return ai_error("INVALID_INPUT", "description supports set/unset");
+                            }
+                        },
+                        "context" => match op_name.as_str() {
+                            "set" => {
+                                let next = match value {
+                                    Some(Value::Null) => None,
+                                    Some(Value::String(v)) => Some(v.clone()),
+                                    _ => {
+                                        return ai_error(
+                                            "INVALID_INPUT",
+                                            "context must be string or null",
+                                        );
+                                    }
+                                };
+                                patch.context = Some(next);
+                            }
+                            "unset" => patch.context = Some(None),
+                            _ => return ai_error("INVALID_INPUT", "context supports set/unset"),
+                        },
+                        "blockers" => {
+                            if let Err(resp) =
+                                apply_list_op(&mut blockers_list, &op_name, value, "blockers")
+                            {
+                                return resp;
+                            }
+                            patch.blockers = Some(blockers_list.clone());
+                        }
+                        "dependencies" => {
+                            if let Err(resp) = apply_list_op(
+                                &mut dependencies_list,
+                                &op_name,
+                                value,
+                                "dependencies",
+                            ) {
+                                return resp;
+                            }
+                            patch.dependencies = Some(dependencies_list.clone());
+                        }
+                        "next_steps" => {
+                            if let Err(resp) =
+                                apply_list_op(&mut next_steps_list, &op_name, value, "next_steps")
+                            {
+                                return resp;
+                            }
+                            patch.next_steps = Some(next_steps_list.clone());
+                        }
+                        "problems" => {
+                            if let Err(resp) =
+                                apply_list_op(&mut problems_list, &op_name, value, "problems")
+                            {
+                                return resp;
+                            }
+                            patch.problems = Some(problems_list.clone());
+                        }
+                        "risks" => {
+                            if let Err(resp) =
+                                apply_list_op(&mut risks_list, &op_name, value, "risks")
+                            {
+                                return resp;
+                            }
+                            patch.risks = Some(risks_list.clone());
+                        }
+                        "success_criteria" => {
+                            if let Err(resp) = apply_list_op(
+                                &mut success_list,
+                                &op_name,
+                                value,
+                                "success_criteria",
+                            ) {
+                                return resp;
+                            }
+                            patch.success_criteria = Some(success_list.clone());
+                        }
+                        _ => return ai_error("INVALID_INPUT", "unknown task node field"),
+                    }
+                }
+
+                let result = self.store.task_node_patch(
+                    &workspace,
+                    &task_id,
+                    expected_revision,
+                    node_id.as_deref(),
+                    if node_id.is_some() {
+                        None
+                    } else {
+                        Some(&parent_path)
+                    },
+                    if node_id.is_some() {
+                        None
+                    } else {
+                        Some(ordinal)
+                    },
+                    patch,
+                    true,
+                );
+
+                match result {
+                    Ok(out) => ai_ok(
+                        "patch",
+                        json!({
+                            "task": task_id,
+                            "revision": out.task_revision,
+                            "node": { "node_id": out.node.node_id, "path": out.node.path },
+                            "event": {
+                                "event_id": out.event.event_id(),
+                                "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                                "ts_ms": out.event.ts_ms,
+                                "task_id": out.event.task_id,
+                                "path": out.event.path,
+                                "type": out.event.event_type,
+                                "payload": parse_json_or_string(&out.event.payload_json)
+                            }
+                        }),
+                    ),
+                    Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Task node not found"),
+                    Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                        "REVISION_MISMATCH",
+                        &format!("expected={expected} actual={actual}"),
+                        Some("Refresh the current revision and retry with expected_revision."),
+                        vec![suggest_call(
+                            "tasks_context",
+                            "Refresh current revisions for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    ),
+                    Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+                    Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+                }
+            }
+            _ => ai_error("INVALID_INPUT", "kind must be task_detail|step|task"),
+        }
+    }
+
+    fn tool_tasks_delete(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if step_id.is_some() || path.is_some() {
+            let result = self.store.step_delete(
+                &workspace,
+                &task_id,
+                expected_revision,
+                step_id.as_deref(),
+                path.as_ref(),
+                true,
+            );
+            return match result {
+                Ok(out) => ai_ok(
+                    "delete",
+                    json!({
+                        "task": task_id,
+                        "revision": out.task_revision,
+                        "step": { "step_id": out.step.step_id, "path": out.step.path },
+                        "event": {
+                            "event_id": out.event.event_id(),
+                            "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                            "ts_ms": out.event.ts_ms,
+                            "task_id": out.event.task_id,
+                            "path": out.event.path,
+                            "type": out.event.event_type,
+                            "payload": parse_json_or_string(&out.event.payload_json)
+                        }
+                    }),
+                ),
+                Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+                Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                    "REVISION_MISMATCH",
+                    &format!("expected={expected} actual={actual}"),
+                    Some("Refresh the current revision and retry with expected_revision."),
+                    vec![suggest_call(
+                        "tasks_context",
+                        "Refresh current revisions for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                ),
+                Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+                Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+                Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+        }
+
+        let result = self.store.task_root_delete(&workspace, &task_id, true);
+        match result {
+            Ok((kind, event)) => ai_ok(
+                "delete",
+                json!({
+                    "id": task_id,
+                    "kind": kind.as_str(),
+                    "event": {
+                        "event_id": event.event_id(),
+                        "ts": ts_ms_to_rfc3339(event.ts_ms),
+                        "ts_ms": event.ts_ms,
+                        "task_id": event.task_id,
+                        "path": event.path,
+                        "type": event.event_type,
+                        "payload": parse_json_or_string(&event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_task_add(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let parent_raw = match require_string(args_obj, "parent_step") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let parent_path = match StepPath::parse(&parent_raw) {
+            Ok(v) => v,
+            Err(_) => return ai_error("INVALID_INPUT", "parent_step is invalid"),
+        };
+        let title = match require_string(args_obj, "title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let status = args_obj
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("TODO")
+            .to_string();
+        let status_manual = args_obj
+            .get("status_manual")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let priority = args_obj
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .unwrap_or("MEDIUM")
+            .to_string();
+        let blocked = args_obj
+            .get("blocked")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let description = args_obj
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
+        let context = args_obj
+            .get("context")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
+
+        let blockers = match optional_string_array(args_obj, "blockers") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let dependencies = match optional_string_array(args_obj, "dependencies") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let next_steps = match optional_string_array(args_obj, "next_steps") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let problems = match optional_string_array(args_obj, "problems") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let risks = match optional_string_array(args_obj, "risks") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let success_criteria = match optional_string_array(args_obj, "success_criteria") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+
+        let items = bm_storage::TaskNodeItems {
+            blockers,
+            dependencies,
+            next_steps,
+            problems,
+            risks,
+            success_criteria,
+        };
+
+        let result = self.store.task_node_add(
+            &workspace,
+            &task_id,
+            expected_revision,
+            &parent_path,
+            title,
+            status,
+            status_manual,
+            priority,
+            blocked,
+            description,
+            context,
+            items,
+            true,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "task_add",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "node": { "node_id": out.node.node_id, "path": out.node.path },
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Parent step not found"),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_task_define(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path_raw = match require_string(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let (parent_path, ordinal) = match parse_task_node_path(&path_raw) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let title = match optional_string(args_obj, "title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let status = args_obj
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
+        let status_manual = args_obj.get("status_manual").and_then(|v| v.as_bool());
+        let priority = args_obj
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
+        let blocked = args_obj.get("blocked").and_then(|v| v.as_bool());
+        let description = match optional_nullable_string(args_obj, "description") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let context = match optional_nullable_string(args_obj, "context") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let blockers = match optional_string_array(args_obj, "blockers") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let dependencies = match optional_string_array(args_obj, "dependencies") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let next_steps = match optional_string_array(args_obj, "next_steps") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let problems = match optional_string_array(args_obj, "problems") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let risks = match optional_string_array(args_obj, "risks") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let success_criteria = match optional_string_array(args_obj, "success_criteria") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let patch = bm_storage::TaskNodePatch {
+            title,
+            status,
+            status_manual,
+            priority,
+            blocked,
+            description,
+            context,
+            blockers,
+            dependencies,
+            next_steps,
+            problems,
+            risks,
+            success_criteria,
+        };
+
+        let result = self.store.task_node_patch(
+            &workspace,
+            &task_id,
+            expected_revision,
+            None,
+            Some(&parent_path),
+            Some(ordinal),
+            patch,
+            true,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "task_define",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "node": { "node_id": out.node.node_id, "path": out.node.path },
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Task node not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_task_delete(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path_raw = match require_string(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let (parent_path, ordinal) = match parse_task_node_path(&path_raw) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let result = self.store.task_node_delete(
+            &workspace,
+            &task_id,
+            expected_revision,
+            None,
+            Some(&parent_path),
+            Some(ordinal),
+            true,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "task_delete",
+                json!({
+                    "task": task_id,
+                    "revision": out.task_revision,
+                    "node": { "node_id": out.node.node_id, "path": out.node.path },
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Task node not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
+    fn tool_tasks_evidence_capture(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let task_id = match require_string(args_obj, "task") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let expected_revision = match optional_i64(args_obj, "expected_revision") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let step_id = match optional_string(args_obj, "step_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let items_value = if args_obj.contains_key("items") {
+            args_obj.get("items").cloned().unwrap_or(Value::Null)
+        } else {
+            args_obj.get("artifacts").cloned().unwrap_or(Value::Null)
+        };
+        let items = if items_value.is_null() {
+            Vec::new()
+        } else {
+            let Some(arr) = items_value.as_array() else {
+                return ai_error("INVALID_INPUT", "items must be an array");
+            };
+            arr.clone()
+        };
+
+        if items.len() > 20 {
+            return ai_error("INVALID_INPUT", "items exceeds max_items=20");
+        }
+
+        let mut artifacts = Vec::new();
+        for item in items {
+            let Some(item_obj) = item.as_object() else {
+                return ai_error("INVALID_INPUT", "items entries must be objects");
+            };
+            let kind = match require_string(item_obj, "kind") {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            let command = item_obj
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let stdout = item_obj
+                .get("stdout")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let stderr = item_obj
+                .get("stderr")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let exit_code = item_obj.get("exit_code").and_then(|v| v.as_i64());
+            let diff = item_obj
+                .get("diff")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let content = item_obj
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let url = item_obj
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let external_uri = item_obj
+                .get("external_uri")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let meta_json = item_obj.get("meta").map(|v| v.to_string());
+
+            let mut size = 0usize;
+            for value in [
+                command.as_deref(),
+                stdout.as_deref(),
+                stderr.as_deref(),
+                diff.as_deref(),
+                content.as_deref(),
+                url.as_deref(),
+                external_uri.as_deref(),
+                meta_json.as_deref(),
+            ] {
+                if let Some(text) = value {
+                    size = size.saturating_add(text.len());
+                }
+            }
+            if size > 256000 {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "artifact exceeds max_artifact_bytes=256000",
+                );
+            }
+
+            artifacts.push(bm_storage::EvidenceArtifactInput {
+                kind,
+                command,
+                stdout,
+                stderr,
+                exit_code,
+                diff,
+                content,
+                url,
+                external_uri,
+                meta_json,
+            });
+        }
+
+        let checks = match optional_string_array(args_obj, "checks") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        if checks.len() > 20 {
+            return ai_error("INVALID_INPUT", "checks exceeds max_items=20");
+        }
+        let attachments = match optional_string_array(args_obj, "attachments") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        if attachments.len() > 20 {
+            return ai_error("INVALID_INPUT", "attachments exceeds max_items=20");
+        }
+
+        let result = self.store.evidence_capture(
+            &workspace,
+            &task_id,
+            expected_revision,
+            step_id.as_deref(),
+            path.as_ref(),
+            artifacts,
+            checks,
+            attachments,
+        );
+
+        match result {
+            Ok(out) => ai_ok(
+                "evidence_capture",
+                json!({
+                    "task": task_id,
+                    "revision": out.revision,
+                    "step": out.step.map(|step| json!({ "step_id": step.step_id, "path": step.path })),
+                    "event": {
+                        "event_id": out.event.event_id(),
+                        "ts": ts_ms_to_rfc3339(out.event.ts_ms),
+                        "ts_ms": out.event.ts_ms,
+                        "task_id": out.event.task_id,
+                        "path": out.event.path,
+                        "type": out.event.event_type,
+                        "payload": parse_json_or_string(&out.event.payload_json)
+                    }
+                }),
+            ),
+            Err(StoreError::StepNotFound) => ai_error("UNKNOWN_ID", "Step not found"),
+            Err(StoreError::RevisionMismatch { expected, actual }) => ai_error_with(
+                "REVISION_MISMATCH",
+                &format!("expected={expected} actual={actual}"),
+                Some("Refresh the current revision and retry with expected_revision."),
+                vec![suggest_call(
+                    "tasks_context",
+                    "Refresh current revisions for this workspace.",
+                    "high",
+                    json!({ "workspace": workspace.as_str() }),
+                )],
+            ),
+            Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),
+            Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
+        }
+    }
+
     fn tool_tasks_context(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -1436,17 +2893,11 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        let plans = match self
-            .store
-            .list_plans(&workspace, plans_limit, plans_cursor)
-        {
+        let plans = match self.store.list_plans(&workspace, plans_limit, plans_cursor) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
-        let tasks = match self
-            .store
-            .list_tasks(&workspace, tasks_limit, tasks_cursor)
-        {
+        let tasks = match self.store.list_tasks(&workspace, tasks_limit, tasks_cursor) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
@@ -1454,10 +2905,7 @@ impl McpServer {
         let plans_out = plans
             .into_iter()
             .map(|p| {
-                let checklist = self
-                    .store
-                    .plan_checklist_get(&workspace, &p.id)
-                    .ok();
+                let checklist = self.store.plan_checklist_get(&workspace, &p.id).ok();
                 let progress = checklist
                     .as_ref()
                     .map(|c| format!("{}/{}", c.current, c.steps.len()))
@@ -1485,10 +2933,7 @@ impl McpServer {
             .into_iter()
             .map(|t| {
                 *by_status.entry(t.status.clone()).or_insert(0usize) += 1;
-                let summary = self
-                    .store
-                    .task_steps_summary(&workspace, &t.id)
-                    .ok();
+                let summary = self.store.task_steps_summary(&workspace, &t.id).ok();
                 let steps_count = summary.as_ref().map(|s| s.total_steps).unwrap_or(0);
                 let progress = if steps_count == 0 {
                     0
@@ -1751,7 +3196,11 @@ impl McpServer {
         };
 
         let next_contract = if clear { Some(None) } else { Some(contract) };
-        let next_contract_json = if clear { Some(None) } else { Some(contract_json) };
+        let next_contract_json = if clear {
+            Some(None)
+        } else {
+            Some(contract_json)
+        };
 
         let payload = json!({
             "clear": clear,
@@ -2289,11 +3738,7 @@ impl McpServer {
 
         match self.store.workspace_init(&workspace) {
             Ok(()) => {
-                let checkout = self
-                    .store
-                    .branch_checkout_get(&workspace)
-                    .ok()
-                    .flatten();
+                let checkout = self.store.branch_checkout_get(&workspace).ok().flatten();
                 let mut suggestions = Vec::new();
                 if checkout.is_some() {
                     suggestions.push(suggest_call(
@@ -5548,6 +6993,137 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "tasks_patch",
+            "description": "Diff-oriented updates for task detail, step, or task node.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "kind": { "type": "string", "enum": ["task_detail", "step", "task"] },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "task_node_id": { "type": "string" },
+                    "ops": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": { "type": "string", "enum": ["set", "unset", "append", "remove"] },
+                                "field": { "type": "string" },
+                                "value": {}
+                            },
+                            "required": ["op", "field"]
+                        }
+                    }
+                },
+                "required": ["workspace", "task", "ops"]
+            }
+        }),
+        json!({
+            "name": "tasks_delete",
+            "description": "Delete a plan/task or a step by selector.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" }
+                },
+                "required": ["workspace", "task"]
+            }
+        }),
+        json!({
+            "name": "tasks_task_add",
+            "description": "Add a task node inside a step plan.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "parent_step": { "type": "string" },
+                    "title": { "type": "string" },
+                    "status": { "type": "string" },
+                    "status_manual": { "type": "boolean" },
+                    "priority": { "type": "string" },
+                    "blocked": { "type": "boolean" },
+                    "description": { "type": "string" },
+                    "context": { "type": "string" },
+                    "blockers": { "type": "array", "items": { "type": "string" } },
+                    "dependencies": { "type": "array", "items": { "type": "string" } },
+                    "next_steps": { "type": "array", "items": { "type": "string" } },
+                    "problems": { "type": "array", "items": { "type": "string" } },
+                    "risks": { "type": "array", "items": { "type": "string" } },
+                    "success_criteria": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "task", "parent_step", "title"]
+            }
+        }),
+        json!({
+            "name": "tasks_task_define",
+            "description": "Update a task node inside a step plan.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "title": { "type": "string" },
+                    "status": { "type": "string" },
+                    "status_manual": { "type": "boolean" },
+                    "priority": { "type": "string" },
+                    "blocked": { "type": "boolean" },
+                    "description": { "type": "string" },
+                    "context": { "type": "string" },
+                    "blockers": { "type": "array", "items": { "type": "string" } },
+                    "dependencies": { "type": "array", "items": { "type": "string" } },
+                    "next_steps": { "type": "array", "items": { "type": "string" } },
+                    "problems": { "type": "array", "items": { "type": "string" } },
+                    "risks": { "type": "array", "items": { "type": "string" } },
+                    "success_criteria": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "task", "path"]
+            }
+        }),
+        json!({
+            "name": "tasks_task_delete",
+            "description": "Delete a task node inside a step plan.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" }
+                },
+                "required": ["workspace", "task", "path"]
+            }
+        }),
+        json!({
+            "name": "tasks_evidence_capture",
+            "description": "Attach artifacts/checks to a step or task/plan root.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "path": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "items": { "type": "array", "items": { "type": "object" } },
+                    "artifacts": { "type": "array", "items": { "type": "object" } },
+                    "checks": { "type": "array", "items": { "type": "string" } },
+                    "attachments": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "task"]
+            }
+        }),
+        json!({
             "name": "tasks_plan",
             "description": "Update plan checklist (`doc`, `steps`, `current`) and/or `advance=true`.",
             "inputSchema": {
@@ -5863,6 +7439,93 @@ fn optional_string_array(
         out.push(s.to_string());
     }
     Ok(Some(out))
+}
+
+fn parse_task_node_path(raw: &str) -> Result<(StepPath, i64), Value> {
+    let raw = raw.trim();
+    let Some((step_part, ordinal_part)) = raw.rsplit_once(".t:") else {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            "path must include .t:<ordinal> suffix",
+        ));
+    };
+    let parent_path = StepPath::parse(step_part)
+        .map_err(|_| ai_error("INVALID_INPUT", "task node path is invalid"))?;
+    let ordinal = ordinal_part
+        .parse::<i64>()
+        .map_err(|_| ai_error("INVALID_INPUT", "task node ordinal is invalid"))?;
+    if ordinal < 0 {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            "task node ordinal must be non-negative",
+        ));
+    }
+    Ok((parent_path, ordinal))
+}
+
+fn parse_string_values(value: Option<&Value>, field: &str) -> Result<Vec<String>, Value> {
+    let Some(value) = value else {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{field} requires a value"),
+        ));
+    };
+    match value {
+        Value::String(v) => Ok(vec![v.clone()]),
+        Value::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for item in arr {
+                let Some(v) = item.as_str() else {
+                    return Err(ai_error(
+                        "INVALID_INPUT",
+                        &format!("{field} must be a string array"),
+                    ));
+                };
+                out.push(v.to_string());
+            }
+            Ok(out)
+        }
+        _ => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{field} must be a string or array"),
+        )),
+    }
+}
+
+fn apply_list_op(
+    target: &mut Vec<String>,
+    op_name: &str,
+    value: Option<&Value>,
+    field: &str,
+) -> Result<(), Value> {
+    match op_name {
+        "set" => {
+            *target = parse_string_values(value, field)?;
+            Ok(())
+        }
+        "unset" => {
+            target.clear();
+            Ok(())
+        }
+        "append" => {
+            let values = parse_string_values(value, field)?;
+            for value in values {
+                if !target.contains(&value) {
+                    target.push(value);
+                }
+            }
+            Ok(())
+        }
+        "remove" => {
+            let values = parse_string_values(value, field)?;
+            target.retain(|value| !values.contains(value));
+            Ok(())
+        }
+        _ => Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{field} supports set/unset/append/remove"),
+        )),
+    }
 }
 
 fn optional_non_null_string(
@@ -6795,9 +8458,7 @@ fn redact_value(value: &mut Value, depth: usize) {
 
 fn is_sensitive_key(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
-    SENSITIVE_KEYWORDS
-        .iter()
-        .any(|token| lower.contains(token))
+    SENSITIVE_KEYWORDS.iter().any(|token| lower.contains(token))
 }
 
 fn redact_text(text: &str) -> String {
