@@ -221,6 +221,11 @@ impl McpServer {
             "branchmind_think_add_hypothesis" => self.tool_branchmind_think_add_hypothesis(args),
             "branchmind_think_add_question" => self.tool_branchmind_think_add_question(args),
             "branchmind_think_add_test" => self.tool_branchmind_think_add_test(args),
+            "branchmind_think_add_note" => self.tool_branchmind_think_add_note(args),
+            "branchmind_think_add_decision" => self.tool_branchmind_think_add_decision(args),
+            "branchmind_think_add_evidence" => self.tool_branchmind_think_add_evidence(args),
+            "branchmind_think_add_frame" => self.tool_branchmind_think_add_frame(args),
+            "branchmind_think_add_update" => self.tool_branchmind_think_add_update(args),
             "branchmind_think_context" => self.tool_branchmind_think_context(args),
             "branchmind_think_query" => self.tool_branchmind_think_query(args),
             "branchmind_think_pack" => self.tool_branchmind_think_pack(args),
@@ -1613,7 +1618,10 @@ impl McpServer {
                                 }
                                 "unset" => patch.contract = Some(None),
                                 _ => {
-                                    return ai_error("INVALID_INPUT", "contract supports set/unset");
+                                    return ai_error(
+                                        "INVALID_INPUT",
+                                        "contract supports set/unset",
+                                    );
                                 }
                             }
                             push_field("contract");
@@ -1725,7 +1733,10 @@ impl McpServer {
                                 }
                                 "unset" => patch.assignee = Some(None),
                                 _ => {
-                                    return ai_error("INVALID_INPUT", "assignee supports set/unset");
+                                    return ai_error(
+                                        "INVALID_INPUT",
+                                        "assignee supports set/unset",
+                                    );
                                 }
                             }
                             push_field("assignee");
@@ -2919,7 +2930,10 @@ impl McpServer {
             .map(|v| v as usize)
             .unwrap_or(50);
 
-        let rows = match self.store.ops_history_list(&workspace, task_id.as_deref(), limit) {
+        let rows = match self
+            .store
+            .ops_history_list(&workspace, task_id.as_deref(), limit)
+        {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
@@ -3131,15 +3145,15 @@ impl McpServer {
                 if atomic {
                     let mut rollback_errors = Vec::new();
                     for target in applied_targets.into_iter().rev() {
-                        if let Err(err) =
-                            self.store.ops_history_undo(&workspace, Some(target.as_str()))
+                        if let Err(err) = self
+                            .store
+                            .ops_history_undo(&workspace, Some(target.as_str()))
                         {
                             rollback_errors.push(format_store_error(err));
                         }
                     }
-                    let mut message = format!(
-                        "operation {index} ({tool_name}) failed: {error_message}"
-                    );
+                    let mut message =
+                        format!("operation {index} ({tool_name}) failed: {error_message}");
                     if !rollback_errors.is_empty() {
                         message.push_str("; rollback failed: ");
                         message.push_str(&rollback_errors.join(", "));
@@ -3827,11 +3841,11 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let (target_id, kind, focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
-        {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
+        let (target_id, kind, focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
 
         let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
             Ok(v) => v,
@@ -3882,11 +3896,11 @@ impl McpServer {
             .map(|v| v as usize)
             .unwrap_or(20);
 
-        let (target_id, kind, focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
-        {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
+        let (target_id, kind, focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
 
         let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
             Ok(v) => v,
@@ -3949,11 +3963,11 @@ impl McpServer {
             .map(|v| v as usize)
             .unwrap_or(50);
 
-        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
-        {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
+        let (target_id, kind, _focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
 
         let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
             Ok(v) => v,
@@ -4020,11 +4034,11 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
-        {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
+        let (target_id, kind, _focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
 
         let result = match kind {
             TaskKind::Plan => {
@@ -4069,15 +4083,18 @@ impl McpServer {
                 })
             }
             TaskKind::Task => {
-                let steps = match self
-                    .store
-                    .list_task_steps(&workspace, &target_id, path.as_ref(), limit)
-                {
-                    Ok(v) => v,
-                    Err(StoreError::StepNotFound) => return ai_error("UNKNOWN_ID", "Step not found"),
-                    Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
-                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-                };
+                let steps =
+                    match self
+                        .store
+                        .list_task_steps(&workspace, &target_id, path.as_ref(), limit)
+                    {
+                        Ok(v) => v,
+                        Err(StoreError::StepNotFound) => {
+                            return ai_error("UNKNOWN_ID", "Step not found");
+                        }
+                        Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+                        Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                    };
                 json!({
                     "scope": { "id": target_id, "kind": "task" },
                     "steps": steps.into_iter().map(|s| json!({
@@ -4113,11 +4130,11 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
-        {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
+        let (target_id, kind, _focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
 
         let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
             Ok(v) => v,
@@ -4142,7 +4159,11 @@ impl McpServer {
                         checklist.steps[checklist.current as usize]
                     ));
                 }
-                (vec![format!("Checklist progress: {done_count}/{total}")], remaining, Vec::new())
+                (
+                    vec![format!("Checklist progress: {done_count}/{total}")],
+                    remaining,
+                    Vec::new(),
+                )
             }
             TaskKind::Task => match self.store.task_steps_summary(&workspace, &target_id) {
                 Ok(summary) => {
@@ -4186,7 +4207,8 @@ impl McpServer {
                             summary.missing_docs
                         ));
                     }
-                    if let Ok(blockers) = self.store.task_open_blockers(&workspace, &target_id, 10) {
+                    if let Ok(blockers) = self.store.task_open_blockers(&workspace, &target_id, 10)
+                    {
                         if !blockers.is_empty() {
                             risks.push(format!("Open blockers: {}", blockers.len()));
                         }
@@ -4242,11 +4264,11 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let (target_id, kind, _focus) = match resolve_target_id(&mut self.store, &workspace, args_obj)
-        {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
+        let (target_id, kind, _focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
 
         let mut issues = Vec::new();
         match kind {
@@ -4366,6 +4388,14 @@ impl McpServer {
         match self.store.workspace_init(&workspace) {
             Ok(()) => {
                 let checkout = self.store.branch_checkout_get(&workspace).ok().flatten();
+                let defaults = json!({
+                    "branch": self.store.default_branch_name(),
+                    "docs": {
+                        "notes": DEFAULT_NOTES_DOC,
+                        "graph": DEFAULT_GRAPH_DOC,
+                        "trace": DEFAULT_TRACE_DOC
+                    }
+                });
                 let mut suggestions = Vec::new();
                 if checkout.is_some() {
                     suggestions.push(suggest_call(
@@ -4380,7 +4410,9 @@ impl McpServer {
                     json!({
                         "workspace": workspace.as_str(),
                         "storage_dir": self.store.storage_dir().to_string_lossy().to_string(),
-                        "schema_version": "v0"
+                        "schema_version": "v0",
+                        "checkout": checkout,
+                        "defaults": defaults
                     }),
                     suggestions,
                 )
@@ -4419,10 +4451,21 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
+        let defaults = json!({
+            "branch": self.store.default_branch_name(),
+            "docs": {
+                "notes": DEFAULT_NOTES_DOC,
+                "graph": DEFAULT_GRAPH_DOC,
+                "trace": DEFAULT_TRACE_DOC
+            }
+        });
+
         let mut result = json!({
             "workspace": workspace.as_str(),
             "schema_version": "v0",
             "workspace_exists": workspace_exists,
+            "checkout": checkout,
+            "defaults": defaults,
             "last_event": last_event.map(|(seq, ts_ms)| json!({
                 "event_id": format!("evt_{:016}", seq),
                 "ts": ts_ms_to_rfc3339(ts_ms),
@@ -4980,7 +5023,11 @@ impl McpServer {
             Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
-        let branch = if self.store.branch_exists(&workspace, &ref_name).unwrap_or(false) {
+        let branch = if self
+            .store
+            .branch_exists(&workspace, &ref_name)
+            .unwrap_or(false)
+        {
             ref_name.clone()
         } else if let Some(tag) = tag.as_ref() {
             doc = tag.doc.clone();
@@ -5120,7 +5167,11 @@ impl McpServer {
             Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
-        let branch = if self.store.branch_exists(&workspace, &ref_name).unwrap_or(false) {
+        let branch = if self
+            .store
+            .branch_exists(&workspace, &ref_name)
+            .unwrap_or(false)
+        {
             ref_name.clone()
         } else if let Some(tag) = tag.as_ref() {
             tag.branch.clone()
@@ -5224,7 +5275,11 @@ impl McpServer {
                     branch = tag.branch;
                     doc = tag.doc;
                     tag.seq
-                } else if self.store.branch_exists(&workspace, raw.trim()).unwrap_or(false) {
+                } else if self
+                    .store
+                    .branch_exists(&workspace, raw.trim())
+                    .unwrap_or(false)
+                {
                     branch = raw.trim().to_string();
                     match self
                         .store
@@ -5238,7 +5293,9 @@ impl McpServer {
                             return ai_error_with(
                                 "UNKNOWN_ID",
                                 "Unknown branch",
-                                Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                                Some(
+                                    "Call branchmind_branch_list to discover existing branches, then retry.",
+                                ),
                                 vec![suggest_call(
                                     "branchmind_branch_list",
                                     "List known branches for this workspace.",
@@ -5247,7 +5304,9 @@ impl McpServer {
                                 )],
                             );
                         }
-                        Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                        Err(StoreError::InvalidInput(msg)) => {
+                            return ai_error("INVALID_INPUT", msg);
+                        }
                         Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
                     }
                 } else {
@@ -5264,7 +5323,9 @@ impl McpServer {
                     return ai_error_with(
                         "UNKNOWN_ID",
                         "Unknown branch",
-                        Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                        Some(
+                            "Call branchmind_branch_list to discover existing branches, then retry.",
+                        ),
                         vec![suggest_call(
                             "branchmind_branch_list",
                             "List known branches for this workspace.",
@@ -5431,9 +5492,20 @@ impl McpServer {
         };
         let doc = DEFAULT_NOTES_DOC.to_string();
 
-        if !self.store.branch_exists(&workspace, &ref_name).unwrap_or(false)
-            && self.store.vcs_tag_get(&workspace, &ref_name).unwrap_or(None).is_none()
-            && self.store.vcs_ref_get(&workspace, &ref_name, &doc).unwrap_or(None).is_none()
+        if !self
+            .store
+            .branch_exists(&workspace, &ref_name)
+            .unwrap_or(false)
+            && self
+                .store
+                .vcs_tag_get(&workspace, &ref_name)
+                .unwrap_or(None)
+                .is_none()
+            && self
+                .store
+                .vcs_ref_get(&workspace, &ref_name, &doc)
+                .unwrap_or(None)
+                .is_none()
         {
             return ai_error("UNKNOWN_ID", "Unknown ref");
         }
@@ -5530,7 +5602,9 @@ impl McpServer {
                     return ai_error_with(
                         "UNKNOWN_ID",
                         "Unknown branch",
-                        Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                        Some(
+                            "Call branchmind_branch_list to discover existing branches, then retry.",
+                        ),
                         vec![suggest_call(
                             "branchmind_branch_list",
                             "List known branches for this workspace.",
@@ -7297,13 +7371,13 @@ impl McpServer {
                 let kind = match parse_plan_or_task_kind(&target_id) {
                     Some(v) => v,
                     None => {
-                        return Err(ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-"));
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "target must start with PLAN- or TASK-",
+                        ));
                     }
                 };
-                let reasoning = match self
-                    .store
-                    .ensure_reasoning_ref(workspace, &target_id, kind)
-                {
+                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
                     Ok(r) => r,
                     Err(StoreError::UnknownId) => {
                         return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
@@ -7324,6 +7398,290 @@ impl McpServer {
                 let trace_doc = trace_doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
                 let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
                 Ok((branch, trace_doc, graph_doc))
+            }
+        }
+    }
+
+    fn resolve_think_graph_scope(
+        &mut self,
+        workspace: &WorkspaceId,
+        args_obj: &serde_json::Map<String, Value>,
+    ) -> Result<(String, String), Value> {
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let reference = match optional_string(args_obj, "ref") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+        let graph_doc = match optional_string(args_obj, "graph_doc") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+
+        if target.is_some() && (reference.is_some() || graph_doc.is_some()) {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "provide either target or (ref, graph_doc), not both",
+            ));
+        }
+
+        match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "target must start with PLAN- or TASK-",
+                        ));
+                    }
+                };
+                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                    }
+                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+                };
+                Ok((reasoning.branch, reasoning.graph_doc))
+            }
+            None => {
+                let branch = match reference {
+                    Some(branch) => branch,
+                    None => match require_checkout_branch(&mut self.store, workspace) {
+                        Ok(branch) => branch,
+                        Err(resp) => return Err(resp),
+                    },
+                };
+                if !self
+                    .store
+                    .branch_exists(workspace, &branch)
+                    .unwrap_or(false)
+                {
+                    return Err(ai_error_with(
+                        "UNKNOWN_ID",
+                        "Unknown branch",
+                        Some(
+                            "Call branchmind_branch_list to discover existing branches, then retry.",
+                        ),
+                        vec![suggest_call(
+                            "branchmind_branch_list",
+                            "List known branches for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    ));
+                }
+                let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
+                Ok((branch, graph_doc))
+            }
+        }
+    }
+
+    fn resolve_think_watch_scope(
+        &mut self,
+        workspace: &WorkspaceId,
+        args_obj: &serde_json::Map<String, Value>,
+    ) -> Result<(String, String, String), Value> {
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let reference = match optional_string(args_obj, "ref") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+        let graph_doc = match optional_string(args_obj, "graph_doc") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+        let trace_doc = match optional_string(args_obj, "trace_doc") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+
+        if target.is_some() && (reference.is_some() || graph_doc.is_some() || trace_doc.is_some()) {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "provide either target or (ref, graph_doc, trace_doc), not both",
+            ));
+        }
+
+        match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "target must start with PLAN- or TASK-",
+                        ));
+                    }
+                };
+                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                    }
+                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+                };
+                Ok((reasoning.branch, reasoning.graph_doc, reasoning.trace_doc))
+            }
+            None => {
+                let branch = match reference {
+                    Some(branch) => branch,
+                    None => match require_checkout_branch(&mut self.store, workspace) {
+                        Ok(branch) => branch,
+                        Err(resp) => return Err(resp),
+                    },
+                };
+                if !self
+                    .store
+                    .branch_exists(workspace, &branch)
+                    .unwrap_or(false)
+                {
+                    return Err(ai_error_with(
+                        "UNKNOWN_ID",
+                        "Unknown branch",
+                        Some(
+                            "Call branchmind_branch_list to discover existing branches, then retry.",
+                        ),
+                        vec![suggest_call(
+                            "branchmind_branch_list",
+                            "List known branches for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    ));
+                }
+                let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
+                let trace_doc = trace_doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
+                Ok((branch, graph_doc, trace_doc))
+            }
+        }
+    }
+
+    fn resolve_trace_scope(
+        &mut self,
+        workspace: &WorkspaceId,
+        args_obj: &serde_json::Map<String, Value>,
+    ) -> Result<(String, String), Value> {
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+
+        if let Some(doc) = doc.as_ref() {
+            if doc.trim().is_empty() {
+                return Err(ai_error("INVALID_INPUT", "doc must not be empty"));
+            }
+        }
+
+        if target.is_some() && doc.is_some() {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "provide either target or doc, not both",
+            ));
+        }
+
+        match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "target must start with PLAN- or TASK-",
+                        ));
+                    }
+                };
+                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                    }
+                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+                };
+                Ok((reasoning.branch, reasoning.trace_doc))
+            }
+            None => {
+                let branch = match require_checkout_branch(&mut self.store, workspace) {
+                    Ok(branch) => branch,
+                    Err(resp) => return Err(resp),
+                };
+                let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
+                Ok((branch, trace_doc))
+            }
+        }
+    }
+
+    fn resolve_trace_scope_with_ref(
+        &mut self,
+        workspace: &WorkspaceId,
+        args_obj: &serde_json::Map<String, Value>,
+    ) -> Result<(String, String), Value> {
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let reference = match optional_string(args_obj, "ref") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v,
+            Err(resp) => return Err(resp),
+        };
+
+        if let Some(doc) = doc.as_ref() {
+            if doc.trim().is_empty() {
+                return Err(ai_error("INVALID_INPUT", "doc must not be empty"));
+            }
+        }
+
+        if target.is_some() && (reference.is_some() || doc.is_some()) {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "provide either target or (ref, doc), not both",
+            ));
+        }
+
+        match target {
+            Some(target_id) => {
+                let kind = match parse_plan_or_task_kind(&target_id) {
+                    Some(v) => v,
+                    None => {
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "target must start with PLAN- or TASK-",
+                        ));
+                    }
+                };
+                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
+                    Ok(r) => r,
+                    Err(StoreError::UnknownId) => {
+                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                    }
+                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+                };
+                Ok((reasoning.branch, reasoning.trace_doc))
+            }
+            None => {
+                let branch = match reference {
+                    Some(branch) => branch,
+                    None => match require_checkout_branch(&mut self.store, workspace) {
+                        Ok(branch) => branch,
+                        Err(resp) => return Err(resp),
+                    },
+                };
+                let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
+                Ok((branch, trace_doc))
             }
         }
     }
@@ -7510,13 +7868,7 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let (card_id, result) = match self.commit_think_card_internal(
-            &workspace,
-            &branch,
-            &trace_doc,
-            &graph_doc,
-            parsed,
-            &supports,
-            &blocks,
+            &workspace, &branch, &trace_doc, &graph_doc, parsed, &supports, &blocks,
         ) {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -7770,13 +8122,7 @@ impl McpServer {
         parsed.card_type = enforced_type.to_string();
 
         let (card_id, result) = match self.commit_think_card_internal(
-            &workspace,
-            &branch,
-            &trace_doc,
-            &graph_doc,
-            parsed,
-            &supports,
-            &blocks,
+            &workspace, &branch, &trace_doc, &graph_doc, parsed, &supports, &blocks,
         ) {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -7801,11 +8147,7 @@ impl McpServer {
     }
 
     fn tool_branchmind_think_add_hypothesis(&mut self, args: Value) -> Value {
-        self.tool_branchmind_think_add_typed(
-            args,
-            "hypothesis",
-            "branchmind_think_add_hypothesis",
-        )
+        self.tool_branchmind_think_add_typed(args, "hypothesis", "branchmind_think_add_hypothesis")
     }
 
     fn tool_branchmind_think_add_question(&mut self, args: Value) -> Value {
@@ -7816,20 +8158,32 @@ impl McpServer {
         self.tool_branchmind_think_add_typed(args, "test", "branchmind_think_add_test")
     }
 
+    fn tool_branchmind_think_add_note(&mut self, args: Value) -> Value {
+        self.tool_branchmind_think_add_typed(args, "note", "branchmind_think_add_note")
+    }
+
+    fn tool_branchmind_think_add_decision(&mut self, args: Value) -> Value {
+        self.tool_branchmind_think_add_typed(args, "decision", "branchmind_think_add_decision")
+    }
+
+    fn tool_branchmind_think_add_evidence(&mut self, args: Value) -> Value {
+        self.tool_branchmind_think_add_typed(args, "evidence", "branchmind_think_add_evidence")
+    }
+
+    fn tool_branchmind_think_add_frame(&mut self, args: Value) -> Value {
+        self.tool_branchmind_think_add_typed(args, "frame", "branchmind_think_add_frame")
+    }
+
+    fn tool_branchmind_think_add_update(&mut self, args: Value) -> Value {
+        self.tool_branchmind_think_add_typed(args, "update", "branchmind_think_add_update")
+    }
+
     fn tool_branchmind_think_query(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
         };
         let workspace = match require_workspace(args_obj) {
             Ok(w) => w,
-            Err(resp) => return resp,
-        };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
             Err(resp) => return resp,
         };
         let ids = match optional_string_values(args_obj, "ids") {
@@ -7865,32 +8219,14 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
 
         let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
-        let types = types.or_else(|| {
-            Some(supported.iter().map(|v| v.to_string()).collect::<Vec<_>>())
-        });
+        let types =
+            types.or_else(|| Some(supported.iter().map(|v| v.to_string()).collect::<Vec<_>>()));
 
         let slice = match self.store.graph_query(
             &workspace,
@@ -8003,40 +8339,15 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
         let max_chars = match optional_usize(args_obj, "max_chars") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
 
         let validation = match self
             .store
@@ -8263,14 +8574,6 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
         let limit_hypotheses = match optional_usize(args_obj, "limit_hypotheses") {
             Ok(v) => v.unwrap_or(5),
             Err(resp) => return resp,
@@ -8288,27 +8591,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
         let (hypotheses, questions, subgoals, tests) = match self.build_think_frontier(
             &workspace,
             &branch,
@@ -8346,57 +8632,21 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
+        let (hypotheses, questions, subgoals, tests) =
+            match self.build_think_frontier(&workspace, &branch, &graph_doc, 5, 5, 5, 5) {
                 Ok(v) => v,
                 Err(resp) => return resp,
-            },
-        };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
-        let (hypotheses, questions, subgoals, tests) = match self.build_think_frontier(
-            &workspace,
-            &branch,
-            &graph_doc,
-            5,
-            5,
-            5,
-            5,
-        ) {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
+            };
 
         let mut best: Option<Value> = None;
         let mut best_seq: i64 = -1;
         for list in [&questions, &hypotheses, &subgoals, &tests] {
             for item in list {
-                let seq = item
-                    .get("last_seq")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(-1);
+                let seq = item.get("last_seq").and_then(|v| v.as_i64()).unwrap_or(-1);
                 if seq > best_seq {
                     best_seq = seq;
                     best = Some(item.clone());
@@ -8421,14 +8671,6 @@ impl McpServer {
         };
         let workspace = match require_workspace(args_obj) {
             Ok(w) => w,
-            Err(resp) => return resp,
-        };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
             Err(resp) => return resp,
         };
         let limit_candidates = match optional_usize(args_obj, "limit_candidates") {
@@ -8456,27 +8698,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
 
         let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
         let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
@@ -8592,14 +8817,6 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
         let message = match optional_string(args_obj, "message") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -8609,27 +8826,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
 
         let edge_meta = merge_meta_with_message(None, message, meta_json);
         let applied = match self.store.graph_apply_ops(
@@ -8700,14 +8900,6 @@ impl McpServer {
         if targets.is_empty() {
             return ai_error("INVALID_INPUT", "targets must not be empty");
         }
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
         let message = match optional_string(args_obj, "message") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -8717,27 +8909,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
 
         let slice = match self.store.graph_query(
             &workspace,
@@ -8780,8 +8955,11 @@ impl McpServer {
 
         let mut ops = Vec::with_capacity(slice.nodes.len());
         for node in slice.nodes {
-            let merged_meta =
-                merge_meta_with_message(node.meta_json.as_deref(), message.clone(), meta_json.clone());
+            let merged_meta = merge_meta_with_message(
+                node.meta_json.as_deref(),
+                message.clone(),
+                meta_json.clone(),
+            );
             ops.push(bm_storage::GraphOp::NodeUpsert(
                 bm_storage::GraphNodeUpsert {
                     id: node.id,
@@ -8795,7 +8973,10 @@ impl McpServer {
             ));
         }
 
-        let applied = match self.store.graph_apply_ops(&workspace, &branch, &graph_doc, ops) {
+        let applied = match self
+            .store
+            .graph_apply_ops(&workspace, &branch, &graph_doc, ops)
+        {
             Ok(v) => v,
             Err(StoreError::UnknownBranch) => {
                 return ai_error_with(
@@ -8851,36 +9032,10 @@ impl McpServer {
             Ok(v) => v.unwrap_or(true),
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
-        };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
 
         let slice = match self.store.graph_query(
             &workspace,
@@ -8943,7 +9098,10 @@ impl McpServer {
             ));
         }
 
-        let applied = match self.store.graph_apply_ops(&workspace, &branch, &graph_doc, ops) {
+        let applied = match self
+            .store
+            .graph_apply_ops(&workspace, &branch, &graph_doc, ops)
+        {
             Ok(v) => v,
             Err(StoreError::UnknownBranch) => {
                 return ai_error_with(
@@ -8989,14 +9147,6 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
         let limit = match optional_usize(args_obj, "limit") {
             Ok(v) => v.unwrap_or(50),
             Err(resp) => return resp,
@@ -9006,27 +9156,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
         let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
         let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
 
@@ -9109,14 +9242,6 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
         let candidate_ids = match optional_string_values(args_obj, "candidate_ids") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -9134,27 +9259,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
 
         let nodes = match candidate_ids {
             Some(ids) => {
@@ -9194,7 +9302,9 @@ impl McpServer {
                                 )],
                             );
                         }
-                        Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                        Err(StoreError::InvalidInput(msg)) => {
+                            return ai_error("INVALID_INPUT", msg);
+                        }
                         Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
                     };
                     if slice.nodes.len() != ids.len() {
@@ -9301,26 +9411,31 @@ impl McpServer {
         let applied = if ops.is_empty() {
             None
         } else {
-            Some(match self.store.graph_apply_ops(&workspace, &branch, &graph_doc, ops) {
-                Ok(v) => v,
-                Err(StoreError::UnknownBranch) => {
-                    return ai_error_with(
-                        "UNKNOWN_ID",
-                        "Unknown branch",
-                        Some(
-                            "Call branchmind_branch_list to discover existing branches, then retry.",
-                        ),
-                        vec![suggest_call(
-                            "branchmind_branch_list",
-                            "List known branches for this workspace.",
-                            "high",
-                            json!({ "workspace": workspace.as_str() }),
-                        )],
-                    );
-                }
-                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
-                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-            })
+            Some(
+                match self
+                    .store
+                    .graph_apply_ops(&workspace, &branch, &graph_doc, ops)
+                {
+                    Ok(v) => v,
+                    Err(StoreError::UnknownBranch) => {
+                        return ai_error_with(
+                            "UNKNOWN_ID",
+                            "Unknown branch",
+                            Some(
+                                "Call branchmind_branch_list to discover existing branches, then retry.",
+                            ),
+                            vec![suggest_call(
+                                "branchmind_branch_list",
+                                "List known branches for this workspace.",
+                                "high",
+                                json!({ "workspace": workspace.as_str() }),
+                            )],
+                        );
+                    }
+                    Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                },
+            )
         };
 
         let mut result = json!({
@@ -9479,7 +9594,11 @@ impl McpServer {
                 Err(resp) => return resp,
             },
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
+        if !self
+            .store
+            .branch_exists(&workspace, &branch)
+            .unwrap_or(false)
+        {
             return ai_error_with(
                 "UNKNOWN_ID",
                 "Unknown branch",
@@ -9500,10 +9619,8 @@ impl McpServer {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
-        let child_graph_doc =
-            child_graph_doc.unwrap_or_else(|| format!("{subgoal_id}-graph"));
-        let child_trace_doc =
-            child_trace_doc.unwrap_or_else(|| format!("{subgoal_id}-trace"));
+        let child_graph_doc = child_graph_doc.unwrap_or_else(|| format!("{subgoal_id}-graph"));
+        let child_trace_doc = child_trace_doc.unwrap_or_else(|| format!("{subgoal_id}-trace"));
 
         let mut meta = serde_json::Map::new();
         meta.insert(
@@ -9637,7 +9754,11 @@ impl McpServer {
                 Err(resp) => return resp,
             },
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
+        if !self
+            .store
+            .branch_exists(&workspace, &branch)
+            .unwrap_or(false)
+        {
             return ai_error_with(
                 "UNKNOWN_ID",
                 "Unknown branch",
@@ -9732,7 +9853,9 @@ impl McpServer {
             ));
         }
 
-        let applied = match self.store.graph_apply_ops(&workspace, &branch, &parent_graph_doc, ops)
+        let applied = match self
+            .store
+            .graph_apply_ops(&workspace, &branch, &parent_graph_doc, ops)
         {
             Ok(v) => v,
             Err(StoreError::UnknownBranch) => {
@@ -9780,18 +9903,6 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let graph_doc = match optional_string(args_obj, "graph_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let trace_doc = match optional_string(args_obj, "trace_doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
         let limit_candidates = match optional_usize(args_obj, "limit_candidates") {
             Ok(v) => v.unwrap_or(30),
             Err(resp) => return resp,
@@ -9826,28 +9937,11 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
+        let (branch, graph_doc, trace_doc) =
+            match self.resolve_think_watch_scope(&workspace, args_obj) {
                 Ok(v) => v,
                 Err(resp) => return resp,
-            },
-        };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
-            return ai_error_with(
-                "UNKNOWN_ID",
-                "Unknown branch",
-                Some("Call branchmind_branch_list to discover existing branches, then retry."),
-                vec![suggest_call(
-                    "branchmind_branch_list",
-                    "List known branches for this workspace.",
-                    "high",
-                    json!({ "workspace": workspace.as_str() }),
-                )],
-            );
-        }
-        let graph_doc = graph_doc.unwrap_or_else(|| DEFAULT_GRAPH_DOC.to_string());
-        let trace_doc = trace_doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
+            };
 
         let (frontier_hypotheses, frontier_questions, frontier_subgoals, frontier_tests) =
             match self.build_think_frontier(
@@ -9901,14 +9995,15 @@ impl McpServer {
         };
         let candidates = graph_nodes_to_cards(slice.nodes);
 
-        let trace_slice = match self
-            .store
-            .doc_show_tail(&workspace, &branch, &trace_doc, None, trace_limit_steps)
-        {
-            Ok(v) => v,
-            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
-            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-        };
+        let trace_slice =
+            match self
+                .store
+                .doc_show_tail(&workspace, &branch, &trace_doc, None, trace_limit_steps)
+            {
+                Ok(v) => v,
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
         let mut trace_entries = trace_slice
             .entries
             .into_iter()
@@ -10008,15 +10103,6 @@ impl McpServer {
             return ai_error("INVALID_INPUT", "step must not be empty");
         }
 
-        let doc = match optional_string(args_obj, "doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        if let Some(doc) = doc.as_ref() {
-            if doc.trim().is_empty() {
-                return ai_error("INVALID_INPUT", "doc must not be empty");
-            }
-        }
         let message = match optional_string(args_obj, "message") {
             Ok(v) => v.filter(|s| !s.trim().is_empty()),
             Err(resp) => return resp,
@@ -10046,11 +10132,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match require_checkout_branch(&mut self.store, &workspace) {
+        let (branch, trace_doc) = match self.resolve_trace_scope(&workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
 
         let mut meta_fields = Vec::new();
         if let Some(mode) = mode {
@@ -10158,15 +10243,6 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let doc = match optional_string(args_obj, "doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        if let Some(doc) = doc.as_ref() {
-            if doc.trim().is_empty() {
-                return ai_error("INVALID_INPUT", "doc must not be empty");
-            }
-        }
         let message = match optional_string(args_obj, "message") {
             Ok(v) => v.filter(|s| !s.trim().is_empty()),
             Err(resp) => return resp,
@@ -10221,11 +10297,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match require_checkout_branch(&mut self.store, &workspace) {
+        let (branch, trace_doc) = match self.resolve_trace_scope(&workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
 
         let mut meta_fields = vec![
             (
@@ -10236,7 +10311,10 @@ impl McpServer {
                 "totalThoughts".to_string(),
                 Value::Number(serde_json::Number::from(total_thoughts)),
             ),
-            ("nextThoughtNeeded".to_string(), Value::Bool(next_thought_needed)),
+            (
+                "nextThoughtNeeded".to_string(),
+                Value::Bool(next_thought_needed),
+            ),
         ];
 
         if let Some(value) = is_revision {
@@ -10315,19 +10393,6 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let doc = match optional_string(args_obj, "doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        if let Some(doc) = doc.as_ref() {
-            if doc.trim().is_empty() {
-                return ai_error("INVALID_INPUT", "doc must not be empty");
-            }
-        }
         let limit_steps = match optional_usize(args_obj, "limit_steps") {
             Ok(v) => v.unwrap_or(50),
             Err(resp) => return resp,
@@ -10341,14 +10406,15 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, trace_doc) = match self.resolve_trace_scope_with_ref(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
+        if !self
+            .store
+            .branch_exists(&workspace, &branch)
+            .unwrap_or(false)
+        {
             return ai_error_with(
                 "UNKNOWN_ID",
                 "Unknown branch",
@@ -10361,8 +10427,6 @@ impl McpServer {
                 )],
             );
         }
-        let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
-
         let trace_slice =
             match self
                 .store
@@ -10454,32 +10518,20 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let reference = match optional_string(args_obj, "ref") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let doc = match optional_string(args_obj, "doc") {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        if let Some(doc) = doc.as_ref() {
-            if doc.trim().is_empty() {
-                return ai_error("INVALID_INPUT", "doc must not be empty");
-            }
-        }
         let max_chars = match optional_usize(args_obj, "max_chars") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
 
-        let branch = match reference {
-            Some(v) => v,
-            None => match require_checkout_branch(&mut self.store, &workspace) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            },
+        let (branch, trace_doc) = match self.resolve_trace_scope_with_ref(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
         };
-        if !self.store.branch_exists(&workspace, &branch).unwrap_or(false) {
+        if !self
+            .store
+            .branch_exists(&workspace, &branch)
+            .unwrap_or(false)
+        {
             return ai_error_with(
                 "UNKNOWN_ID",
                 "Unknown branch",
@@ -10492,17 +10544,14 @@ impl McpServer {
                 )],
             );
         }
-        let trace_doc = doc.unwrap_or_else(|| DEFAULT_TRACE_DOC.to_string());
-
-        let trace_slice =
-            match self
-                .store
-                .doc_show_tail(&workspace, &branch, &trace_doc, None, 200)
-            {
-                Ok(v) => v,
-                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
-                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-            };
+        let trace_slice = match self
+            .store
+            .doc_show_tail(&workspace, &branch, &trace_doc, None, 200)
+        {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
 
         let mut errors = Vec::new();
         for entry in &trace_slice.entries {
@@ -11359,6 +11408,121 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "branchmind_think_add_note",
+            "description": "Create a note card (wrapper over branchmind_think_card).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "card": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "supports": { "type": "array", "items": { "type": "string" } },
+                    "blocks": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "card"]
+            }
+        }),
+        json!({
+            "name": "branchmind_think_add_decision",
+            "description": "Create a decision card (wrapper over branchmind_think_card).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "card": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "supports": { "type": "array", "items": { "type": "string" } },
+                    "blocks": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "card"]
+            }
+        }),
+        json!({
+            "name": "branchmind_think_add_evidence",
+            "description": "Create an evidence card (wrapper over branchmind_think_card).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "card": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "supports": { "type": "array", "items": { "type": "string" } },
+                    "blocks": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "card"]
+            }
+        }),
+        json!({
+            "name": "branchmind_think_add_frame",
+            "description": "Create a frame card (wrapper over branchmind_think_card).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "card": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "supports": { "type": "array", "items": { "type": "string" } },
+                    "blocks": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "card"]
+            }
+        }),
+        json!({
+            "name": "branchmind_think_add_update",
+            "description": "Create an update card (wrapper over branchmind_think_card).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "card": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "supports": { "type": "array", "items": { "type": "string" } },
+                    "blocks": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["workspace", "card"]
+            }
+        }),
+        json!({
             "name": "branchmind_think_context",
             "description": "Return a bounded low-noise thinking context slice (cards from the graph).",
             "inputSchema": {
@@ -11381,6 +11545,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "ids": {
@@ -11422,6 +11587,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "limit_candidates": { "type": "integer" },
@@ -11441,6 +11607,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "limit_hypotheses": { "type": "integer" },
@@ -11458,6 +11625,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" }
                 },
@@ -11474,6 +11642,7 @@ fn tool_definitions() -> Vec<Value> {
                     "from": { "type": "string" },
                     "rel": { "type": "string" },
                     "to": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "message": { "type": "string" },
@@ -11496,6 +11665,7 @@ fn tool_definitions() -> Vec<Value> {
                             { "type": "array", "items": { "type": "string" } }
                         ]
                     },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "message": { "type": "string" },
@@ -11518,6 +11688,7 @@ fn tool_definitions() -> Vec<Value> {
                         ]
                     },
                     "pinned": { "type": "boolean" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" }
                 },
@@ -11531,6 +11702,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "limit": { "type": "integer" },
@@ -11546,6 +11718,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "candidate_ids": {
@@ -11621,6 +11794,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "trace_doc": { "type": "string" },
@@ -11643,6 +11817,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "max_chars": { "type": "integer" }
@@ -11658,6 +11833,7 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "workspace": { "type": "string" },
                     "step": { "type": "string" },
+                    "target": { "type": "string" },
                     "doc": { "type": "string" },
                     "message": { "type": "string" },
                     "mode": { "type": "string" },
@@ -11693,6 +11869,7 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "workspace": { "type": "string" },
                     "doc": { "type": "string" },
+                    "target": { "type": "string" },
                     "thought": { "type": "string" },
                     "thoughtNumber": { "type": "integer" },
                     "totalThoughts": { "type": "integer" },
@@ -11722,6 +11899,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "doc": { "type": "string" },
                     "limit_steps": { "type": "integer" },
@@ -11738,6 +11916,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "target": { "type": "string" },
                     "ref": { "type": "string" },
                     "doc": { "type": "string" },
                     "max_chars": { "type": "integer" }
@@ -12401,7 +12580,10 @@ fn resolve_target_id(
     } else if target_id.starts_with("TASK-") {
         TaskKind::Task
     } else {
-        return Err(ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-"));
+        return Err(ai_error(
+            "INVALID_INPUT",
+            "task must start with PLAN- or TASK-",
+        ));
     };
 
     Ok((target_id, kind, focus))
@@ -12526,10 +12708,16 @@ fn build_radar_context(
                     ));
                 }
                 if summary.missing_perf > 0 {
-                    verify.push(format!("Missing perf checkpoints: {}", summary.missing_perf));
+                    verify.push(format!(
+                        "Missing perf checkpoints: {}",
+                        summary.missing_perf
+                    ));
                 }
                 if summary.missing_docs > 0 {
-                    verify.push(format!("Missing docs checkpoints: {}", summary.missing_docs));
+                    verify.push(format!(
+                        "Missing docs checkpoints: {}",
+                        summary.missing_docs
+                    ));
                 }
 
                 if let Some(first) = summary.first_open {
@@ -12820,7 +13008,10 @@ fn optional_string_or_string_array(
         Some(Value::String(v)) => {
             let v = v.trim();
             if v.is_empty() {
-                Err(ai_error("INVALID_INPUT", &format!("{key} must not be empty")))
+                Err(ai_error(
+                    "INVALID_INPUT",
+                    &format!("{key} must not be empty"),
+                ))
             } else {
                 Ok(Some(vec![v.to_string()]))
             }
@@ -12836,7 +13027,10 @@ fn optional_string_or_string_array(
                 };
                 let s = s.trim();
                 if s.is_empty() {
-                    return Err(ai_error("INVALID_INPUT", &format!("{key} must not be empty")));
+                    return Err(ai_error(
+                        "INVALID_INPUT",
+                        &format!("{key} must not be empty"),
+                    ));
                 }
                 out.push(s.to_string());
             }
@@ -12862,7 +13056,10 @@ fn optional_meta_value(
         Some(Value::String(raw)) => {
             let trimmed = raw.trim();
             if trimmed.is_empty() {
-                return Err(ai_error("INVALID_INPUT", &format!("{key} must not be empty")));
+                return Err(ai_error(
+                    "INVALID_INPUT",
+                    &format!("{key} must not be empty"),
+                ));
             }
             match serde_json::from_str::<Value>(trimmed) {
                 Ok(value) => Ok(Some(value)),

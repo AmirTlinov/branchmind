@@ -2998,14 +2998,7 @@ impl SqliteStore {
                   seq=excluded.seq,
                   updated_at_ms=excluded.updated_at_ms
                 "#,
-                params![
-                    workspace.as_str(),
-                    reference,
-                    doc,
-                    branch,
-                    seq,
-                    now_ms
-                ],
+                params![workspace.as_str(), reference, doc, branch, seq, now_ms],
             )?;
 
             tx.execute(
@@ -8475,19 +8468,16 @@ impl SqliteStore {
             LIMIT ?3
             "#,
         )?;
-        let rows = stmt.query_map(
-            params![workspace.as_str(), task_id, limit as i64],
-            |row| {
-                Ok(EventRow {
-                    seq: row.get(0)?,
-                    ts_ms: row.get(1)?,
-                    task_id: row.get(2)?,
-                    path: row.get(3)?,
-                    event_type: row.get(4)?,
-                    payload_json: row.get(5)?,
-                })
-            },
-        )?;
+        let rows = stmt.query_map(params![workspace.as_str(), task_id, limit as i64], |row| {
+            Ok(EventRow {
+                seq: row.get(0)?,
+                ts_ms: row.get(1)?,
+                task_id: row.get(2)?,
+                path: row.get(3)?,
+                event_type: row.get(4)?,
+                payload_json: row.get(5)?,
+            })
+        })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
@@ -8638,23 +8628,20 @@ impl SqliteStore {
             LIMIT ?3
             "#,
         )?;
-        let rows = stmt.query_map(
-            params![workspace.as_str(), task_id, limit as i64],
-            |row| {
-                Ok(OpsHistoryRow {
-                    seq: row.get(0)?,
-                    ts_ms: row.get(1)?,
-                    task_id: row.get(2)?,
-                    path: row.get(3)?,
-                    intent: row.get(4)?,
-                    payload_json: row.get(5)?,
-                    before_json: row.get(6)?,
-                    after_json: row.get(7)?,
-                    undoable: row.get::<_, i64>(8)? != 0,
-                    undone: row.get::<_, i64>(9)? != 0,
-                })
-            },
-        )?;
+        let rows = stmt.query_map(params![workspace.as_str(), task_id, limit as i64], |row| {
+            Ok(OpsHistoryRow {
+                seq: row.get(0)?,
+                ts_ms: row.get(1)?,
+                task_id: row.get(2)?,
+                path: row.get(3)?,
+                intent: row.get(4)?,
+                payload_json: row.get(5)?,
+                before_json: row.get(6)?,
+                after_json: row.get(7)?,
+                undoable: row.get::<_, i64>(8)? != 0,
+                undone: row.get::<_, i64>(9)? != 0,
+            })
+        })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
@@ -8695,23 +8682,20 @@ impl SqliteStore {
                 LIMIT 1
                 "#,
             )?;
-            stmt.query_row(
-                params![workspace.as_str(), undone_flag, task_id],
-                |row| {
-                    Ok(OpsHistoryRow {
-                        seq: row.get(0)?,
-                        ts_ms: row.get(1)?,
-                        task_id: row.get(2)?,
-                        path: row.get(3)?,
-                        intent: row.get(4)?,
-                        payload_json: row.get(5)?,
-                        before_json: row.get(6)?,
-                        after_json: row.get(7)?,
-                        undoable: row.get::<_, i64>(8)? != 0,
-                        undone: row.get::<_, i64>(9)? != 0,
-                    })
-                },
-            )
+            stmt.query_row(params![workspace.as_str(), undone_flag, task_id], |row| {
+                Ok(OpsHistoryRow {
+                    seq: row.get(0)?,
+                    ts_ms: row.get(1)?,
+                    task_id: row.get(2)?,
+                    path: row.get(3)?,
+                    intent: row.get(4)?,
+                    payload_json: row.get(5)?,
+                    before_json: row.get(6)?,
+                    after_json: row.get(7)?,
+                    undoable: row.get::<_, i64>(8)? != 0,
+                    undone: row.get::<_, i64>(9)? != 0,
+                })
+            })
             .optional()?
         };
         let Some(row) = row else {
@@ -8724,11 +8708,13 @@ impl SqliteStore {
             row.after_json.as_deref()
         }
         .ok_or(StoreError::InvalidInput("snapshot missing"))?;
-        let snapshot: JsonValue =
-            serde_json::from_str(snapshot_json).map_err(|_| StoreError::InvalidInput("snapshot invalid"))?;
+        let snapshot: JsonValue = serde_json::from_str(snapshot_json)
+            .map_err(|_| StoreError::InvalidInput("snapshot invalid"))?;
 
         let target = match row.intent.as_str() {
-            "task_detail_patch" => apply_task_detail_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
+            "task_detail_patch" => {
+                apply_task_detail_snapshot_tx(&tx, workspace, &snapshot, now_ms)?
+            }
             "step_patch" => apply_step_patch_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
             "step_progress" => apply_step_progress_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
             "step_block_set" => apply_step_block_snapshot_tx(&tx, workspace, &snapshot, now_ms)?,
@@ -8888,7 +8874,10 @@ fn snapshot_required_bool(snapshot: &JsonValue, field: &str) -> Result<bool, Sto
         .ok_or_else(|| StoreError::InvalidInput("snapshot missing boolean field"))
 }
 
-fn snapshot_optional_string(snapshot: &JsonValue, field: &str) -> Result<Option<String>, StoreError> {
+fn snapshot_optional_string(
+    snapshot: &JsonValue,
+    field: &str,
+) -> Result<Option<String>, StoreError> {
     match snapshot.get(field) {
         None | Some(JsonValue::Null) => Ok(None),
         Some(JsonValue::String(value)) => Ok(Some(value.clone())),
@@ -9493,9 +9482,8 @@ fn doc_head_seq_for_sources_tx(
     doc: &str,
     sources: &[BranchSource],
 ) -> Result<Option<i64>, StoreError> {
-    let mut sql = String::from(
-        "SELECT MAX(seq) FROM doc_entries WHERE workspace=?1 AND doc=?2 AND (",
-    );
+    let mut sql =
+        String::from("SELECT MAX(seq) FROM doc_entries WHERE workspace=?1 AND doc=?2 AND (");
     let mut params: Vec<SqlValue> = Vec::new();
     params.push(SqlValue::Text(workspace.to_string()));
     params.push(SqlValue::Text(doc.to_string()));
@@ -11620,53 +11608,6 @@ fn task_items_replace_tx(
     Ok(())
 }
 
-fn task_items_append_tx(
-    tx: &Transaction<'_>,
-    workspace: &str,
-    entity_kind: &str,
-    entity_id: &str,
-    field: &str,
-    items: &[String],
-) -> Result<(), StoreError> {
-    let max_ordinal: Option<i64> = tx
-        .query_row(
-            "SELECT MAX(ordinal) FROM task_items WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND field=?4",
-            params![workspace, entity_kind, entity_id, field],
-            |row| row.get(0),
-        )
-        .optional()?
-        .flatten();
-    let mut next = max_ordinal.unwrap_or(-1) + 1;
-    for text in items {
-        tx.execute(
-            "INSERT INTO task_items(workspace, entity_kind, entity_id, field, ordinal, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![workspace, entity_kind, entity_id, field, next, text],
-        )?;
-        next += 1;
-    }
-    Ok(())
-}
-
-fn task_items_remove_tx(
-    tx: &Transaction<'_>,
-    workspace: &str,
-    entity_kind: &str,
-    entity_id: &str,
-    field: &str,
-    items: &[String],
-) -> Result<(), StoreError> {
-    if items.is_empty() {
-        return Ok(());
-    }
-    for text in items {
-        tx.execute(
-            "DELETE FROM task_items WHERE workspace=?1 AND entity_kind=?2 AND entity_id=?3 AND field=?4 AND text=?5",
-            params![workspace, entity_kind, entity_id, field, text],
-        )?;
-    }
-    Ok(())
-}
-
 fn checkpoint_required_tx(
     tx: &Transaction<'_>,
     workspace: &str,
@@ -12365,7 +12306,9 @@ fn parse_plan_or_task_kind(id: &str) -> Result<TaskKind, StoreError> {
     } else if id.starts_with("TASK-") {
         Ok(TaskKind::Task)
     } else {
-        Err(StoreError::InvalidInput("task must start with PLAN- or TASK-"))
+        Err(StoreError::InvalidInput(
+            "task must start with PLAN- or TASK-",
+        ))
     }
 }
 

@@ -66,6 +66,7 @@ Present:
 - branchmind_tag_create / branchmind_tag_list / branchmind_tag_delete
 - branchmind_reflog / branchmind_reset
 - branchmind_think_add_hypothesis / branchmind_think_add_question / branchmind_think_add_test
+- branchmind_think_add_note / branchmind_think_add_decision / branchmind_think_add_evidence / branchmind_think_add_frame / branchmind_think_add_update
 - branchmind_think_next / branchmind_think_frontier / branchmind_think_pack
 - branchmind_think_query / branchmind_think_lint / branchmind_think_watch
 - branchmind_think_link / branchmind_think_set_status

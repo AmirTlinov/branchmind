@@ -66,12 +66,19 @@ This produces a snapshot-like experience without copying logs.
 Ensures the workspace storage is initialized and bootstraps a default branch.
 
 Input: `{ workspace }`  
-Output: `{ workspace, storage_dir, schema_version }`
+Output: `{ workspace, storage_dir, schema_version, checkout, defaults }`
 
 Bootstrap behavior:
 
 - Creates the default branch `main` when the workspace has no branches.
 - Sets the workspace checkout to `main` when it is empty.
+
+Defaults:
+
+- `defaults.branch` = `main`
+- `defaults.docs.notes` = `notes`
+- `defaults.docs.graph` = `graph`
+- `defaults.docs.trace` = `trace`
 
 ### `branchmind_status`
 
@@ -80,9 +87,11 @@ Fast storage and workspace snapshot.
 Input: `{ workspace }`  
 Output:
 
-- `{ workspace, schema_version, workspace_exists, last_event?, last_doc_entry? }`
+- `{ workspace, schema_version, workspace_exists, checkout?, defaults, last_event?, last_doc_entry? }`
 - `last_event` shape: `{ event_id, ts, ts_ms }`
 - `last_doc_entry` shape: `{ seq, ts, ts_ms, branch, doc, kind }`
+- `checkout` is the current checkout branch (or `null` if unset).
+- `defaults` match `branchmind_init` defaults.
 
 ### `branchmind_notes_commit`
 
@@ -605,7 +614,13 @@ Moves a ref pointer to a specified commit entry.
 
 ## Think convenience tools (v0.2)
 
-### `branchmind_think_add_hypothesis` / `branchmind_think_add_question` / `branchmind_think_add_test`
+Defaults:
+
+- Think tools accept `target` (plan/task) or explicit `(ref, graph_doc)` inputs.
+  When `target` is provided, `ref`/`graph_doc` must be omitted and
+  branch/docs are resolved from the target reasoning reference.
+
+### `branchmind_think_add_hypothesis` / `branchmind_think_add_question` / `branchmind_think_add_test` / `branchmind_think_add_note` / `branchmind_think_add_decision` / `branchmind_think_add_evidence` / `branchmind_think_add_frame` / `branchmind_think_add_update`
 
 Thin wrappers over `branchmind_think_card` that enforce the corresponding `card.type`
 and normalize fields.
@@ -614,7 +629,7 @@ and normalize fields.
 
 Query thinking cards via graph filters.
 
-Input: `{ workspace, graph_doc?, ref?, ids?, status?, tags_any?, tags_all?, text?, limit? }`
+Input: `{ workspace, target?, graph_doc?, ref?, ids?, status?, tags_any?, tags_all?, text?, limit? }`
 
 ### `branchmind_think_pack`
 
@@ -648,6 +663,11 @@ Open/close a subgoal card that links a parent question to a child trace.
 
 Return a bounded watch view (frontier + recent trace steps).
 
+Defaults:
+
+- When `target` is provided, `ref`/`graph_doc`/`trace_doc` must be omitted and
+  branch/docs are resolved from the target reasoning reference.
+
 ## Trace tools (v0.2)
 
 ### `branchmind_trace_step`
@@ -665,6 +685,11 @@ Return a bounded trace slice for fast resumption.
 ### `branchmind_trace_validate`
 
 Validate trace invariants (ordering, required fields).
+
+Defaults:
+
+- Trace tools accept `target` (plan/task) or explicit `(ref, doc)` / `(doc)` inputs.
+  When `target` is provided, branch/doc are resolved from the target reasoning reference.
 
 ## Tool groups (future)
 
