@@ -14,7 +14,7 @@ fields:
 project:
   enabled: true
   number: null
-  owner: ''
-  repo: ''
+  owner: AmirTlinov
+  repo: branchmind
   type: repository
   workers: 0

@@ -138,9 +138,13 @@ fn mcp_requires_notifications_initialized() {
         names,
         vec![
             "branchmind_branch_create",
+            "branchmind_branch_delete",
             "branchmind_branch_list",
+            "branchmind_branch_rename",
             "branchmind_checkout",
+            "branchmind_commit",
             "branchmind_diff",
+            "branchmind_docs_list",
             "branchmind_export",
             "branchmind_graph_apply",
             "branchmind_graph_conflict_resolve",
@@ -151,13 +155,40 @@ fn mcp_requires_notifications_initialized() {
             "branchmind_graph_query",
             "branchmind_graph_validate",
             "branchmind_init",
+            "branchmind_log",
             "branchmind_merge",
             "branchmind_notes_commit",
+            "branchmind_reflog",
+            "branchmind_reset",
             "branchmind_show",
             "branchmind_status",
+            "branchmind_tag_create",
+            "branchmind_tag_delete",
+            "branchmind_tag_list",
+            "branchmind_think_add_hypothesis",
+            "branchmind_think_add_question",
+            "branchmind_think_add_test",
             "branchmind_think_card",
             "branchmind_think_context",
+            "branchmind_think_frontier",
+            "branchmind_think_link",
+            "branchmind_think_lint",
+            "branchmind_think_next",
+            "branchmind_think_nominal_merge",
+            "branchmind_think_pack",
+            "branchmind_think_pin",
+            "branchmind_think_pins",
+            "branchmind_think_playbook",
+            "branchmind_think_query",
+            "branchmind_think_set_status",
+            "branchmind_think_subgoal_close",
+            "branchmind_think_subgoal_open",
             "branchmind_think_template",
+            "branchmind_think_watch",
+            "branchmind_trace_hydrate",
+            "branchmind_trace_sequential_step",
+            "branchmind_trace_step",
+            "branchmind_trace_validate",
             "storage",
             "tasks_batch",
             "tasks_block",
@@ -1859,6 +1890,552 @@ fn branchmind_think_card_and_context_smoke() {
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some(card_id)),
         "think_context must include the card"
     );
+}
+
+#[test]
+fn branchmind_vcs_smoke() {
+    let mut server = Server::start("branchmind_vcs_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let init = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "branchmind_init", "arguments": { "workspace": "ws_vcs" } }
+    }));
+    let init_text = extract_tool_text(&init);
+    assert_eq!(
+        init_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let commit1 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "branchmind_commit", "arguments": { "workspace": "ws_vcs", "artifact": "artifact-1", "message": "m1" } }
+    }));
+    let commit1_text = extract_tool_text(&commit1);
+    let seq1 = commit1_text
+        .get("result")
+        .and_then(|v| v.get("commits"))
+        .and_then(|v| v.as_array())
+        .and_then(|v| v.first())
+        .and_then(|v| v.get("seq"))
+        .and_then(|v| v.as_i64())
+        .expect("commit seq1");
+
+    let commit2 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "branchmind_commit", "arguments": { "workspace": "ws_vcs", "artifact": "artifact-2", "message": "m2" } }
+    }));
+    let commit2_text = extract_tool_text(&commit2);
+    let seq2 = commit2_text
+        .get("result")
+        .and_then(|v| v.get("commits"))
+        .and_then(|v| v.as_array())
+        .and_then(|v| v.first())
+        .and_then(|v| v.get("seq"))
+        .and_then(|v| v.as_i64())
+        .expect("commit seq2");
+    assert!(seq2 > seq1, "commit seq must advance");
+
+    let log = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "branchmind_log", "arguments": { "workspace": "ws_vcs", "limit": 10 } }
+    }));
+    let log_text = extract_tool_text(&log);
+    let commits = log_text
+        .get("result")
+        .and_then(|v| v.get("commits"))
+        .and_then(|v| v.as_array())
+        .expect("commits");
+    assert!(commits.len() >= 2, "log must include commits");
+
+    let tag = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "branchmind_tag_create", "arguments": { "workspace": "ws_vcs", "name": "v1", "from": seq1.to_string() } }
+    }));
+    let tag_text = extract_tool_text(&tag);
+    assert_eq!(
+        tag_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let tags = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": { "name": "branchmind_tag_list", "arguments": { "workspace": "ws_vcs" } }
+    }));
+    let tags_text = extract_tool_text(&tags);
+    let tags_list = tags_text
+        .get("result")
+        .and_then(|v| v.get("tags"))
+        .and_then(|v| v.as_array())
+        .expect("tags list");
+    assert!(
+        tags_list.iter().any(|t| t.get("name").and_then(|v| v.as_str()) == Some("v1")),
+        "tag v1 must exist"
+    );
+
+    let reset = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": { "name": "branchmind_reset", "arguments": { "workspace": "ws_vcs", "ref": seq1.to_string() } }
+    }));
+    let reset_text = extract_tool_text(&reset);
+    assert_eq!(
+        reset_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let log_after = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": { "name": "branchmind_log", "arguments": { "workspace": "ws_vcs", "limit": 10 } }
+    }));
+    let log_after_text = extract_tool_text(&log_after);
+    let commits_after = log_after_text
+        .get("result")
+        .and_then(|v| v.get("commits"))
+        .and_then(|v| v.as_array())
+        .expect("commits after reset");
+    assert!(
+        !commits_after.iter().any(|c| c.get("seq").and_then(|v| v.as_i64()) == Some(seq2)),
+        "reset must drop later commits from log view"
+    );
+
+    let reflog = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": { "name": "branchmind_reflog", "arguments": { "workspace": "ws_vcs", "limit": 10 } }
+    }));
+    let reflog_text = extract_tool_text(&reflog);
+    let reflog_entries = reflog_text
+        .get("result")
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .expect("reflog entries");
+    assert!(!reflog_entries.is_empty(), "reflog must have entries");
+
+    let docs = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": { "name": "branchmind_docs_list", "arguments": { "workspace": "ws_vcs" } }
+    }));
+    let docs_text = extract_tool_text(&docs);
+    let docs_list = docs_text
+        .get("result")
+        .and_then(|v| v.get("docs"))
+        .and_then(|v| v.as_array())
+        .expect("docs list");
+    assert!(
+        docs_list.iter().any(|d| d.get("doc").and_then(|v| v.as_str()) == Some("notes")),
+        "notes doc must exist"
+    );
+
+    let branch = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": { "name": "branchmind_branch_create", "arguments": { "workspace": "ws_vcs", "name": "topic" } }
+    }));
+    let branch_text = extract_tool_text(&branch);
+    assert_eq!(
+        branch_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let rename = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": { "name": "branchmind_branch_rename", "arguments": { "workspace": "ws_vcs", "old": "topic", "new": "topic-renamed" } }
+    }));
+    let rename_text = extract_tool_text(&rename);
+    assert_eq!(
+        rename_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let delete = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": { "name": "branchmind_branch_delete", "arguments": { "workspace": "ws_vcs", "name": "topic-renamed" } }
+    }));
+    let delete_text = extract_tool_text(&delete);
+    let deleted = delete_text
+        .get("result")
+        .and_then(|v| v.get("deleted"))
+        .and_then(|v| v.as_bool())
+        .expect("delete result");
+    assert!(deleted, "branch must be deleted");
+}
+
+#[test]
+fn branchmind_think_wrappers_smoke() {
+    let mut server = Server::start("branchmind_think_wrappers_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let init = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "branchmind_init", "arguments": { "workspace": "ws_think_wrap" } }
+    }));
+    let init_text = extract_tool_text(&init);
+    assert_eq!(
+        init_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let hypo1 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } }
+    }));
+    let hypo1_text = extract_tool_text(&hypo1);
+    let hypo1_id = hypo1_text
+        .get("result")
+        .and_then(|v| v.get("card_id"))
+        .and_then(|v| v.as_str())
+        .expect("hypo1 id")
+        .to_string();
+
+    let hypo2 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } }
+    }));
+    let hypo2_text = extract_tool_text(&hypo2);
+    let hypo2_id = hypo2_text
+        .get("result")
+        .and_then(|v| v.get("card_id"))
+        .and_then(|v| v.as_str())
+        .expect("hypo2 id")
+        .to_string();
+
+    let question = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_add_question", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Question", "text": "Why?" } } }
+    }));
+    let question_text = extract_tool_text(&question);
+    let question_id = question_text
+        .get("result")
+        .and_then(|v| v.get("card_id"))
+        .and_then(|v| v.as_str())
+        .expect("question id")
+        .to_string();
+
+    let test_card = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_add_test", "arguments": { "workspace": "ws_think_wrap", "card": "Test it" } }
+    }));
+    let test_text = extract_tool_text(&test_card);
+    assert_eq!(
+        test_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let link = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_link", "arguments": { "workspace": "ws_think_wrap", "from": question_id.clone(), "rel": "supports", "to": hypo1_id.clone() } }
+    }));
+    let link_text = extract_tool_text(&link);
+    assert_eq!(
+        link_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let set_status = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_set_status", "arguments": { "workspace": "ws_think_wrap", "status": "blocked", "targets": [hypo1_id.clone()] } }
+    }));
+    let set_status_text = extract_tool_text(&set_status);
+    assert_eq!(
+        set_status_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let pin = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_pin", "arguments": { "workspace": "ws_think_wrap", "targets": [hypo1_id.clone()] } }
+    }));
+    let pin_text = extract_tool_text(&pin);
+    assert_eq!(
+        pin_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let pins = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_pins", "arguments": { "workspace": "ws_think_wrap", "limit": 10 } }
+    }));
+    let pins_text = extract_tool_text(&pins);
+    let pins_list = pins_text
+        .get("result")
+        .and_then(|v| v.get("pins"))
+        .and_then(|v| v.as_array())
+        .expect("pins");
+    assert!(
+        pins_list
+            .iter()
+            .any(|p| p.get("id").and_then(|v| v.as_str()) == Some(hypo1_id.as_str())),
+        "pinned card must be listed"
+    );
+
+    let query = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_query", "arguments": { "workspace": "ws_think_wrap", "types": "hypothesis", "limit": 10 } }
+    }));
+    let query_text = extract_tool_text(&query);
+    assert_eq!(
+        query_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let frontier = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_frontier", "arguments": { "workspace": "ws_think_wrap" } }
+    }));
+    let frontier_text = extract_tool_text(&frontier);
+    assert_eq!(
+        frontier_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let next = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_next", "arguments": { "workspace": "ws_think_wrap" } }
+    }));
+    let next_text = extract_tool_text(&next);
+    assert_eq!(
+        next_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let pack = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_pack", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10 } }
+    }));
+    let pack_text = extract_tool_text(&pack);
+    assert_eq!(
+        pack_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let merge = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_nominal_merge", "arguments": { "workspace": "ws_think_wrap", "candidate_ids": [hypo1_id.clone(), hypo2_id.clone()] } }
+    }));
+    let merge_text = extract_tool_text(&merge);
+    assert_eq!(
+        merge_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let playbook = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_playbook", "arguments": { "workspace": "ws_think_wrap", "name": "default" } }
+    }));
+    let playbook_text = extract_tool_text(&playbook);
+    assert_eq!(
+        playbook_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let subgoal_open = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 17,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_subgoal_open", "arguments": { "workspace": "ws_think_wrap", "question_id": question_id.clone() } }
+    }));
+    let subgoal_open_text = extract_tool_text(&subgoal_open);
+    let subgoal_id = subgoal_open_text
+        .get("result")
+        .and_then(|v| v.get("subgoal_id"))
+        .and_then(|v| v.as_str())
+        .expect("subgoal id")
+        .to_string();
+
+    let subgoal_close = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 18,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_subgoal_close", "arguments": { "workspace": "ws_think_wrap", "subgoal_id": subgoal_id, "return_card": "done" } }
+    }));
+    let subgoal_close_text = extract_tool_text(&subgoal_close);
+    assert_eq!(
+        subgoal_close_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let watch = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 19,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_watch", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10 } }
+    }));
+    let watch_text = extract_tool_text(&watch);
+    assert_eq!(
+        watch_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let lint = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_lint", "arguments": { "workspace": "ws_think_wrap" } }
+    }));
+    let lint_text = extract_tool_text(&lint);
+    assert_eq!(
+        lint_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+}
+
+#[test]
+fn branchmind_trace_smoke() {
+    let mut server = Server::start("branchmind_trace_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let init = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "branchmind_init", "arguments": { "workspace": "ws_trace" } }
+    }));
+    let init_text = extract_tool_text(&init);
+    assert_eq!(
+        init_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let step = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "branchmind_trace_step", "arguments": { "workspace": "ws_trace", "step": "Step 1", "message": "m1" } }
+    }));
+    let step_text = extract_tool_text(&step);
+    let seq1 = step_text
+        .get("result")
+        .and_then(|v| v.get("entry"))
+        .and_then(|v| v.get("seq"))
+        .and_then(|v| v.as_i64())
+        .expect("trace step seq");
+
+    let seq_step = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "branchmind_trace_sequential_step",
+            "arguments": {
+                "workspace": "ws_trace",
+                "thought": "Thought 1",
+                "thoughtNumber": 1,
+                "totalThoughts": 2,
+                "nextThoughtNeeded": true
+            }
+        }
+    }));
+    let seq_text = extract_tool_text(&seq_step);
+    let seq2 = seq_text
+        .get("result")
+        .and_then(|v| v.get("entry"))
+        .and_then(|v| v.get("seq"))
+        .and_then(|v| v.as_i64())
+        .expect("trace sequential seq");
+    assert!(seq2 > seq1, "sequential step must advance seq");
+
+    let hydrate = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "branchmind_trace_hydrate", "arguments": { "workspace": "ws_trace", "limit_steps": 10 } }
+    }));
+    let hydrate_text = extract_tool_text(&hydrate);
+    let entries = hydrate_text
+        .get("result")
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .expect("trace entries");
+    assert!(entries.len() >= 2, "trace hydrate must return entries");
+
+    let validate = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "branchmind_trace_validate", "arguments": { "workspace": "ws_trace" } }
+    }));
+    let validate_text = extract_tool_text(&validate);
+    let ok = validate_text
+        .get("result")
+        .and_then(|v| v.get("ok"))
+        .and_then(|v| v.as_bool())
+        .expect("trace validate ok");
+    assert!(ok, "trace validate must be ok");
 }
 
 #[test]

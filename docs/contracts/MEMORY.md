@@ -435,6 +435,20 @@ Sets the current workspace branch ref (convenience; does not affect tasks).
 Input: `{ workspace, ref }`  
 Output: `{ workspace, previous?, current }`
 
+### `branchmind_branch_rename`
+
+Renames a branch ref and updates dependent artifacts (documents, refs, tags, checkout).
+
+Input: `{ workspace, old, new }`  
+Output: `{ workspace, previous, current }`
+
+### `branchmind_branch_delete`
+
+Deletes a branch ref and its stored artifacts if it is safe to remove.
+
+Input: `{ workspace, name }`  
+Output: `{ workspace, name, deleted }`
+
 ## Automatic ingestion (single organism invariant)
 
 Every mutating `tasks_*` operation must be ingested into the **trace** document of the same entity:

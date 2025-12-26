@@ -24,9 +24,6 @@ Present:
 - tasks_focus_get / tasks_focus_set / tasks_focus_clear
 - tasks_delta
 - tasks_radar
-
-Planned:
-
 - tasks_batch
 - tasks_block
 - tasks_close_task
@@ -49,6 +46,10 @@ Planned:
 - tasks_task_add / tasks_task_define / tasks_task_delete
 - tasks_templates_list
 
+Planned:
+
+- (none)
+
 ## branchmind parity (reasoning + VCS-style)
 
 Present:
@@ -60,9 +61,6 @@ Present:
 - branchmind_graph_diff / branchmind_graph_merge
 - branchmind_graph_conflicts / branchmind_graph_conflict_show / branchmind_graph_conflict_resolve
 - branchmind_think_template / branchmind_think_card / branchmind_think_context
-
-Planned:
-
 - branchmind_commit / branchmind_log / branchmind_docs_list
 - branchmind_branch_delete / branchmind_branch_rename
 - branchmind_tag_create / branchmind_tag_list / branchmind_tag_delete
@@ -75,3 +73,7 @@ Planned:
 - branchmind_think_playbook
 - branchmind_think_subgoal_open / branchmind_think_subgoal_close
 - branchmind_trace_step / branchmind_trace_sequential_step / branchmind_trace_hydrate / branchmind_trace_validate
+
+Planned:
+
+- (none)

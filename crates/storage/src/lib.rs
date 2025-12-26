@@ -226,6 +226,50 @@ pub struct DocSlice {
 }
 
 #[derive(Clone, Debug)]
+pub struct DocumentRow {
+    pub branch: String,
+    pub doc: String,
+    pub kind: DocumentKind,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct VcsRefRow {
+    pub reference: String,
+    pub branch: String,
+    pub doc: String,
+    pub seq: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct VcsRefUpdate {
+    pub reference: VcsRefRow,
+    pub old_seq: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VcsTagRow {
+    pub name: String,
+    pub branch: String,
+    pub doc: String,
+    pub seq: i64,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct VcsReflogRow {
+    pub reference: String,
+    pub branch: String,
+    pub doc: String,
+    pub old_seq: Option<i64>,
+    pub new_seq: i64,
+    pub ts_ms: i64,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct MergeNotesResult {
     pub merged: usize,
     pub skipped: usize,
@@ -901,6 +945,38 @@ impl SqliteStore {
               task_id TEXT,
               path TEXT,
               payload_json TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS vcs_refs (
+              workspace TEXT NOT NULL,
+              ref TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              seq INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, ref, doc)
+            );
+
+            CREATE TABLE IF NOT EXISTS vcs_reflog (
+              workspace TEXT NOT NULL,
+              ref TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              old_seq INTEGER,
+              new_seq INTEGER NOT NULL,
+              message TEXT,
+              ts_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, ref, doc, ts_ms, new_seq)
+            );
+
+            CREATE TABLE IF NOT EXISTS vcs_tags (
+              workspace TEXT NOT NULL,
+              name TEXT NOT NULL,
+              doc TEXT NOT NULL,
+              branch TEXT NOT NULL,
+              seq INTEGER NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              PRIMARY KEY (workspace, name)
             );
 
             CREATE TABLE IF NOT EXISTS branches (
@@ -2403,6 +2479,124 @@ impl SqliteStore {
         })
     }
 
+    pub fn doc_append_trace(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        title: Option<String>,
+        format: Option<String>,
+        meta_json: Option<String>,
+        content: String,
+    ) -> Result<DocEntryRow, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+        if content.trim().is_empty() {
+            return Err(StoreError::InvalidInput("content must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            branch,
+            doc,
+            DocumentKind::Trace.as_str(),
+            now_ms,
+        )?;
+
+        tx.execute(
+            r#"
+            INSERT INTO doc_entries(workspace, branch, doc, ts_ms, kind, title, format, meta_json, content)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                workspace.as_str(),
+                branch,
+                doc,
+                now_ms,
+                DocEntryKind::Note.as_str(),
+                title.as_deref(),
+                format.as_deref(),
+                meta_json.as_deref(),
+                &content
+            ],
+        )?;
+        let seq = tx.last_insert_rowid();
+        touch_document_tx(&tx, workspace.as_str(), branch, doc, now_ms)?;
+
+        tx.commit()?;
+        Ok(DocEntryRow {
+            seq,
+            ts_ms: now_ms,
+            branch: branch.to_string(),
+            doc: doc.to_string(),
+            kind: DocEntryKind::Note,
+            title,
+            format,
+            meta_json,
+            content: Some(content),
+            source_event_id: None,
+            event_type: None,
+            task_id: None,
+            path: None,
+            payload_json: None,
+        })
+    }
+
+    pub fn doc_list(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+    ) -> Result<Vec<DocumentRow>, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+
+        let tx = self.conn.transaction()?;
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let docs = {
+            let mut stmt = tx.prepare(
+                "SELECT doc, kind, created_at_ms, updated_at_ms \
+                 FROM documents WHERE workspace=?1 AND branch=?2 \
+                 ORDER BY updated_at_ms DESC, doc ASC",
+            )?;
+            let mut rows = stmt.query(params![workspace.as_str(), branch])?;
+            let mut docs = Vec::new();
+
+            while let Some(row) = rows.next()? {
+                let kind: String = row.get(1)?;
+                let kind = match kind.as_str() {
+                    "notes" => DocumentKind::Notes,
+                    "trace" => DocumentKind::Trace,
+                    "graph" => DocumentKind::Graph,
+                    _ => DocumentKind::Notes,
+                };
+                docs.push(DocumentRow {
+                    branch: branch.to_string(),
+                    doc: row.get(0)?,
+                    kind,
+                    created_at_ms: row.get(2)?,
+                    updated_at_ms: row.get(3)?,
+                });
+            }
+
+            docs
+        };
+
+        tx.commit()?;
+        Ok(docs)
+    }
+
     pub fn doc_show_tail(
         &mut self,
         workspace: &WorkspaceId,
@@ -2677,6 +2871,348 @@ impl SqliteStore {
             next_cursor: diff.next_cursor,
             has_more: diff.has_more,
         })
+    }
+
+    pub fn doc_head_seq_for_branch_doc(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+    ) -> Result<Option<i64>, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let tx = self.conn.transaction()?;
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+        let sources = branch_sources_tx(&tx, workspace.as_str(), branch)?;
+        let head_seq = doc_head_seq_for_sources_tx(&tx, workspace.as_str(), doc, &sources)?;
+        tx.commit()?;
+        Ok(head_seq)
+    }
+
+    pub fn doc_entry_visible(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+        doc: &str,
+        seq: i64,
+    ) -> Result<bool, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let tx = self.conn.transaction()?;
+        let visible = doc_entry_visible_tx(&tx, workspace.as_str(), branch, doc, seq)?;
+        tx.commit()?;
+        Ok(visible)
+    }
+
+    pub fn vcs_ref_get(
+        &mut self,
+        workspace: &WorkspaceId,
+        reference: &str,
+        doc: &str,
+    ) -> Result<Option<VcsRefRow>, StoreError> {
+        if reference.trim().is_empty() {
+            return Err(StoreError::InvalidInput("ref must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let tx = self.conn.transaction()?;
+        let row = tx
+            .query_row(
+                "SELECT branch, seq, updated_at_ms FROM vcs_refs WHERE workspace=?1 AND ref=?2 AND doc=?3",
+                params![workspace.as_str(), reference, doc],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            )
+            .optional()?;
+        tx.commit()?;
+        Ok(row.map(|(branch, seq, updated_at_ms)| VcsRefRow {
+            reference: reference.to_string(),
+            branch,
+            doc: doc.to_string(),
+            seq,
+            updated_at_ms,
+        }))
+    }
+
+    pub fn vcs_ref_set(
+        &mut self,
+        workspace: &WorkspaceId,
+        reference: &str,
+        branch: &str,
+        doc: &str,
+        seq: i64,
+        message: Option<String>,
+    ) -> Result<VcsRefUpdate, StoreError> {
+        if reference.trim().is_empty() {
+            return Err(StoreError::InvalidInput("ref must not be empty"));
+        }
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+        if seq <= 0 {
+            return Err(StoreError::InvalidInput("seq must be positive"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        let existing = tx
+            .query_row(
+                "SELECT branch, seq, updated_at_ms FROM vcs_refs WHERE workspace=?1 AND ref=?2 AND doc=?3",
+                params![workspace.as_str(), reference, doc],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            )
+            .optional()?;
+
+        let old_seq = existing.as_ref().map(|(_, seq, _)| *seq);
+        let existing_branch = existing.as_ref().map(|(branch, _, _)| branch.as_str());
+        let needs_update = existing_branch != Some(branch) || old_seq != Some(seq);
+
+        if needs_update {
+            tx.execute(
+                r#"
+                INSERT INTO vcs_refs(workspace, ref, doc, branch, seq, updated_at_ms)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ON CONFLICT(workspace, ref, doc) DO UPDATE SET
+                  branch=excluded.branch,
+                  seq=excluded.seq,
+                  updated_at_ms=excluded.updated_at_ms
+                "#,
+                params![
+                    workspace.as_str(),
+                    reference,
+                    doc,
+                    branch,
+                    seq,
+                    now_ms
+                ],
+            )?;
+
+            tx.execute(
+                r#"
+                INSERT INTO vcs_reflog(workspace, ref, doc, branch, old_seq, new_seq, message, ts_ms)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+                params![
+                    workspace.as_str(),
+                    reference,
+                    doc,
+                    branch,
+                    old_seq,
+                    seq,
+                    message.as_deref(),
+                    now_ms
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(VcsRefUpdate {
+            reference: VcsRefRow {
+                reference: reference.to_string(),
+                branch: branch.to_string(),
+                doc: doc.to_string(),
+                seq,
+                updated_at_ms: now_ms,
+            },
+            old_seq,
+        })
+    }
+
+    pub fn vcs_reflog_list(
+        &mut self,
+        workspace: &WorkspaceId,
+        reference: &str,
+        doc: &str,
+        limit: usize,
+    ) -> Result<Vec<VcsReflogRow>, StoreError> {
+        if reference.trim().is_empty() {
+            return Err(StoreError::InvalidInput("ref must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+
+        let limit = limit.clamp(1, 200) as i64;
+        let tx = self.conn.transaction()?;
+        let out = {
+            let mut stmt = tx.prepare(
+                "SELECT branch, old_seq, new_seq, message, ts_ms \
+                 FROM vcs_reflog WHERE workspace=?1 AND ref=?2 AND doc=?3 \
+                 ORDER BY ts_ms DESC, new_seq DESC LIMIT ?4",
+            )?;
+            let mut rows = stmt.query(params![workspace.as_str(), reference, doc, limit])?;
+            let mut out = Vec::new();
+            while let Some(row) = rows.next()? {
+                out.push(VcsReflogRow {
+                    reference: reference.to_string(),
+                    branch: row.get(0)?,
+                    doc: doc.to_string(),
+                    old_seq: row.get(1)?,
+                    new_seq: row.get(2)?,
+                    message: row.get(3)?,
+                    ts_ms: row.get(4)?,
+                });
+            }
+            out
+        };
+        tx.commit()?;
+        Ok(out)
+    }
+
+    pub fn vcs_tag_get(
+        &mut self,
+        workspace: &WorkspaceId,
+        name: &str,
+    ) -> Result<Option<VcsTagRow>, StoreError> {
+        if name.trim().is_empty() {
+            return Err(StoreError::InvalidInput("name must not be empty"));
+        }
+        let tx = self.conn.transaction()?;
+        let row = tx
+            .query_row(
+                "SELECT branch, doc, seq, created_at_ms FROM vcs_tags WHERE workspace=?1 AND name=?2",
+                params![workspace.as_str(), name],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
+            )
+            .optional()?;
+        tx.commit()?;
+        Ok(row.map(|(branch, doc, seq, created_at_ms)| VcsTagRow {
+            name: name.to_string(),
+            branch,
+            doc,
+            seq,
+            created_at_ms,
+        }))
+    }
+
+    pub fn vcs_tag_create(
+        &mut self,
+        workspace: &WorkspaceId,
+        name: &str,
+        branch: &str,
+        doc: &str,
+        seq: i64,
+        force: bool,
+    ) -> Result<VcsTagRow, StoreError> {
+        if name.trim().is_empty() {
+            return Err(StoreError::InvalidInput("name must not be empty"));
+        }
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        if doc.trim().is_empty() {
+            return Err(StoreError::InvalidInput("doc must not be empty"));
+        }
+        if seq <= 0 {
+            return Err(StoreError::InvalidInput("seq must be positive"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+        if !doc_entry_visible_tx(&tx, workspace.as_str(), branch, doc, seq)? {
+            return Err(StoreError::InvalidInput("commit not visible for branch"));
+        }
+
+        if !force {
+            let exists = tx
+                .query_row(
+                    "SELECT 1 FROM vcs_tags WHERE workspace=?1 AND name=?2 LIMIT 1",
+                    params![workspace.as_str(), name],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if exists {
+                return Err(StoreError::InvalidInput("tag already exists"));
+            }
+        }
+
+        tx.execute(
+            r#"
+            INSERT INTO vcs_tags(workspace, name, doc, branch, seq, created_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(workspace, name) DO UPDATE SET
+              doc=excluded.doc,
+              branch=excluded.branch,
+              seq=excluded.seq,
+              created_at_ms=excluded.created_at_ms
+            "#,
+            params![workspace.as_str(), name, doc, branch, seq, now_ms],
+        )?;
+        tx.commit()?;
+        Ok(VcsTagRow {
+            name: name.to_string(),
+            branch: branch.to_string(),
+            doc: doc.to_string(),
+            seq,
+            created_at_ms: now_ms,
+        })
+    }
+
+    pub fn vcs_tag_list(&mut self, workspace: &WorkspaceId) -> Result<Vec<VcsTagRow>, StoreError> {
+        let tx = self.conn.transaction()?;
+        let tags = {
+            let mut stmt = tx.prepare(
+                "SELECT name, branch, doc, seq, created_at_ms FROM vcs_tags \
+                 WHERE workspace=?1 ORDER BY created_at_ms DESC, name ASC",
+            )?;
+            let mut rows = stmt.query(params![workspace.as_str()])?;
+            let mut tags = Vec::new();
+            while let Some(row) = rows.next()? {
+                tags.push(VcsTagRow {
+                    name: row.get(0)?,
+                    branch: row.get(1)?,
+                    doc: row.get(2)?,
+                    seq: row.get(3)?,
+                    created_at_ms: row.get(4)?,
+                });
+            }
+            tags
+        };
+        tx.commit()?;
+        Ok(tags)
+    }
+
+    pub fn vcs_tag_delete(
+        &mut self,
+        workspace: &WorkspaceId,
+        name: &str,
+    ) -> Result<bool, StoreError> {
+        if name.trim().is_empty() {
+            return Err(StoreError::InvalidInput("name must not be empty"));
+        }
+        let tx = self.conn.transaction()?;
+        let deleted = tx.execute(
+            "DELETE FROM vcs_tags WHERE workspace=?1 AND name=?2",
+            params![workspace.as_str(), name],
+        )?;
+        tx.commit()?;
+        Ok(deleted > 0)
     }
 
     pub fn graph_apply_ops(
@@ -4226,6 +4762,191 @@ impl SqliteStore {
             base_seq: Some(base_seq),
             created_at_ms: Some(now_ms),
         })
+    }
+
+    pub fn branch_rename(
+        &mut self,
+        workspace: &WorkspaceId,
+        from: &str,
+        to: &str,
+    ) -> Result<(String, String), StoreError> {
+        let from = from.trim();
+        let to = to.trim();
+        if from.is_empty() {
+            return Err(StoreError::InvalidInput("from must not be empty"));
+        }
+        if to.is_empty() {
+            return Err(StoreError::InvalidInput("to must not be empty"));
+        }
+        if from == to {
+            return Err(StoreError::InvalidInput("from and to must differ"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        if !branch_exists_tx(&tx, workspace.as_str(), from)? {
+            return Err(StoreError::UnknownBranch);
+        }
+        if branch_exists_tx(&tx, workspace.as_str(), to)? {
+            return Err(StoreError::BranchAlreadyExists);
+        }
+
+        tx.execute(
+            "UPDATE branches SET name=?1 WHERE workspace=?2 AND name=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE branches SET base_branch=?1 WHERE workspace=?2 AND base_branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE branch_checkout SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE reasoning_refs SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE documents SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE doc_entries SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE graph_node_versions SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE graph_edge_versions SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE graph_conflicts SET from_branch=?1 WHERE workspace=?2 AND from_branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE graph_conflicts SET into_branch=?1 WHERE workspace=?2 AND into_branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE vcs_refs SET ref=?1 WHERE workspace=?2 AND ref=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE vcs_refs SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE vcs_reflog SET ref=?1 WHERE workspace=?2 AND ref=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE vcs_reflog SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+        tx.execute(
+            "UPDATE vcs_tags SET branch=?1 WHERE workspace=?2 AND branch=?3",
+            params![to, workspace.as_str(), from],
+        )?;
+
+        tx.commit()?;
+        Ok((from.to_string(), to.to_string()))
+    }
+
+    pub fn branch_delete(
+        &mut self,
+        workspace: &WorkspaceId,
+        name: &str,
+    ) -> Result<bool, StoreError> {
+        let branch = name.trim();
+        if branch.is_empty() {
+            return Err(StoreError::InvalidInput("name must not be empty"));
+        }
+
+        let tx = self.conn.transaction()?;
+        if !branch_exists_tx(&tx, workspace.as_str(), branch)? {
+            return Err(StoreError::UnknownBranch);
+        }
+
+        if let Some(current) = branch_checkout_get_tx(&tx, workspace.as_str())? {
+            if current == branch {
+                return Err(StoreError::InvalidInput(
+                    "cannot delete the currently checked-out branch",
+                ));
+            }
+        }
+
+        let has_children = tx
+            .query_row(
+                "SELECT 1 FROM branches WHERE workspace=?1 AND base_branch=?2 LIMIT 1",
+                params![workspace.as_str(), branch],
+                |_row| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if has_children {
+            return Err(StoreError::InvalidInput(
+                "branch has dependent branches; delete or rebase them first",
+            ));
+        }
+
+        let referenced = tx
+            .query_row(
+                "SELECT 1 FROM reasoning_refs WHERE workspace=?1 AND branch=?2 LIMIT 1",
+                params![workspace.as_str(), branch],
+                |_row| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if referenced {
+            return Err(StoreError::InvalidInput(
+                "branch is referenced by reasoning refs; move them before deletion",
+            ));
+        }
+
+        tx.execute(
+            "DELETE FROM vcs_refs WHERE workspace=?1 AND ref=?2",
+            params![workspace.as_str(), branch],
+        )?;
+        tx.execute(
+            "DELETE FROM vcs_reflog WHERE workspace=?1 AND ref=?2",
+            params![workspace.as_str(), branch],
+        )?;
+        tx.execute(
+            "DELETE FROM vcs_tags WHERE workspace=?1 AND branch=?2",
+            params![workspace.as_str(), branch],
+        )?;
+        tx.execute(
+            "DELETE FROM graph_conflicts WHERE workspace=?1 AND (from_branch=?2 OR into_branch=?2)",
+            params![workspace.as_str(), branch],
+        )?;
+        tx.execute(
+            "DELETE FROM graph_edge_versions WHERE workspace=?1 AND branch=?2",
+            params![workspace.as_str(), branch],
+        )?;
+        tx.execute(
+            "DELETE FROM graph_node_versions WHERE workspace=?1 AND branch=?2",
+            params![workspace.as_str(), branch],
+        )?;
+        tx.execute(
+            "DELETE FROM doc_entries WHERE workspace=?1 AND branch=?2",
+            params![workspace.as_str(), branch],
+        )?;
+        tx.execute(
+            "DELETE FROM documents WHERE workspace=?1 AND branch=?2",
+            params![workspace.as_str(), branch],
+        )?;
+        let deleted = tx.execute(
+            "DELETE FROM branches WHERE workspace=?1 AND name=?2",
+            params![workspace.as_str(), branch],
+        )?;
+
+        tx.commit()?;
+        Ok(deleted > 0)
     }
 
     pub fn branch_list(
@@ -8764,6 +9485,79 @@ fn doc_entries_head_seq_tx(
             |row| row.get::<_, i64>(0),
         )
         .optional()?)
+}
+
+fn doc_head_seq_for_sources_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    doc: &str,
+    sources: &[BranchSource],
+) -> Result<Option<i64>, StoreError> {
+    let mut sql = String::from(
+        "SELECT MAX(seq) FROM doc_entries WHERE workspace=?1 AND doc=?2 AND (",
+    );
+    let mut params: Vec<SqlValue> = Vec::new();
+    params.push(SqlValue::Text(workspace.to_string()));
+    params.push(SqlValue::Text(doc.to_string()));
+
+    for (index, source) in sources.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(" OR ");
+        }
+        sql.push_str("(branch=?");
+        params.push(SqlValue::Text(source.branch.clone()));
+        if let Some(cutoff) = source.cutoff_seq {
+            sql.push_str(" AND seq <= ?");
+            params.push(SqlValue::Integer(cutoff));
+        }
+        sql.push(')');
+    }
+    sql.push(')');
+
+    let mut stmt = tx.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params))?;
+    if let Some(row) = rows.next()? {
+        Ok(row.get::<_, Option<i64>>(0)?)
+    } else {
+        Ok(None)
+    }
+}
+
+fn doc_entry_visible_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    branch: &str,
+    doc: &str,
+    seq: i64,
+) -> Result<bool, StoreError> {
+    if seq <= 0 {
+        return Ok(false);
+    }
+    if !branch_exists_tx(tx, workspace, branch)? {
+        return Err(StoreError::UnknownBranch);
+    }
+
+    let row = tx
+        .query_row(
+            "SELECT branch FROM doc_entries WHERE workspace=?1 AND doc=?2 AND seq=?3",
+            params![workspace, doc, seq],
+            |row| Ok(row.get::<_, String>(0)?),
+        )
+        .optional()?;
+    let Some(entry_branch) = row else {
+        return Ok(false);
+    };
+
+    let sources = branch_sources_tx(tx, workspace, branch)?;
+    for source in sources {
+        if source.branch == entry_branch {
+            if let Some(cutoff) = source.cutoff_seq {
+                return Ok(seq <= cutoff);
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn branch_exists_tx(
