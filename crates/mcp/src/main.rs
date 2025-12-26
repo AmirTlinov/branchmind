@@ -4021,12 +4021,56 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let mut truncated = false;
-            if let Some(delta) = result.get_mut("delta") {
-                let (_used, list_truncated) = enforce_graph_list_budget(delta, "events", limit);
-                truncated |= list_truncated;
+            truncated |= trim_array_to_budget(&mut result, &["delta", "events"], limit, true);
+            if json_len_chars(&result) > limit {
+                truncated |= trim_array_to_budget(&mut result, &["steps"], limit, false);
             }
-            let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-            let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            let (_used, trimmed_fields) = enforce_max_chars_budget(&mut result, limit);
+            truncated |= trimmed_fields;
+            if json_len_chars(&result) > limit {
+                if compact_radar_for_budget(&mut result) {
+                    truncated = true;
+                }
+                if compact_target_for_budget(&mut result) {
+                    truncated = true;
+                }
+            }
+            if json_len_chars(&result) > limit {
+                if let Some(radar) = result.get_mut("radar").and_then(|v| v.as_object_mut()) {
+                    if radar.remove("why").is_some() {
+                        truncated = true;
+                    }
+                }
+            }
+
+            let used = attach_budget(&mut result, limit, truncated);
+            if used > limit {
+                let mut trimmed_more = false;
+                trimmed_more |= trim_array_to_budget(&mut result, &["delta", "events"], limit, true);
+                if json_len_chars(&result) > limit {
+                    trimmed_more |= trim_array_to_budget(&mut result, &["steps"], limit, false);
+                }
+                let (_used2, trimmed_fields2) = enforce_max_chars_budget(&mut result, limit);
+                truncated |= trimmed_more || trimmed_fields2;
+                if json_len_chars(&result) > limit {
+                    if compact_radar_for_budget(&mut result) {
+                        truncated = true;
+                    }
+                    if compact_target_for_budget(&mut result) {
+                        truncated = true;
+                    }
+                }
+                if json_len_chars(&result) > limit {
+                    if let Some(radar) =
+                        result.get_mut("radar").and_then(|v| v.as_object_mut())
+                    {
+                        if radar.remove("why").is_some() {
+                            truncated = true;
+                        }
+                    }
+                }
+                let _ = attach_budget(&mut result, limit, truncated);
+            }
         }
 
         ai_ok("context_pack", result)
@@ -7945,45 +7989,35 @@ impl McpServer {
         });
 
         if let Some(limit) = max_chars {
-            let before = result
-                .get("cards")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
-            let (_used, truncated) = enforce_graph_list_budget(&mut result, "cards", limit);
-            let after = result
-                .get("cards")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+            let mut truncated = false;
+            truncated |= trim_array_to_budget(&mut result, &["cards"], limit, false);
+            if truncated {
+                recompute_card_stats(&mut result, "cards");
+            }
+            if json_len_chars(&result) > limit {
+                if compact_stats_by_type(&mut result) {
+                    truncated = true;
+                }
+            }
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("truncated".to_string(), Value::Bool(truncated));
             }
-            if after < before {
-                let mut by_type = std::collections::BTreeMap::<String, u64>::new();
-                if let Some(arr) = result.get("cards").and_then(|v| v.as_array()) {
-                    for card in arr {
-                        if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
-                            *by_type.entry(ty.to_string()).or_insert(0) += 1;
-                        }
-                    }
-                }
-                if let Some(stats) = result.get_mut("stats").and_then(|v| v.as_object_mut()) {
-                    stats.insert(
-                        "cards".to_string(),
-                        Value::Number(serde_json::Number::from(after as u64)),
-                    );
-                    stats.insert("by_type".to_string(), json!(by_type));
-                }
-            }
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
-                let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "cards", limit);
-                let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                let trimmed_more = trim_array_to_budget(&mut result, &["cards"], limit, false);
+                if trimmed_more {
+                    recompute_card_stats(&mut result, "cards");
                 }
-                let _ = attach_budget(&mut result, limit, truncated_final);
+                truncated |= trimmed_more;
+                if json_len_chars(&result) > limit {
+                    if compact_stats_by_type(&mut result) {
+                        truncated = true;
+                    }
+                }
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated));
+                }
+                let _ = attach_budget(&mut result, limit, truncated);
             }
         }
 
@@ -8686,18 +8720,67 @@ impl McpServer {
         });
 
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
+            let mut truncated = false;
+            let candidates_trimmed =
+                trim_array_to_budget(&mut result, &["candidates"], limit, false);
+            truncated |= candidates_trimmed;
+            if candidates_trimmed {
+                recompute_card_stats(&mut result, "candidates");
+            }
+            if json_len_chars(&result) > limit {
+                for path in [
+                    &["frontier", "tests"][..],
+                    &["frontier", "subgoals"][..],
+                    &["frontier", "questions"][..],
+                    &["frontier", "hypotheses"][..],
+                ] {
+                    if json_len_chars(&result) <= limit {
+                        break;
+                    }
+                    truncated |= trim_array_to_budget(&mut result, path, limit, false);
+                }
+            }
+            if json_len_chars(&result) > limit {
+                if compact_stats_by_type(&mut result) {
+                    truncated = true;
+                }
+            }
+
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("truncated".to_string(), Value::Bool(truncated));
             }
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
-                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-                let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                let mut trimmed_more = false;
+                let more_candidates =
+                    trim_array_to_budget(&mut result, &["candidates"], limit, false);
+                trimmed_more |= more_candidates;
+                if more_candidates {
+                    recompute_card_stats(&mut result, "candidates");
                 }
-                let _ = attach_budget(&mut result, limit, truncated_final);
+                if json_len_chars(&result) > limit {
+                    for path in [
+                        &["frontier", "tests"][..],
+                        &["frontier", "subgoals"][..],
+                        &["frontier", "questions"][..],
+                        &["frontier", "hypotheses"][..],
+                    ] {
+                        if json_len_chars(&result) <= limit {
+                            break;
+                        }
+                        trimmed_more |= trim_array_to_budget(&mut result, path, limit, false);
+                    }
+                }
+                if json_len_chars(&result) > limit {
+                    if compact_stats_by_type(&mut result) {
+                        trimmed_more = true;
+                    }
+                }
+                truncated |= trimmed_more;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated));
+                }
+                let _ = attach_budget(&mut result, limit, truncated);
             }
         }
 
@@ -9435,18 +9518,13 @@ impl McpServer {
         });
 
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
-            let used = attach_budget(&mut result, limit, truncated);
+            let used = attach_budget(&mut result, limit, false);
             if used > limit {
-                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-                let truncated_final = truncated || truncated2;
                 if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                    obj.insert("template".to_string(), Value::Null);
+                    obj.insert("truncated".to_string(), Value::Bool(true));
                 }
-                let _ = attach_budget(&mut result, limit, truncated_final);
+                let _ = attach_budget(&mut result, limit, true);
             }
         }
 
@@ -9976,18 +10054,75 @@ impl McpServer {
         });
 
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
+            let mut truncated = false;
+            truncated |= trim_array_to_budget(&mut result, &["candidates"], limit, false);
+            if json_len_chars(&result) > limit {
+                let trimmed_trace =
+                    trim_array_to_budget(&mut result, &["trace", "entries"], limit, true);
+                if trimmed_trace {
+                    refresh_trace_pagination_count(&mut result);
+                    truncated = true;
+                }
+            }
+            if json_len_chars(&result) > limit {
+                for path in [
+                    &["frontier", "tests"][..],
+                    &["frontier", "subgoals"][..],
+                    &["frontier", "questions"][..],
+                    &["frontier", "hypotheses"][..],
+                ] {
+                    if json_len_chars(&result) <= limit {
+                        break;
+                    }
+                    truncated |= trim_array_to_budget(&mut result, path, limit, false);
+                }
+            }
+            if json_len_chars(&result) > limit {
+                if compact_trace_pagination(&mut result) {
+                    refresh_trace_pagination_count(&mut result);
+                    truncated = true;
+                }
+            }
+
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("truncated".to_string(), Value::Bool(truncated));
             }
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
-                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-                let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+                let mut trimmed_more = false;
+                trimmed_more |= trim_array_to_budget(&mut result, &["candidates"], limit, false);
+                if json_len_chars(&result) > limit {
+                    let trimmed_trace =
+                        trim_array_to_budget(&mut result, &["trace", "entries"], limit, true);
+                    if trimmed_trace {
+                        refresh_trace_pagination_count(&mut result);
+                        trimmed_more = true;
+                    }
                 }
-                let _ = attach_budget(&mut result, limit, truncated_final);
+                if json_len_chars(&result) > limit {
+                    for path in [
+                        &["frontier", "tests"][..],
+                        &["frontier", "subgoals"][..],
+                        &["frontier", "questions"][..],
+                        &["frontier", "hypotheses"][..],
+                    ] {
+                        if json_len_chars(&result) <= limit {
+                            break;
+                        }
+                        trimmed_more |= trim_array_to_budget(&mut result, path, limit, false);
+                    }
+                }
+                if json_len_chars(&result) > limit {
+                    if compact_trace_pagination(&mut result) {
+                        refresh_trace_pagination_count(&mut result);
+                        trimmed_more = true;
+                    }
+                }
+                truncated |= trimmed_more;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("truncated".to_string(), Value::Bool(truncated));
+                }
+                let _ = attach_budget(&mut result, limit, truncated);
             }
         }
 
@@ -14084,6 +14219,149 @@ fn enforce_graph_list_budget(value: &mut Value, list_key: &str, max_chars: usize
     }
 
     (used, truncated)
+}
+
+fn pop_array_at(value: &mut Value, path: &[&str], from_front: bool) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    if path.len() == 1 {
+        let Some(arr) = value.get_mut(path[0]).and_then(|v| v.as_array_mut()) else {
+            return false;
+        };
+        if arr.is_empty() {
+            return false;
+        }
+        if from_front {
+            arr.remove(0);
+        } else {
+            arr.pop();
+        }
+        return true;
+    }
+    let Some(obj) = value.as_object_mut() else {
+        return false;
+    };
+    let Some(next) = obj.get_mut(path[0]) else {
+        return false;
+    };
+    pop_array_at(next, &path[1..], from_front)
+}
+
+fn trim_array_to_budget(value: &mut Value, path: &[&str], max_chars: usize, from_front: bool) -> bool {
+    if max_chars == 0 {
+        return false;
+    }
+    let mut truncated = false;
+    while json_len_chars(value) > max_chars {
+        if !pop_array_at(value, path, from_front) {
+            break;
+        }
+        truncated = true;
+    }
+    truncated
+}
+
+fn recompute_card_stats(value: &mut Value, cards_key: &str) -> usize {
+    use std::collections::BTreeMap;
+
+    let (count, by_type) = {
+        let Some(cards) = value.get(cards_key).and_then(|v| v.as_array()) else {
+            return 0;
+        };
+        let mut by_type = BTreeMap::<String, u64>::new();
+        for card in cards {
+            if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
+                *by_type.entry(ty.to_string()).or_insert(0) += 1;
+            }
+        }
+        (cards.len(), by_type)
+    };
+
+    if let Some(stats) = value.get_mut("stats").and_then(|v| v.as_object_mut()) {
+        stats.insert(
+            "cards".to_string(),
+            Value::Number(serde_json::Number::from(count as u64)),
+        );
+        stats.insert("by_type".to_string(), json!(by_type));
+    }
+
+    count
+}
+
+fn refresh_trace_pagination_count(value: &mut Value) {
+    let count = value
+        .get("trace")
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.len());
+    let Some(count) = count else {
+        return;
+    };
+    if let Some(pagination) = value
+        .get_mut("trace")
+        .and_then(|v| v.get_mut("pagination"))
+        .and_then(|v| v.as_object_mut())
+    {
+        pagination.insert(
+            "count".to_string(),
+            Value::Number(serde_json::Number::from(count as u64)),
+        );
+    }
+}
+
+fn compact_stats_by_type(value: &mut Value) -> bool {
+    let Some(stats) = value.get_mut("stats").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    if stats.contains_key("by_type") {
+        stats.insert("by_type".to_string(), Value::Object(serde_json::Map::new()));
+        return true;
+    }
+    false
+}
+
+fn compact_trace_pagination(value: &mut Value) -> bool {
+    let Some(pagination) = value
+        .get_mut("trace")
+        .and_then(|v| v.get_mut("pagination"))
+        .and_then(|v| v.as_object_mut())
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for key in ["cursor", "next_cursor", "has_more", "limit"] {
+        if pagination.remove(key).is_some() {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn compact_radar_for_budget(value: &mut Value) -> bool {
+    let Some(radar) = value.get_mut("radar").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    let mut changed = false;
+    for key in ["verify", "next", "blockers"] {
+        if radar.remove(key).is_some() {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn compact_target_for_budget(value: &mut Value) -> bool {
+    let Some(target) = value.get_mut("target").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    let mut changed = false;
+    for key in ["created_at_ms", "updated_at_ms", "parent"] {
+        if target.remove(key).is_some() {
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn enforce_graph_query_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {

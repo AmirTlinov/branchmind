@@ -2394,6 +2394,83 @@ fn branchmind_think_wrappers_smoke() {
         Some(true)
     );
 
+    let pack_budget = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 114,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_pack", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10, "max_chars": 400 } }
+    }));
+    let pack_budget_text = extract_tool_text(&pack_budget);
+    let pack_budget_obj = pack_budget_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    let pack_used = pack_budget_obj
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .expect("used_chars");
+    let pack_max = pack_budget_obj
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .expect("max_chars");
+    assert!(pack_used <= pack_max, "think_pack budget must not exceed max_chars");
+    let pack_candidates_len = pack_budget_text
+        .get("result")
+        .and_then(|v| v.get("candidates"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0);
+    let pack_stats_cards = pack_budget_text
+        .get("result")
+        .and_then(|v| v.get("stats"))
+        .and_then(|v| v.get("cards"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        pack_stats_cards as usize, pack_candidates_len,
+        "think_pack stats.cards must match candidates length"
+    );
+
+    let context_budget = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 115,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_context", "arguments": { "workspace": "ws_think_wrap", "limit_cards": 10, "max_chars": 400 } }
+    }));
+    let context_budget_text = extract_tool_text(&context_budget);
+    let context_budget_obj = context_budget_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    let context_used = context_budget_obj
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .expect("used_chars");
+    let context_max = context_budget_obj
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .expect("max_chars");
+    assert!(
+        context_used <= context_max,
+        "think_context budget must not exceed max_chars"
+    );
+    let context_cards_len = context_budget_text
+        .get("result")
+        .and_then(|v| v.get("cards"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0);
+    let context_stats_cards = context_budget_text
+        .get("result")
+        .and_then(|v| v.get("stats"))
+        .and_then(|v| v.get("cards"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        context_stats_cards as usize, context_cards_len,
+        "think_context stats.cards must match cards length"
+    );
+
     let merge = server.request(json!({
         "jsonrpc": "2.0",
         "id": 15,
@@ -2454,6 +2531,52 @@ fn branchmind_think_wrappers_smoke() {
     assert_eq!(
         watch_text.get("success").and_then(|v| v.as_bool()),
         Some(true)
+    );
+
+    let watch_budget = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 120,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_watch", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10, "trace_limit_steps": 20, "max_chars": 400 } }
+    }));
+    let watch_budget_text = extract_tool_text(&watch_budget);
+    let watch_budget_obj = watch_budget_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    let watch_used = watch_budget_obj
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .expect("used_chars");
+    let watch_max = watch_budget_obj
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .expect("max_chars");
+    assert!(
+        watch_used <= watch_max,
+        "think_watch budget must not exceed max_chars"
+    );
+    let watch_entries_len = watch_budget_text
+        .get("result")
+        .and_then(|v| v.get("trace"))
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0);
+    let watch_count = watch_budget_text
+        .get("result")
+        .and_then(|v| v.get("trace"))
+        .and_then(|v| v.get("pagination"))
+        .and_then(|v| v.get("count"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(
+        watch_used <= watch_max,
+        "think_watch budget must not exceed max_chars"
+    );
+    assert_eq!(
+        watch_count as usize, watch_entries_len,
+        "think_watch pagination.count must match entries length"
     );
 
     let lint = server.request(json!({
@@ -2789,6 +2912,12 @@ fn tasks_create_context_delta_smoke() {
         created_task_text.get("success").and_then(|v| v.as_bool()),
         Some(true)
     );
+    let task_id = created_task_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
 
     let edited_plan = server.request(json!({
         "jsonrpc": "2.0",
@@ -2833,6 +2962,30 @@ fn tasks_create_context_delta_smoke() {
         Some("Plan B")
     );
     assert_eq!(plans[0].get("revision").and_then(|v| v.as_i64()), Some(1));
+
+    let context_pack = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 56,
+        "method": "tools/call",
+        "params": { "name": "tasks_context_pack", "arguments": { "workspace": "ws1", "task": task_id.clone(), "delta_limit": 50, "max_chars": 400 } }
+    }));
+    let context_pack_text = extract_tool_text(&context_pack);
+    let pack_budget = context_pack_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    let pack_used = pack_budget
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .expect("used_chars");
+    let pack_max = pack_budget
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .expect("max_chars");
+    assert!(
+        pack_used <= pack_max,
+        "tasks_context_pack budget must not exceed max_chars"
+    );
 
     let context_limited = server.request(json!({
         "jsonrpc": "2.0",
