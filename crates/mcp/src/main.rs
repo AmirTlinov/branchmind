@@ -13568,7 +13568,7 @@ fn tool_definitions() -> Vec<Value> {
                     "description": { "type": "string" },
                     "contract": { "type": "string" },
                     "contract_data": { "type": "object" },
-                    "steps": { "type": "array" }
+                    "steps": { "type": "array", "items": {} }
                 },
                 "required": ["workspace", "title"]
             }
