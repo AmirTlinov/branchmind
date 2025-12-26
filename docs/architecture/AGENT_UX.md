@@ -29,6 +29,9 @@ If an operation fails due to a fixable precondition, return:
 
 All potentially large responses must be bounded and must expose truncation explicitly.
 
+- If the payload is trimmed beyond normal truncation, return a minimal signal plus `BUDGET_MINIMAL`.
+- If `max_chars` is too small for a minimal payload, clamp and emit `BUDGET_MIN_CLAMPED`.
+
 ## 6) Scope resolution invariants
 
 - `target` (PLAN/TASK) defines the canonical branch + docs; overrides are not allowed.

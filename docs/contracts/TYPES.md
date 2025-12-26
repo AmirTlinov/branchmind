@@ -167,7 +167,14 @@ Every potentially large output must accept at least one budget knob:
 - `max_lines` (diff/log)
 - `limit`/`offset` (pagination)
 
-All truncation must be explicit: `truncated=true` plus `budget.used`/`budget.limit` where applicable.
+All truncation must be explicit: `truncated=true` plus `budget.used_chars`/`budget.max_chars` where applicable.
+
+Budget invariants:
+
+- `used_chars <= max_chars` for budgeted payloads.
+- `used_chars` counts the serialized payload **excluding** the `budget` field.
+- If `max_chars` is too small to fit a minimal payload, the server clamps to a minimal safe value and emits `BUDGET_MIN_CLAMPED`.
+- If the payload is reduced to a minimal signal, the server emits `BUDGET_MINIMAL`.
 
 ## Redaction (best-effort, safe-by-default)
 

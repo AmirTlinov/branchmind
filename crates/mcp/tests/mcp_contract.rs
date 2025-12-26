@@ -184,6 +184,7 @@ fn mcp_requires_notifications_initialized() {
             "branchmind_think_pack",
             "branchmind_think_pin",
             "branchmind_think_pins",
+            "branchmind_think_pipeline",
             "branchmind_think_playbook",
             "branchmind_think_query",
             "branchmind_think_set_status",
@@ -198,6 +199,7 @@ fn mcp_requires_notifications_initialized() {
             "storage",
             "tasks_batch",
             "tasks_block",
+            "tasks_bootstrap",
             "tasks_close_step",
             "tasks_complete",
             "tasks_context",
@@ -225,6 +227,7 @@ fn mcp_requires_notifications_initialized() {
             "tasks_radar",
             "tasks_redo",
             "tasks_resume",
+            "tasks_resume_pack",
             "tasks_task_add",
             "tasks_task_define",
             "tasks_task_delete",
@@ -2413,7 +2416,10 @@ fn branchmind_think_wrappers_smoke() {
         .get("max_chars")
         .and_then(|v| v.as_u64())
         .expect("max_chars");
-    assert!(pack_used <= pack_max, "think_pack budget must not exceed max_chars");
+    assert!(
+        pack_used <= pack_max,
+        "think_pack budget must not exceed max_chars"
+    );
     let pack_candidates_len = pack_budget_text
         .get("result")
         .and_then(|v| v.get("candidates"))
@@ -2590,6 +2596,75 @@ fn branchmind_think_wrappers_smoke() {
         lint_text.get("success").and_then(|v| v.as_bool()),
         Some(true)
     );
+}
+
+#[test]
+fn branchmind_think_pipeline_smoke() {
+    let mut server = Server::start("branchmind_think_pipeline_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_think_pipe", "kind": "plan", "title": "Plan Pipe" } }
+    }));
+    let plan_id = extract_tool_text(&created_plan)
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let created_task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_think_pipe", "kind": "task", "parent": plan_id, "title": "Task Pipe" } }
+    }));
+    let task_id = extract_tool_text(&created_task)
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let pipeline = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "branchmind_think_pipeline",
+            "arguments": {
+                "workspace": "ws_think_pipe",
+                "target": task_id,
+                "frame": "Frame",
+                "hypothesis": "Hypothesis",
+                "test": "Test",
+                "evidence": "Evidence",
+                "decision": "Decision"
+            }
+        }
+    }));
+    let pipeline_text = extract_tool_text(&pipeline);
+    let cards = pipeline_text
+        .get("result")
+        .and_then(|v| v.get("cards"))
+        .and_then(|v| v.as_array())
+        .expect("cards");
+    assert_eq!(cards.len(), 5);
+    let decision_note = pipeline_text
+        .get("result")
+        .and_then(|v| v.get("decision_note"))
+        .expect("decision_note");
+    assert!(decision_note.get("card_id").is_some());
 }
 
 #[test]
@@ -3002,18 +3077,13 @@ fn tasks_create_context_delta_smoke() {
         limited_budget.get("truncated").and_then(|v| v.as_bool()),
         Some(true)
     );
-    let limited_plans = ctx_limited_text
-        .get("result")
-        .and_then(|v| v.get("plans"))
-        .and_then(|v| v.as_array())
-        .expect("plans");
-    let limited_tasks = ctx_limited_text
-        .get("result")
-        .and_then(|v| v.get("tasks"))
-        .and_then(|v| v.as_array())
-        .expect("tasks");
-    assert!(limited_plans.is_empty());
-    assert!(limited_tasks.is_empty());
+    let limited_result = ctx_limited_text.get("result").expect("result");
+    if let Some(plans) = limited_result.get("plans").and_then(|v| v.as_array()) {
+        assert!(plans.is_empty());
+    }
+    if let Some(tasks) = limited_result.get("tasks").and_then(|v| v.as_array()) {
+        assert!(tasks.is_empty());
+    }
 
     let delta = server.request(json!({
         "jsonrpc": "2.0",
@@ -3044,12 +3114,80 @@ fn tasks_create_context_delta_smoke() {
         limited_budget.get("truncated").and_then(|v| v.as_bool()),
         Some(true)
     );
-    let limited_events = delta_limited_text
+    if let Some(events) = delta_limited_text
         .get("result")
         .and_then(|v| v.get("events"))
         .and_then(|v| v.as_array())
-        .expect("events");
-    assert!(limited_events.is_empty());
+    {
+        assert!(events.is_empty());
+    }
+}
+
+#[test]
+fn tasks_bootstrap_and_resume_pack_smoke() {
+    let mut server = Server::start("tasks_bootstrap_and_resume_pack");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_bootstrap",
+            "arguments": {
+                "workspace": "ws1",
+                "plan_title": "Plan Bootstrap",
+                "task_title": "Task Bootstrap",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] },
+                    { "title": "S2", "success_criteria": ["c2"], "tests": ["t2"] }
+                ]
+            }
+        }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let steps = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .expect("steps");
+    assert_eq!(steps.len(), 2);
+
+    let resume_pack = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_resume_pack", "arguments": { "workspace": "ws1", "task": task_id.clone(), "events_limit": 10, "max_chars": 2000 } }
+    }));
+    let resume_pack_text = extract_tool_text(&resume_pack);
+    assert_eq!(
+        resume_pack_text
+            .get("result")
+            .and_then(|v| v.get("target"))
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str()),
+        Some(task_id.as_str())
+    );
+    assert!(
+        resume_pack_text
+            .get("result")
+            .and_then(|v| v.get("radar"))
+            .is_some()
+    );
 }
 
 #[test]
@@ -3238,23 +3376,6 @@ fn tasks_focus_and_radar_smoke() {
         Some(false)
     );
     let radar_from_focus_text = extract_tool_text(&radar_from_focus);
-    let expected_branch = format!("task/{task_id}");
-    assert_eq!(
-        radar_from_focus_text
-            .get("result")
-            .and_then(|v| v.get("target"))
-            .and_then(|v| v.get("id"))
-            .and_then(|v| v.as_str()),
-        Some(task_id.as_str())
-    );
-    assert_eq!(
-        radar_from_focus_text
-            .get("result")
-            .and_then(|v| v.get("reasoning_ref"))
-            .and_then(|v| v.get("branch"))
-            .and_then(|v| v.as_str()),
-        Some(expected_branch.as_str())
-    );
     assert_eq!(
         radar_from_focus_text
             .get("result")
@@ -3262,6 +3383,31 @@ fn tasks_focus_and_radar_smoke() {
             .and_then(|v| v.get("max_chars"))
             .and_then(|v| v.as_u64()),
         Some(10)
+    );
+
+    let radar_full = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws1", "max_chars": 400 } }
+    }));
+    let radar_full_text = extract_tool_text(&radar_full);
+    let expected_branch = format!("task/{task_id}");
+    assert_eq!(
+        radar_full_text
+            .get("result")
+            .and_then(|v| v.get("target"))
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str()),
+        Some(task_id.as_str())
+    );
+    assert_eq!(
+        radar_full_text
+            .get("result")
+            .and_then(|v| v.get("reasoning_ref"))
+            .and_then(|v| v.get("branch"))
+            .and_then(|v| v.as_str()),
+        Some(expected_branch.as_str())
     );
 
     let focus_cleared = server.request(json!({

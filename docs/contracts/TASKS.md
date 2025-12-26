@@ -36,9 +36,9 @@ All stateful tools in this family operate inside an explicit `workspace` (a stab
 
 ## Payload budgets (v0)
 
-- `tasks_context` and `tasks_delta` accept optional `max_chars`.
-- When `max_chars` is provided, responses include `budget` with `{ max_chars, used_chars, truncated }`,
-  and list payloads may be truncated from the tail to fit the budget.
+- `tasks_context`, `tasks_delta`, `tasks_radar`, `tasks_handoff`, `tasks_context_pack`, `tasks_resume_pack` accept optional `max_chars`.
+- When `max_chars` is provided, responses include `budget` with `{ max_chars, used_chars, truncated }`.
+- If the payload must shrink past normal truncation, the response may drop optional fields and return a minimal signal plus warnings.
 
 ## Tool family
 
@@ -198,7 +198,7 @@ Semantics:
 
 Run multiple task operations atomically.
 
-Input: `{ workspace, operations:[{ tool, args }...], atomic? }`
+Input: `{ workspace, operations:[{ tool, args }...], atomic?, compact? }`
 
 Semantics:
 
@@ -206,6 +206,7 @@ Semantics:
   tools only (currently: `tasks_patch`, `tasks_task_define`, `tasks_progress`, `tasks_block`).
 - Each operation is equivalent to a single tool call; `workspace` is injected if omitted
   in `args`.
+- If `compact=true`, per-operation results are compacted (best-effort).
 
 ### `tasks_history`
 
@@ -242,6 +243,12 @@ Semantics:
 Load a plan/task with optional timeline events.
 
 Input: `{ workspace, task?, plan?, events_limit? }`
+
+### `tasks_resume_pack`
+
+Unified resume: radar + timeline + decisions/evidence/blockers (bounded).
+
+Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, max_chars? }`
 
 ### `tasks_context_pack`
 
@@ -327,6 +334,20 @@ Input:
   }
 }
 ```
+
+## DX macros (v0.3)
+
+### `tasks_bootstrap`
+
+One-call bootstrap: create plan (optional), task, steps, and checkpoints.
+
+Input: `{ workspace, plan?, parent?, plan_title?, task_title, description?, steps[] }` where each step
+requires `title`, `success_criteria[]`, `tests[]`, optional `blockers[]`.
+
+Semantics:
+
+- Accepts either `plan` (existing) or `plan_title` (create new plan).
+- Rejects empty `success_criteria` or `tests` to keep checkpoints gate-ready.
 
 Output:
 

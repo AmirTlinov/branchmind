@@ -169,6 +169,7 @@ impl McpServer {
     fn call_tool(&mut self, name: &str, args: Value) -> Value {
         match name {
             "tasks_create" => self.tool_tasks_create(args),
+            "tasks_bootstrap" => self.tool_tasks_bootstrap(args),
             "tasks_decompose" => self.tool_tasks_decompose(args),
             "tasks_define" => self.tool_tasks_define(args),
             "tasks_note" => self.tool_tasks_note(args),
@@ -198,6 +199,7 @@ impl McpServer {
             "tasks_focus_clear" => self.tool_tasks_focus_clear(args),
             "tasks_radar" => self.tool_tasks_radar(args),
             "tasks_resume" => self.tool_tasks_resume(args),
+            "tasks_resume_pack" => self.tool_tasks_resume_pack(args),
             "tasks_context_pack" => self.tool_tasks_context_pack(args),
             "tasks_mirror" => self.tool_tasks_mirror(args),
             "tasks_handoff" => self.tool_tasks_handoff(args),
@@ -242,6 +244,7 @@ impl McpServer {
             "branchmind_think_add_frame" => self.tool_branchmind_think_add_frame(args),
             "branchmind_think_add_update" => self.tool_branchmind_think_add_update(args),
             "branchmind_think_context" => self.tool_branchmind_think_context(args),
+            "branchmind_think_pipeline" => self.tool_branchmind_think_pipeline(args),
             "branchmind_think_query" => self.tool_branchmind_think_query(args),
             "branchmind_think_pack" => self.tool_branchmind_think_pack(args),
             "branchmind_think_frontier" => self.tool_branchmind_think_frontier(args),
@@ -360,6 +363,242 @@ impl McpServer {
             ),
             Err(err) => ai_error("STORE_ERROR", &format_store_error(err)),
         }
+    }
+
+    fn tool_tasks_bootstrap(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        let plan_id = args_obj
+            .get("plan")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let parent_id = args_obj
+            .get("parent")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if plan_id.is_some() && parent_id.is_some() {
+            return ai_error("INVALID_INPUT", "provide plan or parent, not both");
+        }
+        let plan_title = match optional_string(args_obj, "plan_title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let task_title = match require_string(args_obj, "task_title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let description = match optional_string(args_obj, "description") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let steps_value = args_obj.get("steps").cloned().unwrap_or(Value::Null);
+        let Some(steps_array) = steps_value.as_array() else {
+            return ai_error("INVALID_INPUT", "steps must be an array");
+        };
+        if steps_array.is_empty() {
+            return ai_error("INVALID_INPUT", "steps must not be empty");
+        }
+
+        struct BootstrapStep {
+            title: String,
+            criteria: Vec<String>,
+            tests: Vec<String>,
+            blockers: Vec<String>,
+        }
+
+        let mut steps = Vec::with_capacity(steps_array.len());
+        for step in steps_array {
+            let Some(obj) = step.as_object() else {
+                return ai_error("INVALID_INPUT", "steps[] items must be objects");
+            };
+            let title = match require_string(obj, "title") {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            let criteria_value = obj.get("success_criteria").cloned().unwrap_or(Value::Null);
+            let Some(criteria_array) = criteria_value.as_array() else {
+                return ai_error("INVALID_INPUT", "steps[].success_criteria must be an array");
+            };
+            if criteria_array.is_empty() {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "steps[].success_criteria must not be empty",
+                );
+            }
+            let mut criteria = Vec::with_capacity(criteria_array.len());
+            for item in criteria_array {
+                let Some(s) = item.as_str() else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "steps[].success_criteria items must be strings",
+                    );
+                };
+                criteria.push(s.to_string());
+            }
+
+            let tests_value = obj.get("tests").cloned().unwrap_or(Value::Null);
+            let Some(tests_array) = tests_value.as_array() else {
+                return ai_error("INVALID_INPUT", "steps[].tests must be an array");
+            };
+            if tests_array.is_empty() {
+                return ai_error("INVALID_INPUT", "steps[].tests must not be empty");
+            }
+            let mut tests = Vec::with_capacity(tests_array.len());
+            for item in tests_array {
+                let Some(s) = item.as_str() else {
+                    return ai_error("INVALID_INPUT", "steps[].tests items must be strings");
+                };
+                tests.push(s.to_string());
+            }
+
+            let blockers = match optional_string_array(obj, "blockers") {
+                Ok(v) => v.unwrap_or_default(),
+                Err(resp) => return resp,
+            };
+
+            steps.push(BootstrapStep {
+                title,
+                criteria,
+                tests,
+                blockers,
+            });
+        }
+
+        let mut events = Vec::new();
+        let mut plan_created = false;
+
+        let parent_plan_id = match (plan_id.or(parent_id), plan_title) {
+            (Some(id), None) => {
+                if !id.starts_with("PLAN-") {
+                    return ai_error("INVALID_INPUT", "plan must start with PLAN-");
+                }
+                match self.store.get_plan(&workspace, &id) {
+                    Ok(Some(_)) => id,
+                    Ok(None) => return ai_error("UNKNOWN_ID", "Unknown plan id"),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                }
+            }
+            (None, Some(title)) => {
+                let payload = json!({
+                    "kind": "plan",
+                    "title": title
+                })
+                .to_string();
+                let (id, _revision, event) = match self.store.create(
+                    &workspace,
+                    TaskKind::Plan,
+                    title,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "plan_created".to_string(),
+                    payload,
+                ) {
+                    Ok(v) => v,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                events.push(events_to_json(vec![event]).remove(0));
+                plan_created = true;
+                id
+            }
+            (None, None) => {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "plan or plan_title is required to bootstrap a task",
+                );
+            }
+            (Some(_), Some(_)) => {
+                return ai_error("INVALID_INPUT", "provide plan or plan_title, not both");
+            }
+        };
+
+        let payload = json!({
+            "kind": "task",
+            "title": task_title,
+            "parent": parent_plan_id
+        })
+        .to_string();
+        let (task_id, _revision, create_event) = match self.store.create(
+            &workspace,
+            TaskKind::Task,
+            task_title,
+            Some(parent_plan_id.clone()),
+            description,
+            None,
+            None,
+            "task_created".to_string(),
+            payload,
+        ) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        events.push(events_to_json(vec![create_event]).remove(0));
+
+        let decompose_steps = steps
+            .iter()
+            .map(|step| bm_storage::NewStep {
+                title: step.title.clone(),
+                success_criteria: step.criteria.clone(),
+            })
+            .collect::<Vec<_>>();
+        let decompose =
+            match self
+                .store
+                .steps_decompose(&workspace, &task_id, None, None, decompose_steps)
+            {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+        events.push(events_to_json(vec![decompose.event]).remove(0));
+
+        let mut revision = decompose.task_revision;
+        for (step, step_ref) in steps.iter().zip(decompose.steps.iter()) {
+            let defined = match self.store.step_define(
+                &workspace,
+                &task_id,
+                None,
+                Some(step_ref.step_id.as_str()),
+                None,
+                None,
+                None,
+                Some(step.tests.clone()),
+                Some(step.blockers.clone()),
+            ) {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            revision = defined.task_revision;
+            events.push(events_to_json(vec![defined.event]).remove(0));
+        }
+
+        ai_ok(
+            "tasks_bootstrap",
+            json!({
+                "workspace": workspace.as_str(),
+                "plan": {
+                    "id": parent_plan_id,
+                    "created": plan_created
+                },
+                "task": {
+                    "id": task_id,
+                    "revision": revision
+                },
+                "steps": decompose.steps.iter().map(|s| json!({
+                    "step_id": s.step_id,
+                    "path": s.path
+                })).collect::<Vec<_>>(),
+                "events": events
+            }),
+        )
     }
 
     fn tool_tasks_decompose(&mut self, args: Value) -> Value {
@@ -3087,6 +3326,10 @@ impl McpServer {
             Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
+        let compact = match optional_bool(args_obj, "compact") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
 
         let ops_value = args_obj.get("operations").cloned().unwrap_or(Value::Null);
         let Some(ops) = ops_value.as_array() else {
@@ -3182,11 +3425,28 @@ impl McpServer {
                 );
             }
 
-            responses.push(json!({
-                "index": index,
-                "tool": tool_name,
-                "response": response
-            }));
+            if compact {
+                if ok {
+                    responses.push(json!({
+                        "index": index,
+                        "tool": tool_name,
+                        "success": true
+                    }));
+                } else {
+                    responses.push(json!({
+                        "index": index,
+                        "tool": tool_name,
+                        "success": false,
+                        "error": response.get("error").cloned().unwrap_or(Value::Null)
+                    }));
+                }
+            } else {
+                responses.push(json!({
+                    "index": index,
+                    "tool": tool_name,
+                    "response": response
+                }));
+            }
             if atomic {
                 applied_targets.push(target_id);
             }
@@ -3197,6 +3457,7 @@ impl McpServer {
             json!({
                 "workspace": workspace.as_str(),
                 "atomic": atomic,
+                "compact": compact,
                 "operations": responses
             }),
         )
@@ -3345,27 +3606,49 @@ impl McpServer {
 
         redact_value(&mut result, 6);
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
-            let (_used, tasks_truncated) = enforce_graph_list_budget(&mut result, "tasks", limit);
-            truncated |= tasks_truncated;
-            let (_used, plans_truncated) = enforce_graph_list_budget(&mut result, "plans", limit);
-            truncated |= plans_truncated;
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used, tasks_truncated) =
-                    enforce_graph_list_budget(&mut result, "tasks", limit);
-                let (_used, plans_truncated) =
-                    enforce_graph_list_budget(&mut result, "plans", limit);
-                let _ = attach_budget(
-                    &mut result,
-                    limit,
-                    truncated || tasks_truncated || plans_truncated,
-                );
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |= compact_tasks_context_items(&mut result);
             }
+            let (_used, tasks_truncated) = enforce_graph_list_budget(&mut result, "tasks", limit);
+            let (_used, plans_truncated) = enforce_graph_list_budget(&mut result, "plans", limit);
+            truncated |= tasks_truncated || plans_truncated;
+            if json_len_chars(&result) > limit {
+                if compact_tasks_context_pagination(&mut result) {
+                    truncated = true;
+                }
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["tasks"], false);
+                        changed |= retain_one_at(value, &["plans"], false);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["tasks", "plans"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |=
+                            drop_fields_at(value, &[], &["plans_pagination", "tasks_pagination"]);
+                    }
+                    changed
+                });
+
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("context", result)
+        if warnings.is_empty() {
+            ai_ok("context", result)
+        } else {
+            ai_ok_with_warnings("context", result, warnings, Vec::new())
+        }
     }
 
     fn tool_tasks_delta(&mut self, args: Value) -> Value {
@@ -3407,16 +3690,38 @@ impl McpServer {
 
         redact_value(&mut result, 6);
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_graph_list_budget(&mut result, "events", limit);
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used, truncated2) = enforce_graph_list_budget(&mut result, "events", limit);
-                let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |= compact_event_payloads_at(&mut result, &["events"]);
             }
+            let (_used, events_truncated) = enforce_graph_list_budget(&mut result, "events", limit);
+            truncated |= events_truncated;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= minimalize_task_events_at(value, &["events"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["events"], true);
+                    }
+                    changed
+                });
+
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("delta", result)
+        if warnings.is_empty() {
+            ai_ok("delta", result)
+        } else {
+            ai_ok_with_warnings("delta", result, warnings, Vec::new())
+        }
     }
 
     fn tool_tasks_plan(&mut self, args: Value) -> Value {
@@ -3886,16 +4191,53 @@ impl McpServer {
             }
         }
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-                let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let (_used, trimmed_fields) = enforce_max_chars_budget(&mut result, limit);
+            truncated |= trimmed_fields;
+            if json_len_chars(&result) > limit {
+                if compact_radar_for_budget(&mut result) {
+                    truncated = true;
+                }
+                if compact_target_for_budget(&mut result) {
+                    truncated = true;
+                }
             }
+            if json_len_chars(&result) > limit {
+                truncated |= drop_fields_at(&mut result, &["radar"], &["why"]);
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["steps"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["radar"],
+                            &["verify", "next", "blockers", "why"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= compact_target_for_budget(value);
+                    }
+                    changed
+                });
+
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("radar", result)
+        if warnings.is_empty() {
+            ai_ok("radar", result)
+        } else {
+            ai_ok_with_warnings("radar", result, warnings, Vec::new())
+        }
     }
 
     fn tool_tasks_resume(&mut self, args: Value) -> Value {
@@ -3961,6 +4303,289 @@ impl McpServer {
         ai_ok("resume", result)
     }
 
+    fn tool_tasks_resume_pack(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let events_limit = args_obj
+            .get("events_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(20);
+        let decisions_limit = args_obj
+            .get("decisions_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(5);
+        let evidence_limit = args_obj
+            .get("evidence_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(5);
+
+        let (target_id, kind, focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+
+        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut events = if events_limit == 0 {
+            Vec::new()
+        } else {
+            match self
+                .store
+                .list_events_for_task(&workspace, &target_id, events_limit)
+            {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        };
+        events.reverse();
+
+        let reasoning = match self
+            .store
+            .ensure_reasoning_ref(&workspace, &target_id, kind)
+        {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut decisions = Vec::new();
+        if decisions_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &reasoning.branch,
+                &reasoning.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: Some(vec!["decision".to_string()]),
+                    status: None,
+                    tags_any: None,
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: decisions_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            decisions = graph_nodes_to_cards(slice.nodes);
+        }
+
+        let mut evidence = Vec::new();
+        if evidence_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &reasoning.branch,
+                &reasoning.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: Some(vec!["evidence".to_string()]),
+                    status: None,
+                    tags_any: None,
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: evidence_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            evidence = graph_nodes_to_cards(slice.nodes);
+        }
+
+        let blockers = context
+            .radar
+            .get("blockers")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new()));
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "requested": {
+                "task": args_obj.get("task").cloned().unwrap_or(Value::Null),
+                "plan": args_obj.get("plan").cloned().unwrap_or(Value::Null)
+            },
+            "focus": focus,
+            "target": context.target,
+            "reasoning_ref": context.reasoning_ref,
+            "radar": context.radar,
+            "timeline": {
+                "limit": events_limit,
+                "events": events_to_json(events)
+            },
+            "signals": {
+                "blockers": blockers,
+                "decisions": decisions,
+                "evidence": evidence,
+                "stats": {
+                    "decisions": decisions.len(),
+                    "evidence": evidence.len()
+                }
+            },
+            "truncated": false
+        });
+        if let Some(steps) = context.steps {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("steps".to_string(), steps);
+            }
+        }
+
+        let mut warnings = Vec::new();
+        if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |= compact_event_payloads_at(&mut result, &["timeline", "events"]);
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["signals", "decisions"],
+                    160,
+                    true,
+                    true,
+                    false,
+                );
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["signals", "evidence"],
+                    160,
+                    true,
+                    true,
+                    false,
+                );
+            }
+            truncated |= trim_array_to_budget(&mut result, &["timeline", "events"], limit, true);
+            truncated |= trim_array_to_budget(&mut result, &["signals", "decisions"], limit, false);
+            truncated |= trim_array_to_budget(&mut result, &["signals", "evidence"], limit, false);
+            if json_len_chars(&result) > limit {
+                if let Some(steps) = result.get_mut("steps").and_then(|v| v.as_object_mut()) {
+                    if let Some(first) = steps.get_mut("first_open").and_then(|v| v.as_object_mut())
+                    {
+                        for key in [
+                            "criteria_confirmed",
+                            "tests_confirmed",
+                            "security_confirmed",
+                            "perf_confirmed",
+                            "docs_confirmed",
+                        ] {
+                            if first.remove(key).is_some() {
+                                truncated = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if json_len_chars(&result) > limit {
+                if compact_radar_for_budget(&mut result) {
+                    truncated = true;
+                }
+                if compact_target_for_budget(&mut result) {
+                    truncated = true;
+                }
+            }
+            if json_len_chars(&result) > limit {
+                truncated |= drop_fields_at(&mut result, &["radar"], &["why"]);
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= compact_event_payloads_at(value, &["timeline", "events"]);
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "decisions"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "evidence"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        if minimalize_cards_at(value, &["signals", "decisions"]) {
+                            changed = true;
+                        }
+                        if minimalize_cards_at(value, &["signals", "evidence"]) {
+                            changed = true;
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["timeline", "events"], true);
+                        changed |= retain_one_at(value, &["signals", "decisions"], true);
+                        changed |= retain_one_at(value, &["signals", "evidence"], true);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["steps"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["signals"],
+                            &["blockers", "decisions", "evidence"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["radar"],
+                            &["verify", "next", "blockers", "why"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["timeline"], &["events"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["timeline"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
+        }
+
+        if warnings.is_empty() {
+            ai_ok("resume_pack", result)
+        } else {
+            ai_ok_with_warnings("resume_pack", result, warnings, Vec::new())
+        }
+    }
+
     fn tool_tasks_context_pack(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -4019,9 +4644,34 @@ impl McpServer {
             }
         }
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |= compact_event_payloads_at(&mut result, &["delta", "events"]);
+            }
             truncated |= trim_array_to_budget(&mut result, &["delta", "events"], limit, true);
+            if json_len_chars(&result) > limit {
+                if let Some(steps) = result.get_mut("steps").and_then(|v| v.as_object_mut()) {
+                    if let Some(first) = steps.get_mut("first_open").and_then(|v| v.as_object_mut())
+                    {
+                        for key in [
+                            "criteria_confirmed",
+                            "tests_confirmed",
+                            "security_confirmed",
+                            "perf_confirmed",
+                            "docs_confirmed",
+                        ] {
+                            if first.remove(key).is_some() {
+                                truncated = true;
+                            }
+                        }
+                    }
+                }
+            }
             if json_len_chars(&result) > limit {
                 truncated |= trim_array_to_budget(&mut result, &["steps"], limit, false);
             }
@@ -4043,37 +4693,44 @@ impl McpServer {
                 }
             }
 
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let mut trimmed_more = false;
-                trimmed_more |= trim_array_to_budget(&mut result, &["delta", "events"], limit, true);
-                if json_len_chars(&result) > limit {
-                    trimmed_more |= trim_array_to_budget(&mut result, &["steps"], limit, false);
-                }
-                let (_used2, trimmed_fields2) = enforce_max_chars_budget(&mut result, limit);
-                truncated |= trimmed_more || trimmed_fields2;
-                if json_len_chars(&result) > limit {
-                    if compact_radar_for_budget(&mut result) {
-                        truncated = true;
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    changed |= compact_event_payloads_at(value, &["delta", "events"]);
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["delta", "events"], true);
                     }
-                    if compact_target_for_budget(&mut result) {
-                        truncated = true;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["steps"], &["first_open"]);
                     }
-                }
-                if json_len_chars(&result) > limit {
-                    if let Some(radar) =
-                        result.get_mut("radar").and_then(|v| v.as_object_mut())
-                    {
-                        if radar.remove("why").is_some() {
-                            truncated = true;
-                        }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["steps"]);
                     }
-                }
-                let _ = attach_budget(&mut result, limit, truncated);
-            }
+                    if json_len_chars(value) > limit {
+                        changed |= compact_radar_for_budget(value);
+                        changed |= compact_target_for_budget(value);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["radar"],
+                            &["why", "verify", "next", "blockers"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["delta"], &["events"]);
+                    }
+                    changed
+                });
+
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("context_pack", result)
+        if warnings.is_empty() {
+            ai_ok("context_pack", result)
+        } else {
+            ai_ok_with_warnings("context_pack", result, warnings, Vec::new())
+        }
     }
 
     fn tool_tasks_mirror(&mut self, args: Value) -> Value {
@@ -4303,16 +4960,50 @@ impl McpServer {
             }
         }
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-                let _ = attach_budget(&mut result, limit, truncated || truncated2);
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let (_used, trimmed_fields) = enforce_max_chars_budget(&mut result, limit);
+            truncated |= trimmed_fields;
+            if json_len_chars(&result) > limit {
+                if compact_radar_for_budget(&mut result) {
+                    truncated = true;
+                }
+                if compact_target_for_budget(&mut result) {
+                    truncated = true;
+                }
             }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["steps"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["handoff"], &["risks", "remaining"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["radar"],
+                            &["verify", "next", "blockers", "why"],
+                        );
+                    }
+                    changed
+                });
+
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("handoff", result)
+        if warnings.is_empty() {
+            ai_ok("handoff", result)
+        } else {
+            ai_ok_with_warnings("handoff", result, warnings, Vec::new())
+        }
     }
 
     fn tool_tasks_lint(&mut self, args: Value) -> Value {
@@ -4558,16 +5249,41 @@ impl McpServer {
             ));
         }
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_branchmind_show_budget(&mut result, limit);
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_branchmind_show_budget(&mut result, limit);
-                let _ = attach_budget(&mut result, limit, truncated || truncated2);
-            }
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["last_doc_entry"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["last_event"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["defaults"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["checkout"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["schema_version"]);
+                    }
+                    changed
+                });
+
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok_with("branchmind_status", result, suggestions)
+        if warnings.is_empty() {
+            ai_ok_with("branchmind_status", result, suggestions)
+        } else {
+            ai_ok_with_warnings("branchmind_status", result, warnings, suggestions)
+        }
     }
 
     fn tool_branchmind_branch_create(&mut self, args: Value) -> Value {
@@ -4680,17 +5396,13 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_branchmind_branch_list_budget(&mut result, limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) =
                     enforce_branchmind_branch_list_budget(&mut result, limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -5180,16 +5892,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "commits", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "commits", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -5282,16 +5990,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "docs", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "docs", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -5476,16 +6180,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "tags", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "tags", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -5607,16 +6307,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "entries", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "entries", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -5887,23 +6583,61 @@ impl McpServer {
 
         redact_value(&mut result, 6);
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_branchmind_show_budget(&mut result, limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |=
+                    compact_doc_entries_at(&mut result, &["entries"], 256, true, false, true);
             }
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_branchmind_show_budget(&mut result, limit);
-                let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+            let (_used, truncated_show) = enforce_branchmind_show_budget(&mut result, limit);
+            truncated |= truncated_show;
+            if json_len_chars(&result) > limit {
+                truncated |= trim_array_to_budget(&mut result, &["entries"], limit, true);
+                refresh_pagination_count(&mut result, &["entries"], &["pagination"]);
+            }
+            if json_len_chars(&result) > limit {
+                if minimalize_doc_entries_at(&mut result, &["entries"]) {
+                    truncated = true;
+                    minimal = true;
                 }
-                let _ = attach_budget(&mut result, limit, truncated_final);
             }
+            if json_len_chars(&result) > limit {
+                if retain_one_at(&mut result, &["entries"], true) {
+                    truncated = true;
+                    minimal = true;
+                    refresh_pagination_count(&mut result, &["entries"], &["pagination"]);
+                }
+            }
+            if json_len_chars(&result) > limit {
+                truncated |= drop_fields_at(
+                    &mut result,
+                    &["pagination"],
+                    &["cursor", "next_cursor", "has_more", "limit"],
+                );
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["pagination"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_show", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_show", result)
+        } else {
+            ai_ok_with_warnings("branchmind_show", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_diff(&mut self, args: Value) -> Value {
@@ -6042,16 +6776,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_branchmind_show_budget(&mut result, limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_branchmind_show_budget(&mut result, limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -6583,9 +7313,7 @@ impl McpServer {
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             if after_nodes < before_nodes {
                 if let Some(next_cursor) = result
                     .get("nodes")
@@ -6613,9 +7341,7 @@ impl McpServer {
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_query_budget(&mut result, limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -6741,16 +7467,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "errors", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "errors", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -6922,9 +7644,7 @@ impl McpServer {
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             if after < before {
                 if let Some(next_cursor) = result
                     .get("changes")
@@ -6953,9 +7673,7 @@ impl McpServer {
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "changes", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -7185,9 +7903,7 @@ impl McpServer {
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             if after < before {
                 if let Some(next_cursor) = result
                     .get("conflicts")
@@ -7216,9 +7932,7 @@ impl McpServer {
                 let (_used2, truncated2) =
                     enforce_graph_list_budget(&mut result, "conflicts", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -7988,10 +8702,19 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
-            truncated |= trim_array_to_budget(&mut result, &["cards"], limit, false);
-            if truncated {
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |=
+                    compact_card_fields_at(&mut result, &["cards"], 180, true, true, false);
+            }
+            let trimmed = trim_array_to_budget(&mut result, &["cards"], limit, false);
+            truncated |= trimmed;
+            if trimmed {
                 recompute_card_stats(&mut result, "cards");
             }
             if json_len_chars(&result) > limit {
@@ -7999,29 +8722,242 @@ impl McpServer {
                     truncated = true;
                 }
             }
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let trimmed_more = trim_array_to_budget(&mut result, &["cards"], limit, false);
-                if trimmed_more {
-                    recompute_card_stats(&mut result, "cards");
-                }
-                truncated |= trimmed_more;
-                if json_len_chars(&result) > limit {
-                    if compact_stats_by_type(&mut result) {
-                        truncated = true;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= compact_card_fields_at(value, &["cards"], 120, true, true, true);
                     }
-                }
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated));
-                }
-                let _ = attach_budget(&mut result, limit, truncated);
+                    if json_len_chars(value) > limit {
+                        if minimalize_cards_at(value, &["cards"]) {
+                            changed = true;
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        if retain_one_at(value, &["cards"], true) {
+                            changed = true;
+                            recompute_card_stats(value, "cards");
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["cards"]);
+                        recompute_card_stats(value, "cards");
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= compact_stats_by_type(value);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
+        }
+
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_context", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_context", result, warnings, Vec::new())
+        }
+    }
+
+    fn tool_branchmind_think_pipeline(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let target = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let branch_override = match optional_string(args_obj, "branch") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let trace_doc = match optional_string(args_obj, "trace_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let graph_doc = match optional_string(args_obj, "graph_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let notes_doc = match optional_string(args_obj, "notes_doc") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        if let Err(resp) = ensure_nonempty_doc(&trace_doc, "trace_doc") {
+            return resp;
+        }
+        if let Err(resp) = ensure_nonempty_doc(&graph_doc, "graph_doc") {
+            return resp;
+        }
+        if let Err(resp) = ensure_nonempty_doc(&notes_doc, "notes_doc") {
+            return resp;
+        }
+
+        let scope = match self.resolve_reasoning_scope(
+            &workspace,
+            ReasoningScopeInput {
+                target,
+                branch: branch_override,
+                notes_doc,
+                graph_doc,
+                trace_doc,
+            },
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let status_map = match args_obj.get("status") {
+            None => std::collections::BTreeMap::new(),
+            Some(Value::Object(obj)) => obj
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+                .collect::<std::collections::BTreeMap<String, String>>(),
+            Some(Value::Null) => std::collections::BTreeMap::new(),
+            Some(_) => return ai_error("INVALID_INPUT", "status must be an object"),
+        };
+
+        let note_decision = args_obj
+            .get("note_decision")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let note_title = match optional_string(args_obj, "note_title") {
+            Ok(v) => v.unwrap_or_else(|| "Decision".to_string()),
+            Err(resp) => return resp,
+        };
+        let note_format = match optional_string(args_obj, "note_format") {
+            Ok(v) => v.unwrap_or_else(|| "text".to_string()),
+            Err(resp) => return resp,
+        };
+
+        let stages = [
+            ("frame", args_obj.get("frame")),
+            ("hypothesis", args_obj.get("hypothesis")),
+            ("test", args_obj.get("test")),
+            ("evidence", args_obj.get("evidence")),
+            ("decision", args_obj.get("decision")),
+        ];
+
+        let mut created = Vec::new();
+        let mut prev_card_id: Option<String> = None;
+        let mut decision_summary: Option<String> = None;
+        let mut decision_card_id: Option<String> = None;
+        let mut aggregate_nodes = 0usize;
+        let mut aggregate_edges = 0usize;
+        let mut last_seq: Option<i64> = None;
+
+        for (stage, value) in stages {
+            let Some(value) = value else {
+                continue;
+            };
+            if value.is_null() {
+                continue;
+            }
+            let mut parsed = match parse_think_card(&workspace, value.clone()) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            parsed.card_type = stage.to_string();
+            if let Some(status) = status_map.get(stage) {
+                parsed.status = status.clone();
+            }
+            let supports = prev_card_id.clone().into_iter().collect::<Vec<_>>();
+            let (card_id, commit) = match self.commit_think_card_internal(
+                &workspace,
+                &scope.branch,
+                &scope.trace_doc,
+                &scope.graph_doc,
+                parsed.clone(),
+                &supports,
+                &[],
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            aggregate_nodes += commit.nodes_upserted;
+            aggregate_edges += commit.edges_upserted;
+            if let Some(seq) = commit.last_seq {
+                last_seq = Some(seq);
+            }
+            if stage == "decision" {
+                decision_card_id = Some(card_id.clone());
+                decision_summary = parsed
+                    .title
+                    .clone()
+                    .or(parsed.text.clone())
+                    .map(|s| s.trim().to_string());
+            }
+            created.push(json!({
+                "stage": stage,
+                "card_id": card_id,
+                "inserted": commit.inserted,
+                "edges_upserted": commit.edges_upserted,
+                "last_seq": commit.last_seq
+            }));
+            prev_card_id = Some(card_id);
+        }
+
+        if created.is_empty() {
+            return ai_error("INVALID_INPUT", "pipeline requires at least one stage");
+        }
+
+        let mut decision_note = Value::Null;
+        if note_decision {
+            if let (Some(card_id), Some(summary)) = (decision_card_id.clone(), decision_summary) {
+                let meta = json!({
+                    "source": "think_pipeline",
+                    "card_id": card_id,
+                    "stage": "decision"
+                })
+                .to_string();
+                let content = format!("Decision ({card_id}): {summary}");
+                let entry = match self.store.doc_append_note(
+                    &workspace,
+                    &scope.branch,
+                    &scope.notes_doc,
+                    Some(note_title),
+                    Some(note_format),
+                    Some(meta),
+                    content,
+                ) {
+                    Ok(v) => v,
+                    Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                decision_note = json!({
+                    "seq": entry.seq,
+                    "ts": ts_ms_to_rfc3339(entry.ts_ms),
+                    "ts_ms": entry.ts_ms,
+                    "doc": entry.doc,
+                    "card_id": card_id
+                });
             }
         }
 
-        ai_ok("branchmind_think_context", result)
+        ai_ok(
+            "branchmind_think_pipeline",
+            json!({
+                "workspace": workspace.as_str(),
+                "branch": scope.branch,
+                "trace_doc": scope.trace_doc,
+                "graph_doc": scope.graph_doc,
+                "notes_doc": scope.notes_doc,
+                "cards": created,
+                "graph_applied": {
+                    "nodes_upserted": aggregate_nodes,
+                    "edges_upserted": aggregate_edges
+                },
+                "last_seq": last_seq,
+                "decision_note": decision_note
+            }),
+        )
     }
 
     fn tool_branchmind_think_add_typed(
@@ -8232,9 +9168,7 @@ impl McpServer {
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             if after < before {
                 if let Some(next_cursor) = result
                     .get("cards")
@@ -8262,9 +9196,7 @@ impl McpServer {
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "cards", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -8337,16 +9269,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "errors", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "errors", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -8719,8 +9647,25 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |=
+                    compact_card_fields_at(&mut result, &["candidates"], 180, true, true, false);
+                for path in [
+                    &["frontier", "tests"][..],
+                    &["frontier", "subgoals"][..],
+                    &["frontier", "questions"][..],
+                    &["frontier", "hypotheses"][..],
+                ] {
+                    truncated |= compact_card_fields_at(&mut result, path, 180, true, true, false);
+                }
+            }
+
             let candidates_trimmed =
                 trim_array_to_budget(&mut result, &["candidates"], limit, false);
             truncated |= candidates_trimmed;
@@ -8746,45 +9691,68 @@ impl McpServer {
                 }
             }
 
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let mut trimmed_more = false;
-                let more_candidates =
-                    trim_array_to_budget(&mut result, &["candidates"], limit, false);
-                trimmed_more |= more_candidates;
-                if more_candidates {
-                    recompute_card_stats(&mut result, "candidates");
-                }
-                if json_len_chars(&result) > limit {
-                    for path in [
-                        &["frontier", "tests"][..],
-                        &["frontier", "subgoals"][..],
-                        &["frontier", "questions"][..],
-                        &["frontier", "hypotheses"][..],
-                    ] {
-                        if json_len_chars(&result) <= limit {
-                            break;
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |=
+                            compact_card_fields_at(value, &["candidates"], 120, true, true, true);
+                        for path in [
+                            &["frontier", "tests"][..],
+                            &["frontier", "subgoals"][..],
+                            &["frontier", "questions"][..],
+                            &["frontier", "hypotheses"][..],
+                        ] {
+                            changed |= compact_card_fields_at(value, path, 120, true, true, true);
                         }
-                        trimmed_more |= trim_array_to_budget(&mut result, path, limit, false);
                     }
-                }
-                if json_len_chars(&result) > limit {
-                    if compact_stats_by_type(&mut result) {
-                        trimmed_more = true;
+                    if json_len_chars(value) > limit {
+                        if minimalize_cards_at(value, &["candidates"]) {
+                            changed = true;
+                        }
+                        for path in [
+                            &["frontier", "tests"][..],
+                            &["frontier", "subgoals"][..],
+                            &["frontier", "questions"][..],
+                            &["frontier", "hypotheses"][..],
+                        ] {
+                            if minimalize_cards_at(value, path) {
+                                changed = true;
+                            }
+                        }
                     }
-                }
-                truncated |= trimmed_more;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated));
-                }
-                let _ = attach_budget(&mut result, limit, truncated);
-            }
+                    if json_len_chars(value) > limit {
+                        if retain_one_at(value, &["candidates"], true) {
+                            changed = true;
+                            recompute_card_stats(value, "candidates");
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["frontier"],
+                            &["tests", "subgoals", "questions", "hypotheses"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["candidates"]);
+                        recompute_card_stats(value, "candidates");
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= compact_stats_by_type(value);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_pack", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_pack", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_pack", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_think_link(&mut self, args: Value) -> Value {
@@ -9207,16 +10175,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "pins", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "pins", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -9446,16 +10410,12 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (_used, truncated) = enforce_graph_list_budget(&mut result, "groups", limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
+            set_truncated_flag(&mut result, truncated);
             let used = attach_budget(&mut result, limit, truncated);
             if used > limit {
                 let (_used2, truncated2) = enforce_graph_list_budget(&mut result, "groups", limit);
                 let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
+                set_truncated_flag(&mut result, truncated_final);
                 let _ = attach_budget(&mut result, limit, truncated_final);
             }
         }
@@ -10053,8 +11013,32 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |=
+                    compact_card_fields_at(&mut result, &["candidates"], 180, true, true, false);
+                for path in [
+                    &["frontier", "tests"][..],
+                    &["frontier", "subgoals"][..],
+                    &["frontier", "questions"][..],
+                    &["frontier", "hypotheses"][..],
+                ] {
+                    truncated |= compact_card_fields_at(&mut result, path, 180, true, true, false);
+                }
+                truncated |= compact_doc_entries_at(
+                    &mut result,
+                    &["trace", "entries"],
+                    256,
+                    true,
+                    false,
+                    true,
+                );
+            }
             truncated |= trim_array_to_budget(&mut result, &["candidates"], limit, false);
             if json_len_chars(&result) > limit {
                 let trimmed_trace =
@@ -10084,49 +11068,81 @@ impl McpServer {
                 }
             }
 
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
-            }
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let mut trimmed_more = false;
-                trimmed_more |= trim_array_to_budget(&mut result, &["candidates"], limit, false);
-                if json_len_chars(&result) > limit {
-                    let trimmed_trace =
-                        trim_array_to_budget(&mut result, &["trace", "entries"], limit, true);
-                    if trimmed_trace {
-                        refresh_trace_pagination_count(&mut result);
-                        trimmed_more = true;
-                    }
-                }
-                if json_len_chars(&result) > limit {
-                    for path in [
-                        &["frontier", "tests"][..],
-                        &["frontier", "subgoals"][..],
-                        &["frontier", "questions"][..],
-                        &["frontier", "hypotheses"][..],
-                    ] {
-                        if json_len_chars(&result) <= limit {
-                            break;
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |=
+                            compact_card_fields_at(value, &["candidates"], 120, true, true, true);
+                        for path in [
+                            &["frontier", "tests"][..],
+                            &["frontier", "subgoals"][..],
+                            &["frontier", "questions"][..],
+                            &["frontier", "hypotheses"][..],
+                        ] {
+                            changed |= compact_card_fields_at(value, path, 120, true, true, true);
                         }
-                        trimmed_more |= trim_array_to_budget(&mut result, path, limit, false);
+                        changed |= compact_doc_entries_at(
+                            value,
+                            &["trace", "entries"],
+                            128,
+                            true,
+                            true,
+                            true,
+                        );
                     }
-                }
-                if json_len_chars(&result) > limit {
-                    if compact_trace_pagination(&mut result) {
-                        refresh_trace_pagination_count(&mut result);
-                        trimmed_more = true;
+                    if json_len_chars(value) > limit {
+                        if minimalize_cards_at(value, &["candidates"]) {
+                            changed = true;
+                        }
+                        for path in [
+                            &["frontier", "tests"][..],
+                            &["frontier", "subgoals"][..],
+                            &["frontier", "questions"][..],
+                            &["frontier", "hypotheses"][..],
+                        ] {
+                            if minimalize_cards_at(value, path) {
+                                changed = true;
+                            }
+                        }
+                        if minimalize_doc_entries_at(value, &["trace", "entries"]) {
+                            changed = true;
+                        }
                     }
-                }
-                truncated |= trimmed_more;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated));
-                }
-                let _ = attach_budget(&mut result, limit, truncated);
-            }
+                    if json_len_chars(value) > limit {
+                        if retain_one_at(value, &["candidates"], true) {
+                            changed = true;
+                        }
+                        if retain_one_at(value, &["trace", "entries"], true) {
+                            changed = true;
+                            refresh_trace_pagination_count(value);
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["frontier"],
+                            &["tests", "subgoals", "questions", "hypotheses"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["trace"], &["pagination"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["trace"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_think_watch", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_watch", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_watch", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_trace_step(&mut self, args: Value) -> Value {
@@ -10533,23 +11549,61 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |=
+                    compact_doc_entries_at(&mut result, &["entries"], 256, true, false, true);
             }
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-                let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
+            let (_used, trimmed_fields) = enforce_max_chars_budget(&mut result, limit);
+            truncated |= trimmed_fields;
+            if json_len_chars(&result) > limit {
+                truncated |= trim_array_to_budget(&mut result, &["entries"], limit, true);
+                refresh_pagination_count(&mut result, &["entries"], &["pagination"]);
+            }
+            if json_len_chars(&result) > limit {
+                if minimalize_doc_entries_at(&mut result, &["entries"]) {
+                    truncated = true;
+                    minimal = true;
                 }
-                let _ = attach_budget(&mut result, limit, truncated_final);
             }
+            if json_len_chars(&result) > limit {
+                if retain_one_at(&mut result, &["entries"], true) {
+                    truncated = true;
+                    minimal = true;
+                    refresh_pagination_count(&mut result, &["entries"], &["pagination"]);
+                }
+            }
+            if json_len_chars(&result) > limit {
+                truncated |= drop_fields_at(
+                    &mut result,
+                    &["pagination"],
+                    &["cursor", "next_cursor", "has_more", "limit"],
+                );
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["pagination"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_trace_hydrate", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_trace_hydrate", result)
+        } else {
+            ai_ok_with_warnings("branchmind_trace_hydrate", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_trace_validate(&mut self, args: Value) -> Value {
@@ -10654,23 +11708,38 @@ impl McpServer {
             "truncated": false
         });
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let (_used, truncated) = enforce_max_chars_budget(&mut result, limit);
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("truncated".to_string(), Value::Bool(truncated));
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let (_used, trimmed_fields) = enforce_max_chars_budget(&mut result, limit);
+            truncated |= trimmed_fields;
+            if json_len_chars(&result) > limit {
+                let (_used, errors_trimmed) =
+                    enforce_graph_list_budget(&mut result, "errors", limit);
+                truncated |= errors_trimmed;
             }
-            let used = attach_budget(&mut result, limit, truncated);
-            if used > limit {
-                let (_used2, truncated2) = enforce_max_chars_budget(&mut result, limit);
-                let truncated_final = truncated || truncated2;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_final));
-                }
-                let _ = attach_budget(&mut result, limit, truncated_final);
-            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["errors"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_trace_validate", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_trace_validate", result)
+        } else {
+            ai_ok_with_warnings("branchmind_trace_validate", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_context_pack(&mut self, args: Value) -> Value {
@@ -10896,54 +11965,135 @@ impl McpServer {
 
         redact_value(&mut result, 6);
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let mut truncated_any = false;
-            for _ in 0..4 {
-                let before = result
-                    .get("cards")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.len())
-                    .unwrap_or(0);
-                let (_used, cards_truncated) =
-                    enforce_graph_list_budget(&mut result, "cards", limit);
-                let after = result
-                    .get("cards")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.len())
-                    .unwrap_or(0);
-                truncated_any = truncated_any || cards_truncated;
-                if after < before {
-                    let mut by_type = std::collections::BTreeMap::<String, u64>::new();
-                    if let Some(arr) = result.get("cards").and_then(|v| v.as_array()) {
-                        for card in arr {
-                            if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
-                                *by_type.entry(ty.to_string()).or_insert(0) += 1;
-                            }
-                        }
-                    }
-                    if let Some(stats) = result.get_mut("stats").and_then(|v| v.as_object_mut()) {
-                        stats.insert(
-                            "cards".to_string(),
-                            Value::Number(serde_json::Number::from(after as u64)),
-                        );
-                        stats.insert("by_type".to_string(), json!(by_type));
-                    }
-                }
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
 
-                let (_used, export_truncated) =
-                    enforce_branchmind_export_budget(&mut result, limit);
-                truncated_any = truncated_any || export_truncated;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_any));
-                }
-                let used = attach_budget(&mut result, limit, truncated_any);
-                if used <= limit {
-                    break;
+            if json_len_chars(&result) > limit {
+                truncated |= compact_doc_entries_at(
+                    &mut result,
+                    &["notes", "entries"],
+                    256,
+                    true,
+                    false,
+                    true,
+                );
+                truncated |= compact_doc_entries_at(
+                    &mut result,
+                    &["trace", "entries"],
+                    256,
+                    true,
+                    false,
+                    true,
+                );
+                truncated |=
+                    compact_card_fields_at(&mut result, &["cards"], 180, true, true, false);
+            }
+
+            let before_cards = result
+                .get("cards")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let (_used, cards_truncated) = enforce_graph_list_budget(&mut result, "cards", limit);
+            let after_cards = result
+                .get("cards")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            truncated |= cards_truncated;
+            if after_cards < before_cards {
+                recompute_card_stats(&mut result, "cards");
+            }
+
+            if json_len_chars(&result) > limit {
+                truncated |= trim_array_to_budget(&mut result, &["notes", "entries"], limit, true);
+                refresh_pagination_count(
+                    &mut result,
+                    &["notes", "entries"],
+                    &["notes", "pagination"],
+                );
+            }
+            if json_len_chars(&result) > limit {
+                truncated |= trim_array_to_budget(&mut result, &["trace", "entries"], limit, true);
+                refresh_pagination_count(
+                    &mut result,
+                    &["trace", "entries"],
+                    &["trace", "pagination"],
+                );
+            }
+            if json_len_chars(&result) > limit {
+                if compact_stats_by_type(&mut result) {
+                    truncated = true;
                 }
             }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= compact_doc_entries_at(
+                            value,
+                            &["notes", "entries"],
+                            128,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_doc_entries_at(
+                            value,
+                            &["trace", "entries"],
+                            128,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(value, &["cards"], 120, true, true, true);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= minimalize_doc_entries_at(value, &["notes", "entries"]);
+                        changed |= minimalize_doc_entries_at(value, &["trace", "entries"]);
+                        changed |= minimalize_cards_at(value, &["cards"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["notes", "entries"], true);
+                        changed |= retain_one_at(value, &["trace", "entries"], true);
+                        changed |= retain_one_at(value, &["cards"], true);
+                        refresh_pagination_count(
+                            value,
+                            &["notes", "entries"],
+                            &["notes", "pagination"],
+                        );
+                        refresh_pagination_count(
+                            value,
+                            &["trace", "entries"],
+                            &["trace", "pagination"],
+                        );
+                        recompute_card_stats(value, "cards");
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |=
+                            drop_fields_at(value, &["notes"], &["pagination", "branch", "doc"]);
+                        changed |=
+                            drop_fields_at(value, &["trace"], &["pagination", "branch", "doc"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["docs"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_context_pack", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_context_pack", result)
+        } else {
+            ai_ok_with_warnings("branchmind_context_pack", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_export(&mut self, args: Value) -> Value {
@@ -11158,22 +12308,118 @@ impl McpServer {
 
         redact_value(&mut result, 6);
 
+        let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
-            let mut truncated_any = false;
-            for _ in 0..4 {
-                let (_used, truncated) = enforce_branchmind_export_budget(&mut result, limit);
-                truncated_any = truncated_any || truncated;
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("truncated".to_string(), Value::Bool(truncated_any));
-                }
-                let used = attach_budget(&mut result, limit, truncated_any);
-                if used <= limit {
-                    break;
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |= compact_doc_entries_at(
+                    &mut result,
+                    &["notes", "entries"],
+                    256,
+                    true,
+                    false,
+                    true,
+                );
+                truncated |= compact_doc_entries_at(
+                    &mut result,
+                    &["trace", "entries"],
+                    256,
+                    true,
+                    false,
+                    true,
+                );
+            }
+            if json_len_chars(&result) > limit {
+                truncated |= trim_array_to_budget(&mut result, &["notes", "entries"], limit, true);
+                refresh_pagination_count(
+                    &mut result,
+                    &["notes", "entries"],
+                    &["notes", "pagination"],
+                );
+            }
+            if json_len_chars(&result) > limit {
+                truncated |= trim_array_to_budget(&mut result, &["trace", "entries"], limit, true);
+                refresh_pagination_count(
+                    &mut result,
+                    &["trace", "entries"],
+                    &["trace", "pagination"],
+                );
+            }
+            if json_len_chars(&result) > limit {
+                if compact_target_for_budget(&mut result) {
+                    truncated = true;
                 }
             }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= compact_doc_entries_at(
+                            value,
+                            &["notes", "entries"],
+                            128,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_doc_entries_at(
+                            value,
+                            &["trace", "entries"],
+                            128,
+                            true,
+                            true,
+                            true,
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= minimalize_doc_entries_at(value, &["notes", "entries"]);
+                        changed |= minimalize_doc_entries_at(value, &["trace", "entries"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["notes", "entries"], true);
+                        changed |= retain_one_at(value, &["trace", "entries"], true);
+                        refresh_pagination_count(
+                            value,
+                            &["notes", "entries"],
+                            &["notes", "pagination"],
+                        );
+                        refresh_pagination_count(
+                            value,
+                            &["trace", "entries"],
+                            &["trace", "pagination"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |=
+                            drop_fields_at(value, &["notes"], &["pagination", "branch", "doc"]);
+                        changed |=
+                            drop_fields_at(value, &["trace"], &["pagination", "branch", "doc"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["reasoning_ref"], &["graph_doc"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["trace"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["notes"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
         }
 
-        ai_ok("branchmind_export", result)
+        if warnings.is_empty() {
+            ai_ok("branchmind_export", result)
+        } else {
+            ai_ok_with_warnings("branchmind_export", result, warnings, Vec::new())
+        }
     }
 }
 
@@ -11671,6 +12917,56 @@ fn tool_definitions() -> Vec<Value> {
                     "blocks": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["workspace", "card"]
+            }
+        }),
+        json!({
+            "name": "branchmind_think_pipeline",
+            "description": "Canonical pipeline: frame → hypothesis → test → evidence → decision (auto-link + optional decision note).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "notes_doc": { "type": "string" },
+                    "frame": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "hypothesis": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "test": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "evidence": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "decision": {
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "status": { "type": "object" },
+                    "note_decision": { "type": "boolean" },
+                    "note_title": { "type": "string" },
+                    "note_format": { "type": "string" }
+                },
+                "required": ["workspace"]
             }
         }),
         json!({
@@ -12278,6 +13574,35 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "tasks_bootstrap",
+            "description": "One-call task bootstrap: create task + steps + checkpoints.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "parent": { "type": "string" },
+                    "plan_title": { "type": "string" },
+                    "task_title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": { "type": "string" },
+                                "success_criteria": { "type": "array", "items": { "type": "string" } },
+                                "tests": { "type": "array", "items": { "type": "string" } },
+                                "blockers": { "type": "array", "items": { "type": "string" } }
+                            },
+                            "required": ["title", "success_criteria", "tests"]
+                        }
+                    }
+                },
+                "required": ["workspace", "task_title", "steps"]
+            }
+        }),
+        json!({
             "name": "tasks_decompose",
             "description": "Add steps to a task.",
             "inputSchema": {
@@ -12597,6 +13922,7 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "workspace": { "type": "string" },
                     "atomic": { "type": "boolean" },
+                    "compact": { "type": "boolean" },
                     "operations": {
                         "type": "array",
                         "items": {
@@ -12788,6 +14114,23 @@ fn tool_definitions() -> Vec<Value> {
                     "task": { "type": "string" },
                     "plan": { "type": "string" },
                     "events_limit": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_resume_pack",
+            "description": "Unified resume: task radar + timeline + decisions/evidence/blockers.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "events_limit": { "type": "integer" },
+                    "decisions_limit": { "type": "integer" },
+                    "evidence_limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]
             }
@@ -13976,17 +15319,80 @@ fn suggest_call(target: &str, reason: &str, priority: &str, params: Value) -> Va
     })
 }
 
-fn ai_ok_with(intent: &str, result: Value, suggestions: Vec<Value>) -> Value {
+fn warning(code: &str, message: &str, recovery: &str) -> Value {
+    json!({
+        "code": code,
+        "message": message,
+        "recovery": recovery
+    })
+}
+
+fn budget_warning_truncated() -> Value {
+    warning(
+        "BUDGET_TRUNCATED",
+        "Response truncated to fit max_chars",
+        "Increase max_chars or reduce limit parameters to receive more detail.",
+    )
+}
+
+fn budget_warning_minimal() -> Value {
+    warning(
+        "BUDGET_MINIMAL",
+        "Response reduced to minimal signal",
+        "Increase max_chars or narrow filters/limits to recover full context.",
+    )
+}
+
+fn budget_warning_clamped() -> Value {
+    warning(
+        "BUDGET_MIN_CLAMPED",
+        "max_chars below minimum; clamped to minimal safe value",
+        "Increase max_chars to avoid clamping and receive a fuller payload.",
+    )
+}
+
+fn budget_warnings(truncated: bool, minimal: bool, clamped: bool) -> Vec<Value> {
+    let mut out = Vec::new();
+    if truncated {
+        out.push(budget_warning_truncated());
+    }
+    if minimal {
+        out.push(budget_warning_minimal());
+    }
+    if clamped {
+        out.push(budget_warning_clamped());
+    }
+    out
+}
+
+fn set_truncated_flag(value: &mut Value, truncated: bool) {
+    if let Some(obj) = value.as_object_mut() {
+        if obj.contains_key("truncated") {
+            obj.insert("truncated".to_string(), Value::Bool(truncated));
+        }
+    }
+}
+
+fn ai_ok_with_warnings(
+    intent: &str,
+    result: Value,
+    warnings: Vec<Value>,
+    suggestions: Vec<Value>,
+) -> Value {
     json!({
         "success": true,
         "intent": intent,
         "result": result,
-        "warnings": [],
+        "warnings": warnings,
         "suggestions": suggestions,
         "context": {},
         "error": null,
         "timestamp": now_rfc3339(),
     })
+}
+
+fn ai_ok_with(intent: &str, result: Value, suggestions: Vec<Value>) -> Value {
+    ai_ok_with_warnings(intent, result, Vec::new(), suggestions)
 }
 
 fn ai_error_with(
@@ -14038,6 +15444,30 @@ fn json_len_chars(value: &Value) -> usize {
     serde_json::to_string(value).map(|s| s.len()).unwrap_or(0)
 }
 
+const MIN_BUDGET_CHARS: usize = 2;
+
+fn payload_len_chars(value: &Value) -> usize {
+    match value {
+        Value::Object(map) => {
+            if !map.contains_key("budget") {
+                return json_len_chars(value);
+            }
+            let mut cloned = map.clone();
+            cloned.remove("budget");
+            json_len_chars(&Value::Object(cloned))
+        }
+        _ => json_len_chars(value),
+    }
+}
+
+fn clamp_budget_max(max_chars: usize) -> (usize, bool) {
+    if max_chars < MIN_BUDGET_CHARS {
+        (MIN_BUDGET_CHARS, true)
+    } else {
+        (max_chars, false)
+    }
+}
+
 fn truncate_string(value: &str, max_chars: usize) -> String {
     if value.len() <= max_chars {
         return value.to_string();
@@ -14047,12 +15477,393 @@ fn truncate_string(value: &str, max_chars: usize) -> String {
     out
 }
 
+fn get_mut_at<'a>(value: &'a mut Value, path: &[&str]) -> Option<&'a mut Value> {
+    if path.is_empty() {
+        return Some(value);
+    }
+    let mut current = value;
+    for key in path {
+        let next = current.as_object_mut()?.get_mut(*key)?;
+        current = next;
+    }
+    Some(current)
+}
+
+fn get_object_mut_at<'a>(
+    value: &'a mut Value,
+    path: &[&str],
+) -> Option<&'a mut serde_json::Map<String, Value>> {
+    get_mut_at(value, path)?.as_object_mut()
+}
+
+fn get_array_mut_at<'a>(value: &'a mut Value, path: &[&str]) -> Option<&'a mut Vec<Value>> {
+    get_mut_at(value, path)?.as_array_mut()
+}
+
+fn drop_fields_at(value: &mut Value, path: &[&str], fields: &[&str]) -> bool {
+    let Some(obj) = get_object_mut_at(value, path) else {
+        return false;
+    };
+    let mut changed = false;
+    for field in fields {
+        if obj.remove(*field).is_some() {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn retain_one_at(value: &mut Value, path: &[&str], keep_last: bool) -> bool {
+    let Some(arr) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    if arr.len() <= 1 {
+        return false;
+    }
+    let kept = if keep_last {
+        arr.pop().unwrap()
+    } else {
+        arr.remove(0)
+    };
+    arr.clear();
+    arr.push(kept);
+    true
+}
+
+fn compact_doc_entries_at(
+    value: &mut Value,
+    path: &[&str],
+    max_content: usize,
+    drop_meta: bool,
+    drop_title: bool,
+    drop_format: bool,
+) -> bool {
+    let Some(entries) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    let mut changed = false;
+    for entry in entries.iter_mut() {
+        let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "note" {
+            if let Some(content) = entry.get("content").and_then(|v| v.as_str()) {
+                let shorter = truncate_string(content, max_content);
+                if shorter != content {
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert("content".to_string(), Value::String(shorter));
+                    }
+                    changed = true;
+                }
+            }
+            if drop_meta {
+                if let Some(obj) = entry.as_object_mut() {
+                    if obj.contains_key("meta") {
+                        obj.insert("meta".to_string(), Value::Null);
+                        changed = true;
+                    }
+                }
+            }
+            if drop_title {
+                changed |= drop_fields_at(entry, &[], &["title"]);
+            }
+            if drop_format {
+                changed |= drop_fields_at(entry, &[], &["format"]);
+            }
+        }
+    }
+    changed
+}
+
+fn minimalize_doc_entries_at(value: &mut Value, path: &[&str]) -> bool {
+    let Some(entries) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    if entries.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for entry in entries.iter_mut() {
+        let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("note");
+        let mut out = serde_json::Map::new();
+        if let Some(seq) = entry.get("seq") {
+            out.insert("seq".to_string(), seq.clone());
+        }
+        if let Some(ts_ms) = entry.get("ts_ms") {
+            out.insert("ts_ms".to_string(), ts_ms.clone());
+        }
+        out.insert("kind".to_string(), Value::String(kind.to_string()));
+        if kind == "note" {
+            if let Some(title) = entry.get("title").and_then(|v| v.as_str()) {
+                out.insert(
+                    "title".to_string(),
+                    Value::String(truncate_string(title, 64)),
+                );
+            } else if let Some(content) = entry.get("content").and_then(|v| v.as_str()) {
+                out.insert(
+                    "content".to_string(),
+                    Value::String(truncate_string(content, 64)),
+                );
+            }
+        } else {
+            if let Some(event_type) = entry.get("event_type").and_then(|v| v.as_str()) {
+                out.insert(
+                    "event_type".to_string(),
+                    Value::String(truncate_string(event_type, 64)),
+                );
+            }
+            if let Some(task_id) = entry.get("task_id").and_then(|v| v.as_str()) {
+                out.insert("task_id".to_string(), Value::String(task_id.to_string()));
+            }
+            if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
+                out.insert("path".to_string(), Value::String(path.to_string()));
+            }
+        }
+        *entry = Value::Object(out);
+        changed = true;
+    }
+    changed
+}
+
+fn compact_card_fields_at(
+    value: &mut Value,
+    path: &[&str],
+    max_text: usize,
+    drop_meta: bool,
+    drop_tags: bool,
+    drop_status: bool,
+) -> bool {
+    let Some(cards) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    let mut changed = false;
+    for card in cards.iter_mut() {
+        if let Some(title) = card.get("title").and_then(|v| v.as_str()) {
+            let shorter = truncate_string(title, max_text);
+            if shorter != title {
+                if let Some(obj) = card.as_object_mut() {
+                    obj.insert("title".to_string(), Value::String(shorter));
+                }
+                changed = true;
+            }
+        }
+        if let Some(text) = card.get("text").and_then(|v| v.as_str()) {
+            let shorter = truncate_string(text, max_text);
+            if shorter != text {
+                if let Some(obj) = card.as_object_mut() {
+                    obj.insert("text".to_string(), Value::String(shorter));
+                }
+                changed = true;
+            }
+        }
+        if drop_meta {
+            if let Some(obj) = card.as_object_mut() {
+                if obj.contains_key("meta") {
+                    obj.insert("meta".to_string(), Value::Null);
+                    changed = true;
+                }
+            }
+        }
+        if drop_tags {
+            if let Some(obj) = card.as_object_mut() {
+                if obj.contains_key("tags") {
+                    obj.insert("tags".to_string(), Value::Array(Vec::new()));
+                    changed = true;
+                }
+            }
+        }
+        if drop_status {
+            changed |= drop_fields_at(card, &[], &["status"]);
+        }
+    }
+    changed
+}
+
+fn minimalize_cards_at(value: &mut Value, path: &[&str]) -> bool {
+    let Some(cards) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    if cards.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for card in cards.iter_mut() {
+        let mut out = serde_json::Map::new();
+        if let Some(id) = card.get("id") {
+            out.insert("id".to_string(), id.clone());
+        }
+        if let Some(ty) = card.get("type") {
+            out.insert("type".to_string(), ty.clone());
+        }
+        if let Some(title) = card.get("title").and_then(|v| v.as_str()) {
+            out.insert(
+                "title".to_string(),
+                Value::String(truncate_string(title, 80)),
+            );
+        } else if let Some(text) = card.get("text").and_then(|v| v.as_str()) {
+            out.insert("text".to_string(), Value::String(truncate_string(text, 80)));
+        }
+        if let Some(status) = card.get("status") {
+            out.insert("status".to_string(), status.clone());
+        }
+        *card = Value::Object(out);
+        changed = true;
+    }
+    changed
+}
+
+fn compact_event_payloads_at(value: &mut Value, path: &[&str]) -> bool {
+    let Some(events) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    let mut changed = false;
+    for event in events.iter_mut() {
+        if let Some(obj) = event.as_object_mut() {
+            if obj.remove("payload").is_some() {
+                changed = true;
+            }
+            if obj.remove("ts").is_some() {
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+fn retain_keys(obj: &mut serde_json::Map<String, Value>, keep: &[&str]) -> bool {
+    let mut changed = false;
+    let keys: Vec<String> = obj.keys().cloned().collect();
+    for key in keys {
+        if !keep.iter().any(|k| *k == key) {
+            obj.remove(&key);
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn compact_tasks_context_items(value: &mut Value) -> bool {
+    let mut changed = false;
+    if let Some(plans) = value.get_mut("plans").and_then(|v| v.as_array_mut()) {
+        for plan in plans {
+            if let Some(obj) = plan.as_object_mut() {
+                changed |= retain_keys(obj, &["id", "kind", "title", "revision", "plan_progress"]);
+            }
+        }
+    }
+    if let Some(tasks) = value.get_mut("tasks").and_then(|v| v.as_array_mut()) {
+        for task in tasks {
+            if let Some(obj) = task.as_object_mut() {
+                changed |= retain_keys(
+                    obj,
+                    &["id", "kind", "title", "status", "progress", "parent"],
+                );
+            }
+        }
+    }
+    changed
+}
+
+fn compact_tasks_context_pagination(value: &mut Value) -> bool {
+    let mut changed = false;
+    for key in ["plans_pagination", "tasks_pagination"] {
+        if let Some(obj) = value.get_mut(key).and_then(|v| v.as_object_mut()) {
+            changed |= retain_keys(obj, &["cursor", "next_cursor", "count", "limit"]);
+        }
+    }
+    changed
+}
+
+fn minimalize_task_events_at(value: &mut Value, path: &[&str]) -> bool {
+    let Some(events) = get_array_mut_at(value, path) else {
+        return false;
+    };
+    if events.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for event in events.iter_mut() {
+        if let Some(obj) = event.as_object_mut() {
+            changed |= retain_keys(obj, &["event_id", "ts_ms", "task", "type", "path"]);
+        }
+    }
+    changed
+}
+
+fn refresh_pagination_count(value: &mut Value, entries_path: &[&str], pagination_path: &[&str]) {
+    let count = value
+        .get(entries_path[0])
+        .and_then(|v| {
+            let mut current = v;
+            for key in &entries_path[1..] {
+                current = current.get(*key)?;
+            }
+            current.as_array()
+        })
+        .map(|arr| arr.len());
+    let Some(count) = count else {
+        return;
+    };
+    let Some(pagination) = get_object_mut_at(value, pagination_path) else {
+        return;
+    };
+    pagination.insert(
+        "count".to_string(),
+        Value::Number(serde_json::Number::from(count as u64)),
+    );
+}
+
+fn ensure_budget_limit<F>(
+    value: &mut Value,
+    max_chars: usize,
+    truncated: &mut bool,
+    minimal: &mut bool,
+    mut fallback: F,
+) -> usize
+where
+    F: FnMut(&mut Value) -> bool,
+{
+    let mut used = payload_len_chars(value);
+    if used > max_chars {
+        for _ in 0..6 {
+            if !fallback(value) {
+                break;
+            }
+            *truncated = true;
+            *minimal = true;
+            used = payload_len_chars(value);
+            if used <= max_chars {
+                break;
+            }
+        }
+    }
+    if used > max_chars && max_chars > 0 {
+        *truncated = true;
+        *minimal = true;
+        *value = minimal_signal_value(max_chars);
+    }
+    attach_budget(value, max_chars, *truncated)
+}
+
+fn minimal_signal_value(max_chars: usize) -> Value {
+    let candidates = [
+        json!({"signal": "minimal"}),
+        json!({"signal": "min"}),
+        json!({"min": true}),
+        json!({}),
+    ];
+    for candidate in candidates {
+        if json_len_chars(&candidate) <= max_chars {
+            return candidate;
+        }
+    }
+    json!({})
+}
+
 fn enforce_branchmind_show_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
     if max_chars == 0 {
         return (json_len_chars(value), false);
     }
 
-    let mut used = json_len_chars(value);
+    let mut used = payload_len_chars(value);
     if used <= max_chars {
         return (used, false);
     }
@@ -14248,7 +16059,12 @@ fn pop_array_at(value: &mut Value, path: &[&str], from_front: bool) -> bool {
     pop_array_at(next, &path[1..], from_front)
 }
 
-fn trim_array_to_budget(value: &mut Value, path: &[&str], max_chars: usize, from_front: bool) -> bool {
+fn trim_array_to_budget(
+    value: &mut Value,
+    path: &[&str],
+    max_chars: usize,
+    from_front: bool,
+) -> bool {
     if max_chars == 0 {
         return false;
     }
@@ -14430,140 +16246,6 @@ fn enforce_graph_query_budget(value: &mut Value, max_chars: usize) -> (usize, bo
     (used, truncated)
 }
 
-fn export_pop_first_entry(value: &mut Value, section_key: &str) -> bool {
-    let Some(section) = value.get_mut(section_key).and_then(|v| v.as_object_mut()) else {
-        return false;
-    };
-    let Some(entries) = section.get_mut("entries").and_then(|v| v.as_array_mut()) else {
-        return false;
-    };
-    if entries.is_empty() {
-        return false;
-    }
-
-    entries.remove(0);
-    let count = entries.len();
-    if let Some(pagination) = section
-        .get_mut("pagination")
-        .and_then(|v| v.as_object_mut())
-    {
-        pagination.insert(
-            "count".to_string(),
-            Value::Number(serde_json::Number::from(count as u64)),
-        );
-    }
-    true
-}
-
-fn enforce_branchmind_export_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
-    if max_chars == 0 {
-        return (json_len_chars(value), false);
-    }
-
-    let mut used = json_len_chars(value);
-    if used <= max_chars {
-        return (used, false);
-    }
-
-    // First pass: shrink note content/meta (high-yield) in both sections.
-    for section_key in ["notes", "trace"] {
-        if let Some(section) = value.get_mut(section_key).and_then(|v| v.as_object_mut()) {
-            if let Some(entries) = section.get_mut("entries").and_then(|v| v.as_array_mut()) {
-                for entry in entries.iter_mut() {
-                    if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
-                        continue;
-                    }
-                    let Some(content) = entry
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                    else {
-                        continue;
-                    };
-                    let shorter = truncate_string(&content, 256);
-                    if let Some(obj) = entry.as_object_mut() {
-                        obj.insert("content".to_string(), Value::String(shorter));
-                        if obj.contains_key("meta") {
-                            obj.insert("meta".to_string(), Value::Null);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let truncated = true;
-    used = json_len_chars(value);
-    if used <= max_chars {
-        return (used, truncated);
-    }
-
-    // Second pass: drop oldest entries (prefer notes, then trace) until within budget.
-    loop {
-        used = json_len_chars(value);
-        if used <= max_chars {
-            break;
-        }
-        if export_pop_first_entry(value, "notes") {
-            continue;
-        }
-        if export_pop_first_entry(value, "trace") {
-            continue;
-        }
-        break;
-    }
-
-    used = json_len_chars(value);
-    if used <= max_chars {
-        return (used, truncated);
-    }
-
-    // Third pass: remove non-essential fields in the nested payloads.
-    for section_key in ["notes", "trace"] {
-        if let Some(section) = value.get_mut(section_key).and_then(|v| v.as_object_mut()) {
-            section.remove("pagination");
-            section.remove("branch");
-            section.remove("doc");
-        }
-    }
-
-    used = json_len_chars(value);
-    if used <= max_chars {
-        return (used, truncated);
-    }
-
-    if let Some(target) = value.get_mut("target").and_then(|v| v.as_object_mut()) {
-        target.remove("created_at_ms");
-        target.remove("updated_at_ms");
-        target.remove("parent");
-    }
-    if let Some(refs) = value
-        .get_mut("reasoning_ref")
-        .and_then(|v| v.as_object_mut())
-    {
-        refs.remove("graph_doc");
-    }
-
-    used = json_len_chars(value);
-    if used <= max_chars {
-        return (used, truncated);
-    }
-
-    if let Some(obj) = value.as_object_mut() {
-        obj.remove("trace");
-    }
-    used = json_len_chars(value);
-    if used <= max_chars {
-        return (used, truncated);
-    }
-
-    if let Some(obj) = value.as_object_mut() {
-        obj.remove("notes");
-    }
-    used = json_len_chars(value);
-    (used, truncated)
-}
-
 fn enforce_max_chars_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {
     if max_chars == 0 {
         return (json_len_chars(value), false);
@@ -14632,7 +16314,7 @@ fn attach_budget(value: &mut Value, max_chars: usize, truncated: bool) -> usize 
                 budget.insert("truncated".to_string(), Value::Bool(truncated));
             }
         }
-        let next = json_len_chars(value);
+        let next = payload_len_chars(value);
         if next == used {
             break;
         }

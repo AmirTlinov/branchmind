@@ -26,6 +26,7 @@ Present:
 - tasks_radar
 - tasks_batch
 - tasks_block
+- tasks_bootstrap
 - tasks_close_task
 - tasks_complete
 - tasks_contract
@@ -41,6 +42,7 @@ Present:
 - tasks_progress
 - tasks_redo / tasks_undo
 - tasks_resume
+- tasks_resume_pack
 - tasks_scaffold
 - tasks_storage
 - tasks_task_add / tasks_task_define / tasks_task_delete
@@ -61,6 +63,7 @@ Present:
 - branchmind_graph_diff / branchmind_graph_merge
 - branchmind_graph_conflicts / branchmind_graph_conflict_show / branchmind_graph_conflict_resolve
 - branchmind_think_template / branchmind_think_card / branchmind_think_context
+- branchmind_think_pipeline
 - branchmind_commit / branchmind_log / branchmind_docs_list
 - branchmind_branch_delete / branchmind_branch_rename
 - branchmind_tag_create / branchmind_tag_list / branchmind_tag_delete

@@ -541,6 +541,35 @@ Semantics:
   - A repeated call with identical normalized `card` + edges must not create a second trace entry.
   - It must not create new graph versions if the effective node/edges are already semantically equal.
 
+### `branchmind_think_pipeline`
+
+Canonical multi-stage pipeline: `frame → hypothesis → test → evidence → decision`.
+
+Input:
+
+```json
+{
+  "workspace": "acme/repo",
+  "target": "TASK-001",
+  "frame": "...",
+  "hypothesis": "...",
+  "test": "...",
+  "evidence": "...",
+  "decision": "...",
+  "status": { "hypothesis": "open", "decision": "accepted" },
+  "note_decision": true,
+  "note_title": "Decision",
+  "note_format": "text"
+}
+```
+
+Semantics:
+
+- Any stage may be omitted, but at least one must be provided.
+- Each stage becomes a `think_card` with `card.type=<stage>`.
+- Each stage is auto-linked via `supports` to the previous stage (if present).
+- If `note_decision=true`, the decision is summarized into `notes_doc`.
+
 ### `branchmind_think_context`
 
 Return a bounded, low-noise “thinking context slice” for fast resumption.
@@ -734,3 +763,10 @@ Defaults:
 ## Output budgets
 
 All read-ish tools must accept `max_bytes`/`max_chars`/`max_lines` and return `truncated=true` when applicable.
+
+Budget invariants:
+
+- Responses include `budget` with `{ max_chars, used_chars, truncated }` when `max_chars` is supplied.
+- `used_chars` counts the serialized payload excluding the `budget` field.
+- If the payload is reduced past normal truncation, the server emits `BUDGET_MINIMAL` and may return a minimal signal.
+- If `max_chars` is below the minimum safe payload size, the server clamps and emits `BUDGET_MIN_CLAMPED`.
