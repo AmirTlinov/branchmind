@@ -43,10 +43,12 @@ Present:
 - tasks_redo / tasks_undo
 - tasks_resume
 - tasks_resume_pack
+- tasks_resume_super
 - tasks_scaffold
 - tasks_storage
 - tasks_task_add / tasks_task_define / tasks_task_delete
 - tasks_templates_list
+- tasks_macro_start / tasks_macro_close_step / tasks_macro_finish
 
 Planned:
 

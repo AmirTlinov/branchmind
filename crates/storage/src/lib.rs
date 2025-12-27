@@ -2408,6 +2408,58 @@ impl SqliteStore {
         Ok(row)
     }
 
+    pub fn reasoning_ref_get(
+        &self,
+        workspace: &WorkspaceId,
+        id: &str,
+        kind: TaskKind,
+    ) -> Result<Option<ReasoningRefRow>, StoreError> {
+        let exists = match kind {
+            TaskKind::Plan => self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM plans WHERE workspace=?1 AND id=?2",
+                    params![workspace.as_str(), id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some(),
+            TaskKind::Task => self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM tasks WHERE workspace=?1 AND id=?2",
+                    params![workspace.as_str(), id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some(),
+        };
+
+        if !exists {
+            return Err(StoreError::UnknownId);
+        }
+
+        self.conn
+            .query_row(
+                r#"
+                SELECT branch, notes_doc, graph_doc, trace_doc
+                FROM reasoning_refs
+                WHERE workspace=?1 AND id=?2
+                "#,
+                params![workspace.as_str(), id],
+                |row| {
+                    Ok(ReasoningRefRow {
+                        branch: row.get(0)?,
+                        notes_doc: row.get(1)?,
+                        graph_doc: row.get(2)?,
+                        trace_doc: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
     pub fn doc_append_note(
         &mut self,
         workspace: &WorkspaceId,

@@ -36,7 +36,7 @@ All stateful tools in this family operate inside an explicit `workspace` (a stab
 
 ## Payload budgets (v0)
 
-- `tasks_context`, `tasks_delta`, `tasks_radar`, `tasks_handoff`, `tasks_context_pack`, `tasks_resume_pack` accept optional `max_chars`.
+- `tasks_context`, `tasks_delta`, `tasks_radar`, `tasks_handoff`, `tasks_context_pack`, `tasks_resume_pack`, `tasks_resume_super` accept optional `max_chars`.
 - When `max_chars` is provided, responses include `budget` with `{ max_chars, used_chars, truncated }`.
 - If the payload must shrink past normal truncation, the response may drop optional fields and return a minimal signal plus warnings.
 
@@ -257,29 +257,43 @@ Semantics:
 
 Load a plan/task with optional timeline events.
 
-Input: `{ workspace, task?, plan?, events_limit? }`
+Input: `{ workspace, task?, plan?, events_limit?, read_only? }`
 
 Semantics:
 
-- If `task`/`plan` is provided and differs from current focus, focus is restored to the target.
+- If `read_only=true`, no focus/refs changes are performed.
+- If `read_only=false` and `task`/`plan` differs from current focus, focus is restored to the target.
 - When focus changes, response includes `focus_restored=true` and `focus_previous`.
 
 ### `tasks_resume_pack`
 
 Unified resume: radar + timeline + decisions/evidence/blockers (bounded).
 
-Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, max_chars? }`
+Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, max_chars?, read_only? }`
 
 Semantics:
 
-- If `task`/`plan` is provided and differs from current focus, focus is restored to the target.
+- If `read_only=true`, no focus/refs changes are performed.
+- If `read_only=false` and `task`/`plan` differs from current focus, focus is restored to the target.
 - When focus changes, response includes `focus_restored=true` and `focus_previous`.
+
+### `tasks_resume_super`
+
+Unified супер‑резюме: задачи + reasoning‑пакет + явные сигналы деградации/усечений.
+
+Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, blockers_limit?, notes_limit?, trace_limit?, cards_limit?, max_chars?, read_only? }`
+
+Semantics:
+
+- Если `read_only=true`, никаких изменений фокуса/refs; refs вычисляются детерминированно.
+- Возвращает `radar`, `steps`, `timeline`, `signals`, `memory` (notes/trace/cards), `degradation`.
+- `degradation.truncated_fields` перечисляет поля, которые были усечены из‑за бюджета.
 
 ### `tasks_context_pack`
 
 Bounded summary: radar + delta slice.
 
-Input: `{ workspace, task?, plan?, max_chars?, delta_limit? }`
+Input: `{ workspace, task?, plan?, max_chars?, delta_limit?, read_only? }`
 
 ### `tasks_mirror`
 
@@ -291,13 +305,43 @@ Input: `{ workspace, task?, plan?, path?, limit? }`
 
 Shift report: done/remaining/risks + radar core.
 
-Input: `{ workspace, task?, plan?, limit?, max_chars? }`
+Input: `{ workspace, task?, plan?, limit?, max_chars?, read_only? }`
 
 ### `tasks_lint`
 
 Read-only integrity checks for a plan/task.
 
 Input: `{ workspace, task?, plan? }`
+
+Semantics:
+
+- Возвращает `context_health` с причинами деградации контекста и рекомендациями восстановления.
+
+## DX‑макросы (v0.3)
+
+### `tasks_macro_start`
+
+One‑call запуск: создать задачу+шаги+гейты, вернуть супер‑резюме.
+
+Input: `{ workspace, plan?, parent?, plan_title?, task_title, description?, steps, resume_max_chars? }`
+
+Output: `{ task_id, plan_id?, steps, resume }`
+
+### `tasks_macro_close_step`
+
+One‑call закрытие шага: подтвердить чекпойнты → закрыть → вернуть супер‑резюме.
+
+Input: `{ workspace, task, path?|step_id?, checkpoints, expected_revision?, resume_max_chars? }`
+
+Output: `{ task, revision, step, resume }`
+
+### `tasks_macro_finish`
+
+One‑call завершение задачи: tasks_complete → handoff.
+
+Input: `{ workspace, task, status?, handoff_max_chars? }`
+
+Output: `{ task, status, handoff }`
 
 ## Subplans (v0.2)
 

@@ -674,8 +674,8 @@ Bounded resumption pack that merges **notes**, **trace**, and **graph cards** in
 
 Input (one of):
 
-- `{ workspace, target, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars? }`
-- `{ workspace, ref?, notes_doc?, trace_doc?, graph_doc?, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars? }`
+- `{ workspace, target, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars?, read_only? }`
+- `{ workspace, ref?, notes_doc?, trace_doc?, graph_doc?, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars?, read_only? }`
 
 Defaults:
 
@@ -693,10 +693,17 @@ Notes:
 
 - If `target` is provided but its scope is empty and the checkout branch has recent context,
   `bridge` is included with `{ checkout, docs, has }` and a `CONTEXT_EMPTY_FOR_TARGET` warning.
+- If `read_only=true`, the tool avoids creating missing reasoning refs and derives default docs from the target id.
 
 ### `branchmind_think_frontier` / `branchmind_think_next`
 
 Return prioritized candidates for next actions (by recency + status).
+
+Input: `{ workspace, target?, ref?, graph_doc?, limit_*?, max_chars? }`
+
+Notes:
+
+- If `max_chars` is set, responses include `budget.used_chars` and may truncate lists with minimal summaries.
 
 ### `branchmind_think_link` / `branchmind_think_set_status`
 

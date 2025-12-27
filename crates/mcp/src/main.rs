@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bm_core::ids::WorkspaceId;
-use bm_core::model::TaskKind;
+use bm_core::model::{ReasoningRef, TaskKind};
 use bm_core::paths::StepPath;
 use bm_storage::{SqliteStore, StoreError};
 use serde::Deserialize;
@@ -170,6 +170,9 @@ impl McpServer {
         match name {
             "tasks_create" => self.tool_tasks_create(args),
             "tasks_bootstrap" => self.tool_tasks_bootstrap(args),
+            "tasks_macro_start" => self.tool_tasks_macro_start(args),
+            "tasks_macro_close_step" => self.tool_tasks_macro_close_step(args),
+            "tasks_macro_finish" => self.tool_tasks_macro_finish(args),
             "tasks_decompose" => self.tool_tasks_decompose(args),
             "tasks_define" => self.tool_tasks_define(args),
             "tasks_note" => self.tool_tasks_note(args),
@@ -200,6 +203,7 @@ impl McpServer {
             "tasks_radar" => self.tool_tasks_radar(args),
             "tasks_resume" => self.tool_tasks_resume(args),
             "tasks_resume_pack" => self.tool_tasks_resume_pack(args),
+            "tasks_resume_super" => self.tool_tasks_resume_super(args),
             "tasks_context_pack" => self.tool_tasks_context_pack(args),
             "tasks_mirror" => self.tool_tasks_mirror(args),
             "tasks_handoff" => self.tool_tasks_handoff(args),
@@ -822,6 +826,242 @@ impl McpServer {
             ai_ok("tasks_bootstrap", result)
         } else {
             ai_ok_with_warnings("tasks_bootstrap", result, warnings, Vec::new())
+        }
+    }
+
+    fn tool_tasks_macro_start(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let resume_max_chars = match optional_usize(args_obj, "resume_max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let bootstrap = self.tool_tasks_bootstrap(args.clone());
+        if !bootstrap
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return bootstrap;
+        }
+
+        let task_id = match bootstrap
+            .get("result")
+            .and_then(|v| v.get("task"))
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+        {
+            Some(v) => v.to_string(),
+            None => return ai_error("STORE_ERROR", "bootstrap result missing task id"),
+        };
+
+        let plan_id = bootstrap
+            .get("result")
+            .and_then(|v| v.get("plan"))
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let mut resume_args = serde_json::Map::new();
+        resume_args.insert(
+            "workspace".to_string(),
+            args_obj.get("workspace").cloned().unwrap_or(Value::Null),
+        );
+        resume_args.insert("task".to_string(), Value::String(task_id.clone()));
+        if let Some(max_chars) = resume_max_chars {
+            resume_args.insert(
+                "max_chars".to_string(),
+                Value::Number(serde_json::Number::from(max_chars as u64)),
+            );
+        }
+
+        let resume = self.tool_tasks_resume_super(Value::Object(resume_args));
+        if !resume
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return resume;
+        }
+
+        let mut warnings = Vec::new();
+        if let Some(w) = bootstrap.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+        if let Some(w) = resume.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+
+        let steps = bootstrap
+            .get("result")
+            .and_then(|v| v.get("steps"))
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()));
+
+        let mut result = json!({
+            "task_id": task_id,
+            "steps": steps,
+            "resume": resume.get("result").cloned().unwrap_or(Value::Null)
+        });
+        if let Some(plan_id) = plan_id {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("plan_id".to_string(), Value::String(plan_id));
+            }
+        }
+
+        if warnings.is_empty() {
+            ai_ok("tasks_macro_start", result)
+        } else {
+            ai_ok_with_warnings("tasks_macro_start", result, warnings, Vec::new())
+        }
+    }
+
+    fn tool_tasks_macro_close_step(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let resume_max_chars = match optional_usize(args_obj, "resume_max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let close = self.tool_tasks_close_step(args.clone());
+        if !close
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return close;
+        }
+
+        let task_id = match close
+            .get("result")
+            .and_then(|v| v.get("task"))
+            .and_then(|v| v.as_str())
+        {
+            Some(v) => v.to_string(),
+            None => return ai_error("STORE_ERROR", "close_step result missing task id"),
+        };
+
+        let mut resume_args = serde_json::Map::new();
+        resume_args.insert(
+            "workspace".to_string(),
+            args_obj.get("workspace").cloned().unwrap_or(Value::Null),
+        );
+        resume_args.insert("task".to_string(), Value::String(task_id.clone()));
+        if let Some(max_chars) = resume_max_chars {
+            resume_args.insert(
+                "max_chars".to_string(),
+                Value::Number(serde_json::Number::from(max_chars as u64)),
+            );
+        }
+
+        let resume = self.tool_tasks_resume_super(Value::Object(resume_args));
+        if !resume
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return resume;
+        }
+
+        let mut warnings = Vec::new();
+        if let Some(w) = close.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+        if let Some(w) = resume.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+
+        let result = json!({
+            "task": task_id,
+            "revision": close.get("result").and_then(|v| v.get("revision")).cloned().unwrap_or(Value::Null),
+            "step": close.get("result").and_then(|v| v.get("step")).cloned().unwrap_or(Value::Null),
+            "resume": resume.get("result").cloned().unwrap_or(Value::Null)
+        });
+
+        if warnings.is_empty() {
+            ai_ok("tasks_macro_close_step", result)
+        } else {
+            ai_ok_with_warnings("tasks_macro_close_step", result, warnings, Vec::new())
+        }
+    }
+
+    fn tool_tasks_macro_finish(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let handoff_max_chars = match optional_usize(args_obj, "handoff_max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let complete = self.tool_tasks_complete(args.clone());
+        if !complete
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return complete;
+        }
+
+        let task_id = match complete
+            .get("result")
+            .and_then(|v| v.get("task"))
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+        {
+            Some(v) => v.to_string(),
+            None => return ai_error("STORE_ERROR", "complete result missing task id"),
+        };
+
+        let mut handoff_args = serde_json::Map::new();
+        handoff_args.insert(
+            "workspace".to_string(),
+            args_obj.get("workspace").cloned().unwrap_or(Value::Null),
+        );
+        handoff_args.insert("task".to_string(), Value::String(task_id.clone()));
+        handoff_args.insert("read_only".to_string(), Value::Bool(true));
+        if let Some(max_chars) = handoff_max_chars {
+            handoff_args.insert(
+                "max_chars".to_string(),
+                Value::Number(serde_json::Number::from(max_chars as u64)),
+            );
+        }
+
+        let handoff = self.tool_tasks_handoff(Value::Object(handoff_args));
+        if !handoff
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return handoff;
+        }
+
+        let mut warnings = Vec::new();
+        if let Some(w) = complete.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+        if let Some(w) = handoff.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+
+        let result = json!({
+            "task": task_id,
+            "status": complete
+                .get("result")
+                .and_then(|v| v.get("task"))
+                .and_then(|v| v.get("status"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "handoff": handoff.get("result").cloned().unwrap_or(Value::Null)
+        });
+
+        if warnings.is_empty() {
+            ai_ok("tasks_macro_finish", result)
+        } else {
+            ai_ok_with_warnings("tasks_macro_finish", result, warnings, Vec::new())
         }
     }
 
@@ -4386,6 +4626,10 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let (target_id, kind, focus) =
             match resolve_target_id(&mut self.store, &workspace, args_obj) {
@@ -4393,7 +4637,13 @@ impl McpServer {
                 Err(resp) => return resp,
             };
 
-        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+        let context = match build_radar_context_with_options(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
             Ok(v) => v,
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -4478,6 +4728,10 @@ impl McpServer {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(20);
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let explicit_target = args_obj
             .get("task")
@@ -4490,17 +4744,27 @@ impl McpServer {
                 Err(resp) => return resp,
             };
 
-        let (focus, focus_previous, focus_restored) = match restore_focus_for_explicit_target(
-            &mut self.store,
-            &workspace,
-            explicit_target,
-            focus,
-        ) {
-            Ok(v) => v,
-            Err(resp) => return resp,
+        let (focus, focus_previous, focus_restored) = if read_only {
+            (focus, None, false)
+        } else {
+            match restore_focus_for_explicit_target(
+                &mut self.store,
+                &workspace,
+                explicit_target,
+                focus,
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            }
         };
 
-        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+        let context = match build_radar_context_with_options(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
             Ok(v) => v,
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -4518,6 +4782,7 @@ impl McpServer {
             }
         };
         events.reverse();
+        sort_events_by_seq(&mut events);
 
         let mut steps_detail: Option<Value> = None;
         if kind == TaskKind::Task {
@@ -4623,6 +4888,10 @@ impl McpServer {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(5);
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let explicit_target = args_obj
             .get("task")
@@ -4635,17 +4904,27 @@ impl McpServer {
                 Err(resp) => return resp,
             };
 
-        let (focus, focus_previous, focus_restored) = match restore_focus_for_explicit_target(
-            &mut self.store,
-            &workspace,
-            explicit_target,
-            focus,
-        ) {
-            Ok(v) => v,
-            Err(resp) => return resp,
+        let (focus, focus_previous, focus_restored) = if read_only {
+            (focus, None, false)
+        } else {
+            match restore_focus_for_explicit_target(
+                &mut self.store,
+                &workspace,
+                explicit_target,
+                focus,
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            }
         };
 
-        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+        let context = match build_radar_context_with_options(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
             Ok(v) => v,
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -4663,15 +4942,30 @@ impl McpServer {
             }
         };
         events.reverse();
+        sort_events_by_seq(&mut events);
 
-        let reasoning = match self
-            .store
-            .ensure_reasoning_ref(&workspace, &target_id, kind)
-        {
+        let (reasoning, reasoning_exists) = match resolve_reasoning_ref_for_read(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
             Ok(v) => v,
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
+
+        let mut warnings = Vec::new();
+        if read_only && !reasoning_exists {
+            warnings.push(warning(
+                "REASONING_REF_DERIVED",
+                "Reasoning refs are derived because no stored ref exists for this target.",
+                "Call tasks_resume_pack with read_only=false or branchmind_think_pipeline to seed reasoning refs.",
+            ));
+        }
+
+        let mut reasoning_branch_missing = false;
 
         let mut decisions = Vec::new();
         if decisions_limit > 0 {
@@ -4693,7 +4987,19 @@ impl McpServer {
                 },
             ) {
                 Ok(v) => v,
-                Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+                Err(StoreError::UnknownBranch) => {
+                    if read_only {
+                        reasoning_branch_missing = true;
+                        bm_storage::GraphQuerySlice {
+                            nodes: Vec::new(),
+                            edges: Vec::new(),
+                            next_cursor: None,
+                            has_more: false,
+                        }
+                    } else {
+                        return unknown_branch_error(&workspace);
+                    }
+                }
                 Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
                 Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
             };
@@ -4720,7 +5026,19 @@ impl McpServer {
                 },
             ) {
                 Ok(v) => v,
-                Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+                Err(StoreError::UnknownBranch) => {
+                    if read_only {
+                        reasoning_branch_missing = true;
+                        bm_storage::GraphQuerySlice {
+                            nodes: Vec::new(),
+                            edges: Vec::new(),
+                            next_cursor: None,
+                            has_more: false,
+                        }
+                    } else {
+                        return unknown_branch_error(&workspace);
+                    }
+                }
                 Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
                 Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
             };
@@ -4778,7 +5096,13 @@ impl McpServer {
             }
         }
 
-        let mut warnings = Vec::new();
+        if reasoning_branch_missing {
+            warnings.push(warning(
+                "REASONING_BRANCH_MISSING",
+                "Reasoning branch is missing; signals were returned empty.",
+                "Seed reasoning via branchmind_think_pipeline or switch read_only=false to create refs.",
+            ));
+        }
         if let Some(limit) = max_chars {
             let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
@@ -5021,13 +5345,777 @@ impl McpServer {
                 });
 
             set_truncated_flag(&mut result, truncated);
-            warnings = budget_warnings(truncated, minimal, clamped);
+            warnings.extend(budget_warnings(truncated, minimal, clamped));
         }
 
         if warnings.is_empty() {
             ai_ok("resume_pack", result)
         } else {
             ai_ok_with_warnings("resume_pack", result, warnings, Vec::new())
+        }
+    }
+
+    fn tool_tasks_resume_super(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let events_limit = args_obj
+            .get("events_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(20);
+        let decisions_limit = args_obj
+            .get("decisions_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(5);
+        let evidence_limit = args_obj
+            .get("evidence_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(5);
+        let blockers_limit = args_obj
+            .get("blockers_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(5);
+        let notes_limit = args_obj
+            .get("notes_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(10);
+        let trace_limit = args_obj
+            .get("trace_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(20);
+        let cards_limit = args_obj
+            .get("cards_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(20);
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let explicit_target = args_obj
+            .get("task")
+            .and_then(|v| v.as_str())
+            .or_else(|| args_obj.get("plan").and_then(|v| v.as_str()));
+
+        let (target_id, kind, focus) =
+            match resolve_target_id(&mut self.store, &workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+
+        let (focus, focus_previous, focus_restored) = if read_only {
+            (focus, None, false)
+        } else {
+            match restore_focus_for_explicit_target(
+                &mut self.store,
+                &workspace,
+                explicit_target,
+                focus,
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            }
+        };
+
+        let context = match build_radar_context_with_options(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut events = if events_limit == 0 {
+            Vec::new()
+        } else {
+            match self
+                .store
+                .list_events_for_task(&workspace, &target_id, events_limit)
+            {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        };
+        events.reverse();
+        sort_events_by_seq(&mut events);
+
+        let (reasoning, reasoning_exists) = match resolve_reasoning_ref_for_read(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut warnings = Vec::new();
+        if read_only && !reasoning_exists {
+            warnings.push(warning(
+                "REASONING_REF_DERIVED",
+                "Reasoning refs are derived because no stored ref exists for this target.",
+                "Call tasks_resume_super with read_only=false or branchmind_think_pipeline to seed reasoning refs.",
+            ));
+        }
+
+        let notes_slice = match self.store.doc_show_tail(
+            &workspace,
+            &reasoning.branch,
+            &reasoning.notes_doc,
+            None,
+            notes_limit,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let trace_slice = match self.store.doc_show_tail(
+            &workspace,
+            &reasoning.branch,
+            &reasoning.trace_doc,
+            None,
+            trace_limit,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let notes_entries = doc_entries_to_json(notes_slice.entries);
+        let trace_entries = doc_entries_to_json(trace_slice.entries);
+
+        let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
+        let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        let mut reasoning_branch_missing = false;
+        let cards_slice = match self.store.graph_query(
+            &workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            bm_storage::GraphQueryRequest {
+                ids: None,
+                types: Some(types),
+                status: None,
+                tags_any: None,
+                tags_all: None,
+                text: None,
+                cursor: None,
+                limit: cards_limit,
+                include_edges: false,
+                edges_limit: 0,
+            },
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                if read_only {
+                    reasoning_branch_missing = true;
+                    bm_storage::GraphQuerySlice {
+                        nodes: Vec::new(),
+                        edges: Vec::new(),
+                        next_cursor: None,
+                        has_more: false,
+                    }
+                } else {
+                    return unknown_branch_error(&workspace);
+                }
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let cards = graph_nodes_to_cards(cards_slice.nodes);
+        let cards_total = cards.len();
+        let mut by_type = std::collections::BTreeMap::<String, u64>::new();
+        for card in &cards {
+            if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
+                *by_type.entry(ty.to_string()).or_insert(0) += 1;
+            }
+        }
+        let stats_by_type = by_type.clone();
+
+        let mut decisions = Vec::new();
+        if decisions_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &reasoning.branch,
+                &reasoning.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: Some(vec!["decision".to_string()]),
+                    status: None,
+                    tags_any: None,
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: decisions_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => {
+                    if read_only {
+                        reasoning_branch_missing = true;
+                        bm_storage::GraphQuerySlice {
+                            nodes: Vec::new(),
+                            edges: Vec::new(),
+                            next_cursor: None,
+                            has_more: false,
+                        }
+                    } else {
+                        return unknown_branch_error(&workspace);
+                    }
+                }
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            decisions = graph_nodes_to_signal_cards(slice.nodes);
+        }
+
+        let mut evidence = Vec::new();
+        if evidence_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &reasoning.branch,
+                &reasoning.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: Some(vec!["evidence".to_string()]),
+                    status: None,
+                    tags_any: None,
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: evidence_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => {
+                    if read_only {
+                        reasoning_branch_missing = true;
+                        bm_storage::GraphQuerySlice {
+                            nodes: Vec::new(),
+                            edges: Vec::new(),
+                            next_cursor: None,
+                            has_more: false,
+                        }
+                    } else {
+                        return unknown_branch_error(&workspace);
+                    }
+                }
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            evidence = graph_nodes_to_signal_cards(slice.nodes);
+        }
+
+        let mut blockers = Vec::new();
+        if blockers_limit > 0 {
+            let slice = match self.store.graph_query(
+                &workspace,
+                &reasoning.branch,
+                &reasoning.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: None,
+                    status: None,
+                    tags_any: Some(vec!["blocker".to_string()]),
+                    tags_all: None,
+                    text: None,
+                    cursor: None,
+                    limit: blockers_limit,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::UnknownBranch) => {
+                    if read_only {
+                        reasoning_branch_missing = true;
+                        bm_storage::GraphQuerySlice {
+                            nodes: Vec::new(),
+                            edges: Vec::new(),
+                            next_cursor: None,
+                            has_more: false,
+                        }
+                    } else {
+                        return unknown_branch_error(&workspace);
+                    }
+                }
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            blockers = graph_nodes_to_signal_cards(slice.nodes);
+        }
+
+        let notes_count = notes_entries.len();
+        let trace_count = trace_entries.len();
+        let decisions_total = decisions.len();
+        let evidence_total = evidence.len();
+        let blockers_total = blockers.len();
+
+        if reasoning_branch_missing {
+            warnings.push(warning(
+                "REASONING_BRANCH_MISSING",
+                "Reasoning branch is missing; memory signals were returned empty.",
+                "Seed reasoning via branchmind_think_pipeline or switch read_only=false to create refs.",
+            ));
+        }
+
+        let mut degradation_signals = Vec::<String>::new();
+        if read_only && !reasoning_exists {
+            degradation_signals.push("reasoning_ref_derived".to_string());
+        }
+        if reasoning_branch_missing {
+            degradation_signals.push("reasoning_branch_missing".to_string());
+        }
+        if notes_count == 0
+            && trace_count == 0
+            && cards_total == 0
+            && decisions_total == 0
+            && evidence_total == 0
+            && blockers_total == 0
+        {
+            degradation_signals.push("context_empty".to_string());
+        }
+        if trace_count > 0 && notes_count == 0 && cards_total == 0 {
+            degradation_signals.push("trace_only".to_string());
+        }
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "requested": {
+                "task": args_obj.get("task").cloned().unwrap_or(Value::Null),
+                "plan": args_obj.get("plan").cloned().unwrap_or(Value::Null)
+            },
+            "focus": focus,
+            "target": context.target,
+            "reasoning_ref": context.reasoning_ref,
+            "radar": context.radar,
+            "timeline": {
+                "limit": events_limit,
+                "events": events_to_json(events)
+            },
+            "signals": {
+                "blockers": blockers,
+                "decisions": decisions,
+                "evidence": evidence,
+                "stats": {
+                    "blockers": blockers_total,
+                    "decisions": decisions_total,
+                    "evidence": evidence_total
+                }
+            },
+            "memory": {
+                "notes": {
+                    "entries": notes_entries,
+                    "pagination": {
+                        "cursor": Value::Null,
+                        "next_cursor": notes_slice.next_cursor,
+                        "has_more": notes_slice.has_more,
+                        "limit": notes_limit,
+                        "count": notes_count
+                    }
+                },
+                "trace": {
+                    "entries": trace_entries,
+                    "pagination": {
+                        "cursor": Value::Null,
+                        "next_cursor": trace_slice.next_cursor,
+                        "has_more": trace_slice.has_more,
+                        "limit": trace_limit,
+                        "count": trace_count
+                    }
+                },
+                "cards": cards,
+                "stats": {
+                    "cards": cards_total,
+                    "by_type": by_type
+                }
+            },
+            "degradation": {
+                "signals": degradation_signals,
+                "truncated_fields": [],
+                "minimal": false
+            },
+            "truncated": false
+        });
+
+        if focus_restored {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("focus_restored".to_string(), Value::Bool(true));
+                obj.insert(
+                    "focus_previous".to_string(),
+                    focus_previous.map(Value::String).unwrap_or(Value::Null),
+                );
+            }
+        }
+        if let Some(steps) = context.steps {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("steps".to_string(), steps);
+            }
+        }
+
+        let mut trimmed_fields = Vec::new();
+        if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                if compact_event_payloads_at(&mut result, &["timeline", "events"]) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "timeline.events.payload");
+                }
+                if compact_doc_entries_at(
+                    &mut result,
+                    &["memory", "notes", "entries"],
+                    256,
+                    true,
+                    false,
+                    true,
+                ) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "memory.notes.entries");
+                }
+                if compact_doc_entries_at(
+                    &mut result,
+                    &["memory", "trace", "entries"],
+                    256,
+                    true,
+                    false,
+                    true,
+                ) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "memory.trace.entries");
+                }
+                if compact_card_fields_at(&mut result, &["memory", "cards"], 180, true, true, false)
+                {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "memory.cards");
+                }
+                if compact_card_fields_at(
+                    &mut result,
+                    &["signals", "decisions"],
+                    160,
+                    true,
+                    true,
+                    false,
+                ) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "signals.decisions");
+                }
+                if compact_card_fields_at(
+                    &mut result,
+                    &["signals", "evidence"],
+                    160,
+                    true,
+                    true,
+                    false,
+                ) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "signals.evidence");
+                }
+                if compact_card_fields_at(
+                    &mut result,
+                    &["signals", "blockers"],
+                    160,
+                    true,
+                    true,
+                    false,
+                ) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "signals.blockers");
+                }
+            }
+
+            if trim_array_to_budget(&mut result, &["timeline", "events"], limit, true) {
+                truncated = true;
+                mark_trimmed(&mut trimmed_fields, "timeline.events");
+            }
+            if trim_array_to_budget(&mut result, &["memory", "notes", "entries"], limit, true) {
+                truncated = true;
+                mark_trimmed(&mut trimmed_fields, "memory.notes.entries");
+                refresh_pagination_count(
+                    &mut result,
+                    &["memory", "notes", "entries"],
+                    &["memory", "notes", "pagination"],
+                );
+            }
+            if trim_array_to_budget(&mut result, &["memory", "trace", "entries"], limit, true) {
+                truncated = true;
+                mark_trimmed(&mut trimmed_fields, "memory.trace.entries");
+                refresh_pagination_count(
+                    &mut result,
+                    &["memory", "trace", "entries"],
+                    &["memory", "trace", "pagination"],
+                );
+            }
+            if trim_array_to_budget(&mut result, &["memory", "cards"], limit, false) {
+                truncated = true;
+                mark_trimmed(&mut trimmed_fields, "memory.cards");
+                recompute_card_stats_at(&mut result, &["memory", "cards"], &["memory", "stats"]);
+            }
+            if trim_array_to_budget(&mut result, &["signals", "decisions"], limit, false) {
+                truncated = true;
+                mark_trimmed(&mut trimmed_fields, "signals.decisions");
+            }
+            if trim_array_to_budget(&mut result, &["signals", "evidence"], limit, false) {
+                truncated = true;
+                mark_trimmed(&mut trimmed_fields, "signals.evidence");
+            }
+            if trim_array_to_budget(&mut result, &["signals", "blockers"], limit, false) {
+                truncated = true;
+                mark_trimmed(&mut trimmed_fields, "signals.blockers");
+            }
+
+            if json_len_chars(&result) > limit {
+                if compact_stats_by_type_at(&mut result, &["memory", "stats"]) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "memory.stats");
+                }
+            }
+
+            let notes_empty = result
+                .get("memory")
+                .and_then(|v| v.get("notes"))
+                .and_then(|v| v.get("entries"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if notes_empty && notes_count > 0 {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["memory", "notes", "entries"],
+                    notes_count,
+                    "notes",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                    mark_trimmed(&mut trimmed_fields, "memory.notes.entries");
+                    set_pagination_total_at(
+                        &mut result,
+                        &["memory", "notes", "pagination"],
+                        notes_count,
+                    );
+                }
+            }
+            let trace_empty = result
+                .get("memory")
+                .and_then(|v| v.get("trace"))
+                .and_then(|v| v.get("entries"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if trace_empty && trace_count > 0 {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["memory", "trace", "entries"],
+                    trace_count,
+                    "trace",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                    mark_trimmed(&mut trimmed_fields, "memory.trace.entries");
+                    set_pagination_total_at(
+                        &mut result,
+                        &["memory", "trace", "pagination"],
+                        trace_count,
+                    );
+                }
+            }
+
+            let cards_empty = result
+                .get("memory")
+                .and_then(|v| v.get("cards"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if cards_empty && cards_total > 0 {
+                if ensure_minimal_list_at(&mut result, &["memory", "cards"], cards_total, "cards") {
+                    truncated = true;
+                    minimal = true;
+                    mark_trimmed(&mut trimmed_fields, "memory.cards");
+                    set_card_stats_at(
+                        &mut result,
+                        &["memory", "stats"],
+                        cards_total,
+                        &stats_by_type,
+                    );
+                }
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= compact_event_payloads_at(value, &["timeline", "events"]);
+                        changed |= compact_doc_entries_at(
+                            value,
+                            &["memory", "notes", "entries"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_doc_entries_at(
+                            value,
+                            &["memory", "trace", "entries"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["memory", "cards"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "decisions"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "evidence"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                        changed |= compact_card_fields_at(
+                            value,
+                            &["signals", "blockers"],
+                            120,
+                            true,
+                            true,
+                            true,
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |=
+                            minimalize_doc_entries_at(value, &["memory", "notes", "entries"]);
+                        changed |=
+                            minimalize_doc_entries_at(value, &["memory", "trace", "entries"]);
+                        changed |= minimalize_cards_at(value, &["memory", "cards"]);
+                        if minimalize_cards_at(value, &["signals", "decisions"]) {
+                            changed = true;
+                        }
+                        if minimalize_cards_at(value, &["signals", "evidence"]) {
+                            changed = true;
+                        }
+                        if minimalize_cards_at(value, &["signals", "blockers"]) {
+                            changed = true;
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["timeline", "events"], true);
+                        changed |= retain_one_at(value, &["memory", "notes", "entries"], true);
+                        changed |= retain_one_at(value, &["memory", "trace", "entries"], true);
+                        changed |= retain_one_at(value, &["memory", "cards"], true);
+                        changed |= retain_one_at(value, &["signals", "decisions"], true);
+                        changed |= retain_one_at(value, &["signals", "evidence"], true);
+                        changed |= retain_one_at(value, &["signals", "blockers"], true);
+                        refresh_pagination_count(
+                            value,
+                            &["memory", "notes", "entries"],
+                            &["memory", "notes", "pagination"],
+                        );
+                        refresh_pagination_count(
+                            value,
+                            &["memory", "trace", "entries"],
+                            &["memory", "trace", "pagination"],
+                        );
+                        recompute_card_stats_at(value, &["memory", "cards"], &["memory", "stats"]);
+                        refresh_signal_stats(value);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["steps"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["radar"],
+                            &["verify", "next", "blockers", "why"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["timeline"], &["events"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["memory"], &["notes", "trace", "cards"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(
+                            value,
+                            &["signals"],
+                            &["blockers", "decisions", "evidence"],
+                        );
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["memory", "signals", "timeline"]);
+                    }
+                    changed
+                });
+
+            if truncated {
+                degradation_signals.push("budget_truncated".to_string());
+            }
+            if minimal {
+                degradation_signals.push("minimal_signal".to_string());
+            }
+
+            if let Some(obj) = result
+                .get_mut("degradation")
+                .and_then(|v| v.as_object_mut())
+            {
+                obj.insert("signals".to_string(), json!(degradation_signals));
+                obj.insert("truncated_fields".to_string(), json!(trimmed_fields));
+                obj.insert("minimal".to_string(), Value::Bool(minimal));
+            }
+
+            set_truncated_flag(&mut result, truncated);
+            warnings.extend(budget_warnings(truncated, minimal, clamped));
+        } else if let Some(obj) = result
+            .get_mut("degradation")
+            .and_then(|v| v.as_object_mut())
+        {
+            obj.insert("signals".to_string(), json!(degradation_signals));
+        }
+
+        if warnings.is_empty() {
+            ai_ok("resume_super", result)
+        } else {
+            ai_ok_with_warnings("resume_super", result, warnings, Vec::new())
         }
     }
 
@@ -5048,6 +6136,10 @@ impl McpServer {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(50);
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let (target_id, kind, _focus) =
             match resolve_target_id(&mut self.store, &workspace, args_obj) {
@@ -5055,7 +6147,13 @@ impl McpServer {
                 Err(resp) => return resp,
             };
 
-        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+        let context = match build_radar_context_with_options(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
             Ok(v) => v,
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -5073,6 +6171,7 @@ impl McpServer {
             }
         };
         events.reverse();
+        sort_events_by_seq(&mut events);
         let events_total = events.len();
 
         let mut result = json!({
@@ -5319,6 +6418,10 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let (target_id, kind, _focus) =
             match resolve_target_id(&mut self.store, &workspace, args_obj) {
@@ -5326,7 +6429,13 @@ impl McpServer {
                 Err(resp) => return resp,
             };
 
-        let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
+        let context = match build_radar_context_with_options(
+            &mut self.store,
+            &workspace,
+            &target_id,
+            kind,
+            read_only,
+        ) {
             Ok(v) => v,
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -5479,6 +6588,112 @@ impl McpServer {
         }
     }
 
+    fn build_context_health(
+        &mut self,
+        workspace: &WorkspaceId,
+        target_id: &str,
+        kind: TaskKind,
+    ) -> Result<Value, StoreError> {
+        let mut issues = Vec::new();
+        let reasoning_ref = self.store.reasoning_ref_get(workspace, target_id, kind)?;
+        let (reasoning, stored) = match reasoning_ref {
+            Some(row) => (row, true),
+            None => {
+                let derived = ReasoningRef::for_entity(kind, target_id);
+                (
+                    bm_storage::ReasoningRefRow {
+                        branch: derived.branch,
+                        notes_doc: derived.notes_doc,
+                        graph_doc: derived.graph_doc,
+                        trace_doc: derived.trace_doc,
+                    },
+                    false,
+                )
+            }
+        };
+
+        if !stored {
+            issues.push(json!({
+                "severity": "warning",
+                "code": "REASONING_REF_MISSING",
+                "message": "reasoning refs are not persisted yet",
+                "recovery": "Run tasks_resume_super with read_only=false or branchmind_think_pipeline to seed reasoning refs."
+            }));
+        }
+
+        let notes_has = self
+            .store
+            .doc_show_tail(workspace, &reasoning.branch, &reasoning.notes_doc, None, 1)
+            .map(|slice| !slice.entries.is_empty())
+            .unwrap_or(false);
+        let trace_has = self
+            .store
+            .doc_show_tail(workspace, &reasoning.branch, &reasoning.trace_doc, None, 1)
+            .map(|slice| !slice.entries.is_empty())
+            .unwrap_or(false);
+        let cards_has = match self.store.graph_query(
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            bm_storage::GraphQueryRequest {
+                ids: None,
+                types: None,
+                status: None,
+                tags_any: None,
+                tags_all: None,
+                text: None,
+                cursor: None,
+                limit: 1,
+                include_edges: false,
+                edges_limit: 0,
+            },
+        ) {
+            Ok(slice) => !slice.nodes.is_empty(),
+            Err(StoreError::UnknownBranch) => {
+                issues.push(json!({
+                    "severity": "warning",
+                    "code": "REASONING_BRANCH_MISSING",
+                    "message": "reasoning branch is missing",
+                    "recovery": "Seed reasoning via branchmind_think_pipeline or switch read_only=false on resume tools."
+                }));
+                false
+            }
+            Err(StoreError::InvalidInput(msg)) => return Err(StoreError::InvalidInput(msg)),
+            Err(err) => return Err(err),
+        };
+
+        if !notes_has && !trace_has && !cards_has {
+            issues.push(json!({
+                "severity": "warning",
+                "code": "CONTEXT_EMPTY",
+                "message": "notes/trace/graph are empty",
+                "recovery": "Add a decision/evidence note or run branchmind_think_pipeline to seed context."
+            }));
+        }
+
+        if trace_has && !notes_has {
+            issues.push(json!({
+                "severity": "warning",
+                "code": "TRACE_ONLY",
+                "message": "trace has events but notes are empty",
+                "recovery": "Summarize key decisions in notes to improve recall."
+            }));
+        }
+
+        let status = if issues.is_empty() { "ok" } else { "warn" };
+
+        Ok(json!({
+            "status": status,
+            "stats": {
+                "notes_present": notes_has,
+                "trace_present": trace_has,
+                "cards_present": cards_has,
+                "reasoning_ref": if stored { "stored" } else { "derived" }
+            },
+            "issues": issues
+        }))
+    }
+
     fn tool_tasks_lint(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -5586,6 +6801,12 @@ impl McpServer {
             },
         }
 
+        let context_health = match self.build_context_health(&workspace, &target_id, kind) {
+            Ok(v) => v,
+            Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
         let (errors, warnings) = issues.iter().fold((0, 0), |acc, item| {
             match item.get("severity").and_then(|v| v.as_str()) {
                 Some("error") => (acc.0 + 1, acc.1),
@@ -5604,7 +6825,8 @@ impl McpServer {
                     "warnings": warnings,
                     "total": errors + warnings
                 },
-                "issues": issues
+                "issues": issues,
+                "context_health": context_health
             }),
         )
     }
@@ -8954,6 +10176,15 @@ impl McpServer {
         workspace: &WorkspaceId,
         input: ReasoningScopeInput,
     ) -> Result<ReasoningScope, Value> {
+        self.resolve_reasoning_scope_with_options(workspace, input, false)
+    }
+
+    fn resolve_reasoning_scope_with_options(
+        &mut self,
+        workspace: &WorkspaceId,
+        input: ReasoningScopeInput,
+        read_only: bool,
+    ) -> Result<ReasoningScope, Value> {
         let overrides_present = input.branch.is_some()
             || input.notes_doc.is_some()
             || input.graph_doc.is_some()
@@ -8977,12 +10208,31 @@ impl McpServer {
                         ));
                     }
                 };
-                let reasoning = match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
-                    Ok(r) => r,
-                    Err(StoreError::UnknownId) => {
-                        return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                let reasoning = if read_only {
+                    match self.store.reasoning_ref_get(workspace, &target_id, kind) {
+                        Ok(Some(r)) => r,
+                        Ok(None) => {
+                            let derived = ReasoningRef::for_entity(kind, &target_id);
+                            bm_storage::ReasoningRefRow {
+                                branch: derived.branch,
+                                notes_doc: derived.notes_doc,
+                                graph_doc: derived.graph_doc,
+                                trace_doc: derived.trace_doc,
+                            }
+                        }
+                        Err(StoreError::UnknownId) => {
+                            return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                        }
+                        Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
                     }
-                    Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+                } else {
+                    match self.store.ensure_reasoning_ref(workspace, &target_id, kind) {
+                        Ok(r) => r,
+                        Err(StoreError::UnknownId) => {
+                            return Err(ai_error("UNKNOWN_ID", "Unknown target id"));
+                        }
+                        Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+                    }
                 };
                 Ok(ReasoningScope {
                     branch: reasoning.branch,
@@ -10457,6 +11707,10 @@ impl McpServer {
             Ok(v) => v.unwrap_or(5),
             Err(resp) => return resp,
         };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
             Ok(v) => v,
@@ -10475,20 +11729,170 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        ai_ok(
-            "branchmind_think_frontier",
-            json!({
-                "workspace": workspace.as_str(),
-                "branch": branch,
-                "graph_doc": graph_doc,
-                "frontier": {
-                    "hypotheses": hypotheses,
-                    "questions": questions,
-                    "subgoals": subgoals,
-                    "tests": tests
+        let hypotheses_total = hypotheses.len();
+        let questions_total = questions.len();
+        let subgoals_total = subgoals.len();
+        let tests_total = tests.len();
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branch": branch,
+            "graph_doc": graph_doc,
+            "frontier": {
+                "hypotheses": hypotheses,
+                "questions": questions,
+                "subgoals": subgoals,
+                "tests": tests
+            },
+            "truncated": false
+        });
+
+        let mut warnings = Vec::new();
+        if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["frontier", "hypotheses"],
+                    160,
+                    true,
+                    true,
+                    false,
+                );
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["frontier", "questions"],
+                    160,
+                    true,
+                    true,
+                    false,
+                );
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["frontier", "subgoals"],
+                    160,
+                    true,
+                    true,
+                    false,
+                );
+                truncated |= compact_card_fields_at(
+                    &mut result,
+                    &["frontier", "tests"],
+                    160,
+                    true,
+                    true,
+                    false,
+                );
+            }
+            if json_len_chars(&result) > limit {
+                truncated |=
+                    trim_array_to_budget(&mut result, &["frontier", "hypotheses"], limit, false);
+                truncated |=
+                    trim_array_to_budget(&mut result, &["frontier", "questions"], limit, false);
+                truncated |=
+                    trim_array_to_budget(&mut result, &["frontier", "subgoals"], limit, false);
+                truncated |=
+                    trim_array_to_budget(&mut result, &["frontier", "tests"], limit, false);
+            }
+            if json_len_chars(&result) > limit {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["frontier", "hypotheses"],
+                    hypotheses_total,
+                    "hypotheses",
+                ) {
+                    truncated = true;
+                    minimal = true;
                 }
-            }),
-        )
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["frontier", "questions"],
+                    questions_total,
+                    "questions",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                }
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["frontier", "subgoals"],
+                    subgoals_total,
+                    "subgoals",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                }
+                if ensure_minimal_list_at(&mut result, &["frontier", "tests"], tests_total, "tests")
+                {
+                    truncated = true;
+                    minimal = true;
+                }
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= minimalize_cards_at(value, &["frontier", "hypotheses"]);
+                        changed |= minimalize_cards_at(value, &["frontier", "questions"]);
+                        changed |= minimalize_cards_at(value, &["frontier", "subgoals"]);
+                        changed |= minimalize_cards_at(value, &["frontier", "tests"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= retain_one_at(value, &["frontier", "hypotheses"], true);
+                        changed |= retain_one_at(value, &["frontier", "questions"], true);
+                        changed |= retain_one_at(value, &["frontier", "subgoals"], true);
+                        changed |= retain_one_at(value, &["frontier", "tests"], true);
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(
+                            value,
+                            &["frontier", "hypotheses"],
+                            hypotheses_total,
+                            "hypotheses",
+                        ) {
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["frontier", "questions"],
+                            questions_total,
+                            "questions",
+                        ) {
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["frontier", "subgoals"],
+                            subgoals_total,
+                            "subgoals",
+                        ) {
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["frontier", "tests"],
+                            tests_total,
+                            "tests",
+                        ) {
+                            changed = true;
+                        }
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
+        }
+
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_frontier", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_frontier", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_think_next(&mut self, args: Value) -> Value {
@@ -10497,6 +11901,10 @@ impl McpServer {
         };
         let workspace = match require_workspace(args_obj) {
             Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
             Err(resp) => return resp,
         };
         let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
@@ -10521,15 +11929,61 @@ impl McpServer {
             }
         }
 
-        ai_ok(
-            "branchmind_think_next",
-            json!({
-                "workspace": workspace.as_str(),
-                "branch": branch,
-                "graph_doc": graph_doc,
-                "candidate": best
-            }),
-        )
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "branch": branch,
+            "graph_doc": graph_doc,
+            "candidate": best,
+            "truncated": false
+        });
+
+        let mut warnings = Vec::new();
+        if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            if json_len_chars(&result) > limit {
+                if let Some(candidate) = result.get_mut("candidate") {
+                    if compact_card_value(candidate, 160, true, true, false) {
+                        truncated = true;
+                    }
+                }
+            }
+            if json_len_chars(&result) > limit {
+                if let Some(candidate) = result.get_mut("candidate") {
+                    if minimalize_card_value(candidate) {
+                        truncated = true;
+                        minimal = true;
+                    }
+                }
+            }
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        if let Some(candidate) = value.get_mut("candidate") {
+                            if minimalize_card_value(candidate) {
+                                changed = true;
+                            }
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["graph_doc"]);
+                    }
+                    changed
+                });
+
+            set_truncated_flag(&mut result, truncated);
+            warnings = budget_warnings(truncated, minimal, clamped);
+        }
+
+        if warnings.is_empty() {
+            ai_ok("branchmind_think_next", result)
+        } else {
+            ai_ok_with_warnings("branchmind_think_next", result, warnings, Vec::new())
+        }
     }
 
     fn tool_branchmind_think_pack(&mut self, args: Value) -> Value {
@@ -13037,11 +14491,15 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let requested_target = target.clone();
         let requested_ref = reference.clone();
 
-        let scope = match self.resolve_reasoning_scope(
+        let scope = match self.resolve_reasoning_scope_with_options(
             &workspace,
             ReasoningScopeInput {
                 target,
@@ -13050,6 +14508,7 @@ impl McpServer {
                 graph_doc,
                 trace_doc,
             },
+            read_only,
         ) {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -13078,59 +14537,8 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        let notes_entries = notes_slice
-            .entries
-            .into_iter()
-            .map(|e| match e.kind {
-                bm_storage::DocEntryKind::Note => json!({
-                    "seq": e.seq,
-                    "ts": ts_ms_to_rfc3339(e.ts_ms),
-                    "ts_ms": e.ts_ms,
-                    "kind": e.kind.as_str(),
-                    "title": e.title,
-                    "format": e.format,
-                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "content": e.content
-                }),
-                bm_storage::DocEntryKind::Event => json!({
-                    "seq": e.seq,
-                    "ts": ts_ms_to_rfc3339(e.ts_ms),
-                    "ts_ms": e.ts_ms,
-                    "kind": e.kind.as_str(),
-                    "event_id": e.source_event_id,
-                    "event_type": e.event_type,
-                    "task_id": e.task_id,
-                    "path": e.path
-                }),
-            })
-            .collect::<Vec<_>>();
-
-        let trace_entries = trace_slice
-            .entries
-            .into_iter()
-            .map(|e| match e.kind {
-                bm_storage::DocEntryKind::Note => json!({
-                    "seq": e.seq,
-                    "ts": ts_ms_to_rfc3339(e.ts_ms),
-                    "ts_ms": e.ts_ms,
-                    "kind": e.kind.as_str(),
-                    "title": e.title,
-                    "format": e.format,
-                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "content": e.content
-                }),
-                bm_storage::DocEntryKind::Event => json!({
-                    "seq": e.seq,
-                    "ts": ts_ms_to_rfc3339(e.ts_ms),
-                    "ts_ms": e.ts_ms,
-                    "kind": e.kind.as_str(),
-                    "event_id": e.source_event_id,
-                    "event_type": e.event_type,
-                    "task_id": e.task_id,
-                    "path": e.path
-                }),
-            })
-            .collect::<Vec<_>>();
+        let notes_entries = doc_entries_to_json(notes_slice.entries);
+        let trace_entries = doc_entries_to_json(trace_slice.entries);
 
         let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
         let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
@@ -14364,7 +15772,8 @@ fn tool_definitions() -> Vec<Value> {
                     "decisions_limit": { "type": "integer" },
                     "evidence_limit": { "type": "integer" },
                     "blockers_limit": { "type": "integer" },
-                    "max_chars": { "type": "integer" }
+                    "max_chars": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
                 },
                 "required": ["workspace"]
             }
@@ -14896,7 +16305,8 @@ fn tool_definitions() -> Vec<Value> {
                     "limit_hypotheses": { "type": "integer" },
                     "limit_questions": { "type": "integer" },
                     "limit_subgoals": { "type": "integer" },
-                    "limit_tests": { "type": "integer" }
+                    "limit_tests": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]
             }
@@ -14910,7 +16320,8 @@ fn tool_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "target": { "type": "string" },
                     "ref": { "type": "string" },
-                    "graph_doc": { "type": "string" }
+                    "graph_doc": { "type": "string" },
+                    "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]
             }
@@ -15278,6 +16689,67 @@ fn tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["workspace", "task_title", "steps"]
+            }
+        }),
+        json!({
+            "name": "tasks_macro_start",
+            "description": "One-call start: bootstrap task + return super-resume.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "parent": { "type": "string" },
+                    "plan_title": { "type": "string" },
+                    "task_title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": { "type": "string" },
+                                "success_criteria": { "type": "array", "items": { "type": "string" } },
+                                "tests": { "type": "array", "items": { "type": "string" } },
+                                "blockers": { "type": "array", "items": { "type": "string" } }
+                            },
+                            "required": ["title", "success_criteria", "tests"]
+                        }
+                    },
+                    "resume_max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "task_title", "steps"]
+            }
+        }),
+        json!({
+            "name": "tasks_macro_close_step",
+            "description": "One-call close: confirm checkpoints + close step + return super-resume.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "path": { "type": "string" },
+                    "expected_revision": { "type": "integer" },
+                    "checkpoints": { "type": "object" },
+                    "resume_max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "task", "checkpoints"]
+            }
+        }),
+        json!({
+            "name": "tasks_macro_finish",
+            "description": "One-call finish: tasks_complete + handoff.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "status": { "type": "string" },
+                    "handoff_max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "task"]
             }
         }),
         json!({
@@ -15777,7 +17249,8 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
-                    "max_chars": { "type": "integer" }
+                    "max_chars": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
                 },
                 "required": ["workspace"]
             }
@@ -15791,7 +17264,8 @@ fn tool_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "plan": { "type": "string" },
-                    "events_limit": { "type": "integer" }
+                    "events_limit": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
                 },
                 "required": ["workspace"]
             }
@@ -15808,7 +17282,30 @@ fn tool_definitions() -> Vec<Value> {
                     "events_limit": { "type": "integer" },
                     "decisions_limit": { "type": "integer" },
                     "evidence_limit": { "type": "integer" },
-                    "max_chars": { "type": "integer" }
+                    "max_chars": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_resume_super",
+            "description": "Unified super-resume: radar + memory + signals with explicit degradation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "events_limit": { "type": "integer" },
+                    "decisions_limit": { "type": "integer" },
+                    "evidence_limit": { "type": "integer" },
+                    "blockers_limit": { "type": "integer" },
+                    "notes_limit": { "type": "integer" },
+                    "trace_limit": { "type": "integer" },
+                    "cards_limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
                 },
                 "required": ["workspace"]
             }
@@ -15823,7 +17320,8 @@ fn tool_definitions() -> Vec<Value> {
                     "task": { "type": "string" },
                     "plan": { "type": "string" },
                     "max_chars": { "type": "integer" },
-                    "delta_limit": { "type": "integer" }
+                    "delta_limit": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
                 },
                 "required": ["workspace"]
             }
@@ -15852,7 +17350,8 @@ fn tool_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "plan": { "type": "string" },
-                    "max_chars": { "type": "integer" }
+                    "max_chars": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
                 },
                 "required": ["workspace"]
             }
@@ -16002,11 +17501,39 @@ fn restore_focus_for_explicit_target(
     Ok((Some(explicit.to_string()), current_focus, true))
 }
 
-fn build_radar_context(
+fn resolve_reasoning_ref_for_read(
     store: &mut SqliteStore,
     workspace: &WorkspaceId,
     target_id: &str,
     kind: TaskKind,
+    read_only: bool,
+) -> Result<(bm_storage::ReasoningRefRow, bool), StoreError> {
+    if read_only {
+        if let Some(row) = store.reasoning_ref_get(workspace, target_id, kind)? {
+            return Ok((row, true));
+        }
+        let derived = ReasoningRef::for_entity(kind, target_id);
+        return Ok((
+            bm_storage::ReasoningRefRow {
+                branch: derived.branch,
+                notes_doc: derived.notes_doc,
+                graph_doc: derived.graph_doc,
+                trace_doc: derived.trace_doc,
+            },
+            false,
+        ));
+    }
+
+    let row = store.ensure_reasoning_ref(workspace, target_id, kind)?;
+    Ok((row, true))
+}
+
+fn build_radar_context_with_options(
+    store: &mut SqliteStore,
+    workspace: &WorkspaceId,
+    target_id: &str,
+    kind: TaskKind,
+    read_only: bool,
 ) -> Result<RadarContext, StoreError> {
     let target = match kind {
         TaskKind::Plan => match store.get_plan(workspace, target_id)? {
@@ -16037,7 +17564,8 @@ fn build_radar_context(
         },
     };
 
-    let reasoning_ref = store.ensure_reasoning_ref(workspace, target_id, kind)?;
+    let (reasoning_ref, _existing) =
+        resolve_reasoning_ref_for_read(store, workspace, target_id, kind, read_only)?;
     let reasoning_ref_json = json!({
         "branch": reasoning_ref.branch,
         "notes_doc": reasoning_ref.notes_doc,
@@ -16170,6 +17698,14 @@ fn build_radar_context(
         radar,
         steps: steps_summary,
     })
+}
+
+fn sort_events_by_seq(events: &mut Vec<bm_storage::EventRow>) {
+    events.sort_by(|a, b| {
+        a.seq
+            .cmp(&b.seq)
+            .then_with(|| a.event_type.cmp(&b.event_type))
+    });
 }
 
 fn events_to_json(events: Vec<bm_storage::EventRow>) -> Vec<Value> {
@@ -16836,6 +18372,13 @@ fn find_task_template_any(id: &str) -> Option<TaskTemplate> {
 }
 
 fn graph_nodes_to_cards(nodes: Vec<bm_storage::GraphNode>) -> Vec<Value> {
+    let mut nodes = nodes;
+    nodes.sort_by(|a, b| {
+        b.last_ts_ms
+            .cmp(&a.last_ts_ms)
+            .then_with(|| b.last_seq.cmp(&a.last_seq))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     nodes
         .into_iter()
         .map(|n| {
@@ -16856,6 +18399,13 @@ fn graph_nodes_to_cards(nodes: Vec<bm_storage::GraphNode>) -> Vec<Value> {
 }
 
 fn graph_nodes_to_signal_cards(nodes: Vec<bm_storage::GraphNode>) -> Vec<Value> {
+    let mut nodes = nodes;
+    nodes.sort_by(|a, b| {
+        b.last_ts_ms
+            .cmp(&a.last_ts_ms)
+            .then_with(|| b.last_seq.cmp(&a.last_seq))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     nodes
         .into_iter()
         .map(|n| {
@@ -17378,6 +18928,14 @@ fn get_array_mut_at<'a>(value: &'a mut Value, path: &[&str]) -> Option<&'a mut V
     get_mut_at(value, path)?.as_array_mut()
 }
 
+fn get_array_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Vec<Value>> {
+    let mut current = value;
+    for key in path {
+        current = current.as_object()?.get(*key)?;
+    }
+    current.as_array()
+}
+
 fn drop_fields_at(value: &mut Value, path: &[&str], fields: &[&str]) -> bool {
     let Some(obj) = get_object_mut_at(value, path) else {
         return false;
@@ -17555,6 +19113,74 @@ fn compact_card_fields_at(
     changed
 }
 
+fn compact_card_value(
+    card: &mut Value,
+    max_text: usize,
+    drop_meta: bool,
+    drop_tags: bool,
+    drop_status: bool,
+) -> bool {
+    let Some(obj) = card.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    if let Some(title) = obj.get("title").and_then(|v| v.as_str()) {
+        let shorter = truncate_string(title, max_text);
+        if shorter != title {
+            obj.insert("title".to_string(), Value::String(shorter));
+            changed = true;
+        }
+    }
+    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+        let shorter = truncate_string(text, max_text);
+        if shorter != text {
+            obj.insert("text".to_string(), Value::String(shorter));
+            changed = true;
+        }
+    }
+    if drop_meta && obj.contains_key("meta") {
+        obj.insert("meta".to_string(), Value::Null);
+        changed = true;
+    }
+    if drop_tags && obj.contains_key("tags") {
+        obj.insert("tags".to_string(), Value::Array(Vec::new()));
+        changed = true;
+    }
+    if drop_status && obj.remove("status").is_some() {
+        changed = true;
+    }
+    changed
+}
+
+fn minimalize_card_value(card: &mut Value) -> bool {
+    let Some(obj) = card.as_object() else {
+        return false;
+    };
+    if obj.is_empty() {
+        return false;
+    }
+    let mut out = serde_json::Map::new();
+    if let Some(id) = obj.get("id") {
+        out.insert("id".to_string(), id.clone());
+    }
+    if let Some(ty) = obj.get("type") {
+        out.insert("type".to_string(), ty.clone());
+    }
+    if let Some(title) = obj.get("title").and_then(|v| v.as_str()) {
+        out.insert(
+            "title".to_string(),
+            Value::String(truncate_string(title, 80)),
+        );
+    } else if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+        out.insert("text".to_string(), Value::String(truncate_string(text, 80)));
+    }
+    if let Some(status) = obj.get("status") {
+        out.insert("status".to_string(), status.clone());
+    }
+    *card = Value::Object(out);
+    true
+}
+
 fn minimalize_cards_at(value: &mut Value, path: &[&str]) -> bool {
     let Some(cards) = get_array_mut_at(value, path) else {
         return false;
@@ -17604,6 +19230,41 @@ fn ensure_minimal_list_at(value: &mut Value, path: &[&str], total: usize, label:
         "count": total
     }));
     true
+}
+
+fn mark_trimmed(list: &mut Vec<String>, field: &str) {
+    if !list.iter().any(|item| item == field) {
+        list.push(field.to_string());
+    }
+}
+
+fn doc_entry_to_json(entry: bm_storage::DocEntryRow) -> Value {
+    match entry.kind {
+        bm_storage::DocEntryKind::Note => json!({
+            "seq": entry.seq,
+            "ts": ts_ms_to_rfc3339(entry.ts_ms),
+            "ts_ms": entry.ts_ms,
+            "kind": entry.kind.as_str(),
+            "title": entry.title,
+            "format": entry.format,
+            "meta": entry.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+            "content": entry.content
+        }),
+        bm_storage::DocEntryKind::Event => json!({
+            "seq": entry.seq,
+            "ts": ts_ms_to_rfc3339(entry.ts_ms),
+            "ts_ms": entry.ts_ms,
+            "kind": entry.kind.as_str(),
+            "event_id": entry.source_event_id,
+            "event_type": entry.event_type,
+            "task_id": entry.task_id,
+            "path": entry.path
+        }),
+    }
+}
+
+fn doc_entries_to_json(entries: Vec<bm_storage::DocEntryRow>) -> Vec<Value> {
+    entries.into_iter().map(doc_entry_to_json).collect()
 }
 
 fn compact_event_payloads_at(value: &mut Value, path: &[&str]) -> bool {
@@ -18013,12 +19674,56 @@ fn recompute_card_stats(value: &mut Value, cards_key: &str) -> usize {
     count
 }
 
+fn recompute_card_stats_at(value: &mut Value, cards_path: &[&str], stats_path: &[&str]) -> usize {
+    use std::collections::BTreeMap;
+
+    let (count, by_type) = {
+        let Some(cards) = get_array_at(value, cards_path) else {
+            return 0;
+        };
+        let mut by_type = BTreeMap::<String, u64>::new();
+        for card in cards {
+            if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
+                *by_type.entry(ty.to_string()).or_insert(0) += 1;
+            }
+        }
+        (cards.len(), by_type)
+    };
+
+    if let Some(stats) = get_object_mut_at(value, stats_path) {
+        stats.insert(
+            "cards".to_string(),
+            Value::Number(serde_json::Number::from(count as u64)),
+        );
+        stats.insert("by_type".to_string(), json!(by_type));
+    }
+
+    count
+}
+
 fn set_card_stats(
     value: &mut Value,
     total: usize,
     by_type: &std::collections::BTreeMap<String, u64>,
 ) -> bool {
     let Some(stats) = value.get_mut("stats").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    stats.insert(
+        "cards".to_string(),
+        Value::Number(serde_json::Number::from(total as u64)),
+    );
+    stats.insert("by_type".to_string(), json!(by_type));
+    true
+}
+
+fn set_card_stats_at(
+    value: &mut Value,
+    stats_path: &[&str],
+    total: usize,
+    by_type: &std::collections::BTreeMap<String, u64>,
+) -> bool {
+    let Some(stats) = get_object_mut_at(value, stats_path) else {
         return false;
     };
     stats.insert(
@@ -18111,6 +19816,17 @@ fn refresh_trace_pagination_count(value: &mut Value) {
 
 fn compact_stats_by_type(value: &mut Value) -> bool {
     let Some(stats) = value.get_mut("stats").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    if stats.contains_key("by_type") {
+        stats.insert("by_type".to_string(), Value::Object(serde_json::Map::new()));
+        return true;
+    }
+    false
+}
+
+fn compact_stats_by_type_at(value: &mut Value, stats_path: &[&str]) -> bool {
+    let Some(stats) = get_object_mut_at(value, stats_path) else {
         return false;
     };
     if stats.contains_key("by_type") {

@@ -219,6 +219,9 @@ fn mcp_requires_notifications_initialized() {
             "tasks_handoff",
             "tasks_history",
             "tasks_lint",
+            "tasks_macro_close_step",
+            "tasks_macro_finish",
+            "tasks_macro_start",
             "tasks_mirror",
             "tasks_note",
             "tasks_patch",
@@ -228,6 +231,7 @@ fn mcp_requires_notifications_initialized() {
             "tasks_redo",
             "tasks_resume",
             "tasks_resume_pack",
+            "tasks_resume_super",
             "tasks_scaffold",
             "tasks_storage",
             "tasks_task_add",
@@ -2553,6 +2557,30 @@ fn branchmind_think_wrappers_smoke() {
         Some(true)
     );
 
+    let frontier_budgeted = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 121,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_frontier", "arguments": { "workspace": "ws_think_wrap", "max_chars": 200 } }
+    }));
+    let frontier_budgeted_text = extract_tool_text(&frontier_budgeted);
+    let frontier_budget = frontier_budgeted_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    let frontier_used = frontier_budget
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .expect("budget.used_chars");
+    let frontier_max = frontier_budget
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .expect("budget.max_chars");
+    assert!(
+        frontier_used <= frontier_max,
+        "budget.used_chars must be <= max_chars for think_frontier"
+    );
+
     let next = server.request(json!({
         "jsonrpc": "2.0",
         "id": 13,
@@ -2563,6 +2591,30 @@ fn branchmind_think_wrappers_smoke() {
     assert_eq!(
         next_text.get("success").and_then(|v| v.as_bool()),
         Some(true)
+    );
+
+    let next_budgeted = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 131,
+        "method": "tools/call",
+        "params": { "name": "branchmind_think_next", "arguments": { "workspace": "ws_think_wrap", "max_chars": 120 } }
+    }));
+    let next_budgeted_text = extract_tool_text(&next_budgeted);
+    let next_budget = next_budgeted_text
+        .get("result")
+        .and_then(|v| v.get("budget"))
+        .expect("budget");
+    let next_used = next_budget
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .expect("budget.used_chars");
+    let next_max = next_budget
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .expect("budget.max_chars");
+    assert!(
+        next_used <= next_max,
+        "budget.used_chars must be <= max_chars for think_next"
     );
 
     let pack = server.request(json!({
@@ -3382,6 +3434,240 @@ fn tasks_bootstrap_and_resume_pack_smoke() {
             .and_then(|v| v.get("focus"))
             .and_then(|v| v.as_str()),
         Some(task_id.as_str())
+    );
+}
+
+#[test]
+fn tasks_resume_super_read_only_smoke() {
+    let mut server = Server::start("tasks_resume_super_read_only_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_bootstrap",
+            "arguments": {
+                "workspace": "ws1",
+                "plan_title": "Plan Super",
+                "task_title": "Task Super",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
+                ]
+            }
+        }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let plan_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("plan"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws1", "task": plan_id } }
+    }));
+
+    let resume_super = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_resume_super", "arguments": { "workspace": "ws1", "task": task_id.clone(), "read_only": true, "max_chars": 4000 } }
+    }));
+    let resume_text = extract_tool_text(&resume_super);
+    assert!(
+        resume_text
+            .get("result")
+            .and_then(|v| v.get("memory"))
+            .is_some()
+    );
+    assert!(
+        resume_text
+            .get("result")
+            .and_then(|v| v.get("degradation"))
+            .is_some()
+    );
+
+    let focus = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws1" } }
+    }));
+    let focus_text = extract_tool_text(&focus);
+    assert_eq!(
+        focus_text
+            .get("result")
+            .and_then(|v| v.get("focus"))
+            .and_then(|v| v.as_str()),
+        Some(plan_id.as_str())
+    );
+}
+
+#[test]
+fn tasks_macro_flow_smoke() {
+    let mut server = Server::start("tasks_macro_flow_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let start = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_start",
+            "arguments": {
+                "workspace": "ws1",
+                "plan_title": "Plan Macro",
+                "task_title": "Task Macro",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
+                ],
+                "resume_max_chars": 4000
+            }
+        }
+    }));
+    let start_text = extract_tool_text(&start);
+    let task_id = start_text
+        .get("result")
+        .and_then(|v| v.get("task_id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let step_path = start_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("path"))
+        .and_then(|v| v.as_str())
+        .expect("step path")
+        .to_string();
+
+    let close = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_close_step",
+            "arguments": {
+                "workspace": "ws1",
+                "task": task_id,
+                "path": step_path,
+                "checkpoints": {
+                    "criteria": { "confirmed": true },
+                    "tests": { "confirmed": true },
+                    "security": { "confirmed": true },
+                    "perf": { "confirmed": true },
+                    "docs": { "confirmed": true }
+                },
+                "resume_max_chars": 4000
+            }
+        }
+    }));
+    let close_text = extract_tool_text(&close);
+    assert!(
+        close_text
+            .get("result")
+            .and_then(|v| v.get("resume"))
+            .is_some()
+    );
+
+    let finish = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_finish",
+            "arguments": {
+                "workspace": "ws1",
+                "task": close_text.get("result").and_then(|v| v.get("task")).and_then(|v| v.as_str()).unwrap()
+            }
+        }
+    }));
+    let finish_text = extract_tool_text(&finish);
+    assert!(
+        finish_text
+            .get("result")
+            .and_then(|v| v.get("handoff"))
+            .is_some()
+    );
+}
+
+#[test]
+fn tasks_lint_context_health_smoke() {
+    let mut server = Server::start("tasks_lint_context_health_smoke");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_bootstrap",
+            "arguments": {
+                "workspace": "ws1",
+                "plan_title": "Plan Lint",
+                "task_title": "Task Lint",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
+                ]
+            }
+        }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id");
+
+    let lint = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+    }));
+    let lint_text = extract_tool_text(&lint);
+    assert!(
+        lint_text
+            .get("result")
+            .and_then(|v| v.get("context_health"))
+            .is_some()
     );
 }
 
