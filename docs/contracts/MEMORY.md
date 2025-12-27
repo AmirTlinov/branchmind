@@ -87,11 +87,12 @@ Fast storage and workspace snapshot.
 Input: `{ workspace }`  
 Output:
 
-- `{ workspace, schema_version, workspace_exists, checkout?, defaults, last_event?, last_doc_entry? }`
+- `{ workspace, schema_version, workspace_exists, checkout?, defaults, golden_path?, last_event?, last_doc_entry? }`
 - `last_event` shape: `{ event_id, ts, ts_ms }`
 - `last_doc_entry` shape: `{ seq, ts, ts_ms, branch, doc, kind }`
 - `checkout` is the current checkout branch (or `null` if unset).
 - `defaults` match `branchmind_init` defaults.
+- `golden_path` lists the recommended minimal DX flow (macros + snapshot).
 
 ### `branchmind_notes_commit`
 
@@ -101,6 +102,8 @@ Input (one of):
 
 - `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta? }`
 - `{ workspace, branch, doc, content, title?, format?, meta? }`
+
+`target` may be a string id or `TargetRef` (see `TYPES.md`), e.g. `{ "id": "TASK-001", "kind": "task" }`.
 
 Defaults:
 
@@ -174,7 +177,7 @@ Semantics:
 
 Idempotent merge of note entries from one branch into another (VCS-like for reasoning notes).
 
-Input: `{ workspace, from, into, doc?, cursor?, limit?, dry_run? }`
+Input: `{ workspace, from, into?, doc?, cursor?, limit?, dry_run?, merge_to_base? }`
 
 - `doc` defaults to `"notes"`.
 - `dry_run=true` performs discovery only (no writes).
@@ -359,7 +362,7 @@ Graph merges are 3-way and conflicts are first-class entities.
 
 Merge graph changes from a derived branch back into its base branch.
 
-Input: `{ workspace, from, into, doc?, cursor?, limit?, dry_run? }`
+Input: `{ workspace, from, into?, doc?, cursor?, limit?, dry_run?, merge_to_base? }`
 
 Defaults:
 
@@ -367,12 +370,15 @@ Defaults:
 
 Rules:
 
-- v0 merge supports only **merge-back into base**: `from.base_branch == into`.
-- `dry_run=true` discovers outcomes without writing.
+- `merge_to_base=true` resolves `into` from `from.base_branch` (explicit merge-back path).
+- v0 merge still enforces **merge-back into base**; if `into` is not the base branch, it returns `MERGE_NOT_SUPPORTED`.
+- `dry_run=true` discovers outcomes without writing; conflicts are returned as previews (`status="preview"`).
 
 Output:
 
-- `{ from, into, doc, merged, skipped, conflicts_created, conflict_ids?, pagination:{ cursor, next_cursor?, has_more, limit, count } }`
+- `{ from, into, doc, merged, skipped, conflicts_created, conflict_ids, conflicts, diff_summary, pagination:{ cursor, next_cursor?, has_more, limit, count } }`
+
+`diff_summary` includes: `{ nodes_changed, edges_changed, node_fields_changed, edge_fields_changed }`.
 
 Semantics:
 
@@ -429,6 +435,27 @@ Input: `{ workspace, name, from? }`
 - If the workspace has no branches and no checkout, the server bootstraps `main` and uses it as the base.
 
 Output: `{ workspace, branch: { name, base_branch, base_seq } }`
+
+### `branchmind_diagnostics`
+
+Single-shot health check for reasoning + tasks with recovery suggestions.
+
+Input: `{ workspace, target?, task?, plan?, max_chars? }`
+
+Output: `{ workspace, checkout, focus, target, context_health, warnings?, golden_path? }`
+
+Semantics:
+
+- Aggregates reasoning refs + task lint in one call.
+- `golden_path` lists the recommended DX flow (macros + snapshot).
+
+### `branchmind_macro_branch_note`
+
+One-call: create branch → checkout → seed a note.
+
+Input: `{ workspace, name, from?, doc?, content, format?, title?, meta? }`
+
+Output: `{ workspace, branch, checkout, note }`
 
 ### `branchmind_branch_list`
 

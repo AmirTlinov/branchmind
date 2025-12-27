@@ -167,12 +167,17 @@ impl McpServer {
     }
 
     fn call_tool(&mut self, name: &str, args: Value) -> Value {
+        let mut args = args;
+        if let Some(resp) = self.preprocess_args(name, &mut args) {
+            return resp;
+        }
         match name {
             "tasks_create" => self.tool_tasks_create(args),
             "tasks_bootstrap" => self.tool_tasks_bootstrap(args),
             "tasks_macro_start" => self.tool_tasks_macro_start(args),
             "tasks_macro_close_step" => self.tool_tasks_macro_close_step(args),
             "tasks_macro_finish" => self.tool_tasks_macro_finish(args),
+            "tasks_macro_create_done" => self.tool_tasks_macro_create_done(args),
             "tasks_decompose" => self.tool_tasks_decompose(args),
             "tasks_define" => self.tool_tasks_define(args),
             "tasks_note" => self.tool_tasks_note(args),
@@ -204,6 +209,7 @@ impl McpServer {
             "tasks_resume" => self.tool_tasks_resume(args),
             "tasks_resume_pack" => self.tool_tasks_resume_pack(args),
             "tasks_resume_super" => self.tool_tasks_resume_super(args),
+            "tasks_snapshot" => self.tool_tasks_snapshot(args),
             "tasks_context_pack" => self.tool_tasks_context_pack(args),
             "tasks_mirror" => self.tool_tasks_mirror(args),
             "tasks_handoff" => self.tool_tasks_handoff(args),
@@ -213,7 +219,9 @@ impl McpServer {
             "tasks_storage" => self.tool_tasks_storage(args),
             "branchmind_init" => self.tool_branchmind_init(args),
             "branchmind_status" => self.tool_branchmind_status(args),
+            "branchmind_diagnostics" => self.tool_branchmind_diagnostics(args),
             "branchmind_branch_create" => self.tool_branchmind_branch_create(args),
+            "branchmind_macro_branch_note" => self.tool_branchmind_macro_branch_note(args),
             "branchmind_branch_list" => self.tool_branchmind_branch_list(args),
             "branchmind_checkout" => self.tool_branchmind_checkout(args),
             "branchmind_branch_rename" => self.tool_branchmind_branch_rename(args),
@@ -274,6 +282,48 @@ impl McpServer {
             "branchmind_export" => self.tool_branchmind_export(args),
             "storage" => self.tool_storage(args),
             _ => ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {name}")),
+        }
+    }
+
+    fn preprocess_args(&mut self, name: &str, args: &mut Value) -> Option<Value> {
+        let Some(args_obj) = args.as_object_mut() else {
+            return None;
+        };
+        if let Some(resp) = self.auto_init_workspace(args_obj) {
+            return Some(resp);
+        }
+        if let Err(resp) = normalize_target_map(name, args_obj) {
+            return Some(resp);
+        }
+        None
+    }
+
+    fn auto_init_workspace(&mut self, args: &serde_json::Map<String, Value>) -> Option<Value> {
+        let workspace_raw = args.get("workspace").and_then(|v| v.as_str())?;
+        let workspace = match WorkspaceId::try_new(workspace_raw.to_string()) {
+            Ok(v) => v,
+            Err(_) => {
+                return Some(ai_error(
+                    "INVALID_INPUT",
+                    "workspace: expected WorkspaceId; fix: workspace=\"my-workspace\"",
+                ));
+            }
+        };
+        match self.store.workspace_exists(&workspace) {
+            Ok(true) => {
+                let checkout = self.store.branch_checkout_get(&workspace);
+                if matches!(checkout, Ok(None)) {
+                    if let Err(err) = self.store.workspace_init(&workspace) {
+                        return Some(ai_error("STORE_ERROR", &format_store_error(err)));
+                    }
+                }
+                None
+            }
+            Ok(false) => match self.store.workspace_init(&workspace) {
+                Ok(()) => None,
+                Err(err) => Some(ai_error("STORE_ERROR", &format_store_error(err))),
+            },
+            Err(err) => Some(ai_error("STORE_ERROR", &format_store_error(err))),
         }
     }
 
@@ -483,6 +533,7 @@ impl McpServer {
                     "create",
                     json!( {
                         "id": id,
+                        "qualified_id": format!("{}:{}", workspace.as_str(), id),
                         "kind": kind.as_str(),
                         "revision": current_revision,
                         "event": {
@@ -804,10 +855,12 @@ impl McpServer {
             "workspace": workspace.as_str(),
             "plan": {
                 "id": parent_plan_id,
+                "qualified_id": format!("{}:{}", workspace.as_str(), parent_plan_id),
                 "created": plan_created
             },
             "task": {
                 "id": task_id,
+                "qualified_id": format!("{}:{}", workspace.as_str(), task_id),
                 "revision": revision
             },
             "steps": decompose.steps.iter().map(|s| json!({
@@ -833,6 +886,10 @@ impl McpServer {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
         };
+        let workspace_label = args_obj
+            .get("workspace")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let resume_max_chars = match optional_usize(args_obj, "resume_max_chars") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -901,12 +958,17 @@ impl McpServer {
 
         let mut result = json!({
             "task_id": task_id,
+            "task_qualified_id": format!("{workspace_label}:{task_id}"),
             "steps": steps,
             "resume": resume.get("result").cloned().unwrap_or(Value::Null)
         });
-        if let Some(plan_id) = plan_id {
+        if let Some(plan_id) = plan_id.as_ref() {
             if let Some(obj) = result.as_object_mut() {
-                obj.insert("plan_id".to_string(), Value::String(plan_id));
+                obj.insert("plan_id".to_string(), Value::String(plan_id.clone()));
+                obj.insert(
+                    "plan_qualified_id".to_string(),
+                    Value::String(format!("{workspace_label}:{plan_id}")),
+                );
             }
         }
 
@@ -1062,6 +1124,141 @@ impl McpServer {
             ai_ok("tasks_macro_finish", result)
         } else {
             ai_ok_with_warnings("tasks_macro_finish", result, warnings, Vec::new())
+        }
+    }
+
+    fn tool_tasks_macro_create_done(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let steps_value = args_obj.get("steps").cloned().unwrap_or(Value::Null);
+        let Some(steps_array) = steps_value.as_array() else {
+            return ai_error("INVALID_INPUT", "steps must be an array");
+        };
+        if steps_array.len() != 1 {
+            return ai_error(
+                "INVALID_INPUT",
+                "steps must contain exactly one step for macro_create_done",
+            );
+        }
+
+        let bootstrap = self.tool_tasks_bootstrap(args.clone());
+        if !bootstrap
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return bootstrap;
+        }
+
+        let task_id = match bootstrap
+            .get("result")
+            .and_then(|v| v.get("task"))
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+        {
+            Some(v) => v.to_string(),
+            None => return ai_error("STORE_ERROR", "bootstrap result missing task id"),
+        };
+        let task_revision = bootstrap
+            .get("result")
+            .and_then(|v| v.get("task"))
+            .and_then(|v| v.get("revision"))
+            .and_then(|v| v.as_i64());
+        let step_path = bootstrap
+            .get("result")
+            .and_then(|v| v.get("steps"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.get("path"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if step_path.is_none() {
+            return ai_error("STORE_ERROR", "bootstrap result missing step path");
+        }
+
+        let mut close_args = serde_json::Map::new();
+        close_args.insert(
+            "workspace".to_string(),
+            Value::String(workspace.as_str().to_string()),
+        );
+        close_args.insert("task".to_string(), Value::String(task_id.clone()));
+        close_args.insert(
+            "path".to_string(),
+            Value::String(step_path.clone().unwrap()),
+        );
+        close_args.insert(
+            "checkpoints".to_string(),
+            json!({ "criteria": { "confirmed": true }, "tests": { "confirmed": true } }),
+        );
+        if let Some(revision) = task_revision {
+            close_args.insert(
+                "expected_revision".to_string(),
+                Value::Number(serde_json::Number::from(revision)),
+            );
+        }
+        let close = self.tool_tasks_close_step(Value::Object(close_args));
+        if !close
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return close;
+        }
+
+        let close_revision = close
+            .get("result")
+            .and_then(|v| v.get("revision"))
+            .and_then(|v| v.as_i64());
+
+        let mut complete_args = serde_json::Map::new();
+        complete_args.insert(
+            "workspace".to_string(),
+            Value::String(workspace.as_str().to_string()),
+        );
+        complete_args.insert("task".to_string(), Value::String(task_id.clone()));
+        complete_args.insert("status".to_string(), Value::String("DONE".to_string()));
+        if let Some(revision) = close_revision {
+            complete_args.insert(
+                "expected_revision".to_string(),
+                Value::Number(serde_json::Number::from(revision)),
+            );
+        }
+        let complete = self.tool_tasks_complete(Value::Object(complete_args));
+        if !complete
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return complete;
+        }
+
+        let mut warnings = Vec::new();
+        if let Some(w) = bootstrap.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+        if let Some(w) = close.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+        if let Some(w) = complete.get("warnings").and_then(|v| v.as_array()) {
+            warnings.extend(w.clone());
+        }
+
+        let result = json!({
+            "workspace": workspace.as_str(),
+            "bootstrap": bootstrap.get("result").cloned().unwrap_or(Value::Null),
+            "close": close.get("result").cloned().unwrap_or(Value::Null),
+            "complete": complete.get("result").cloned().unwrap_or(Value::Null)
+        });
+
+        if warnings.is_empty() {
+            ai_ok("tasks_macro_create_done", result)
+        } else {
+            ai_ok_with_warnings("tasks_macro_create_done", result, warnings, Vec::new())
         }
     }
 
@@ -3989,6 +4186,7 @@ impl McpServer {
                     .unwrap_or_else(|| "0/0".to_string());
                 json!({
                     "id": p.id,
+                    "qualified_id": format!("{}:{}", workspace.as_str(), p.id),
                     "kind": "plan",
                     "title": p.title,
                     "revision": p.revision,
@@ -4022,6 +4220,7 @@ impl McpServer {
                 };
                 json!({
                     "id": t.id,
+                    "qualified_id": format!("{}:{}", workspace.as_str(), t.id),
                     "kind": "task",
                     "title": t.title,
                     "revision": t.revision,
@@ -4042,6 +4241,7 @@ impl McpServer {
             .collect::<Vec<_>>();
 
         let mut result = json!({
+            "workspace": workspace.as_str(),
             "counts": {
                 "plans": plans_total,
                 "tasks": tasks_total
@@ -4558,11 +4758,19 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let task_id = match require_string(args_obj, "task") {
-            Ok(v) => v,
-            Err(resp) => return resp,
+        let task = args_obj.get("task").and_then(|v| v.as_str());
+        let plan = args_obj.get("plan").and_then(|v| v.as_str());
+        if task.is_some() && plan.is_some() {
+            return ai_error(
+                "INVALID_INPUT",
+                "provide task or plan, not both; fix: task=\"TASK-001\"",
+            );
+        }
+        let target_id = match task.or(plan) {
+            Some(v) => v.to_string(),
+            None => return ai_error("INVALID_INPUT", "task is required; fix: task=\"TASK-001\""),
         };
-        if !task_id.starts_with("PLAN-") && !task_id.starts_with("TASK-") {
+        if !target_id.starts_with("PLAN-") && !target_id.starts_with("TASK-") {
             return ai_error("INVALID_INPUT", "task must start with PLAN- or TASK-");
         }
 
@@ -4571,7 +4779,7 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        if let Err(err) = self.store.focus_set(&workspace, &task_id) {
+        if let Err(err) = self.store.focus_set(&workspace, &target_id) {
             return ai_error("STORE_ERROR", &format_store_error(err));
         }
 
@@ -4580,7 +4788,7 @@ impl McpServer {
             json!({
                 "workspace": workspace.as_str(),
                 "previous": prev,
-                "focus": task_id
+                "focus": target_id
             }),
         )
     }
@@ -4665,7 +4873,6 @@ impl McpServer {
                 obj.insert("steps".to_string(), steps);
             }
         }
-
         let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
             let (limit, clamped) = clamp_budget_max(limit);
@@ -5402,6 +5609,33 @@ impl McpServer {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(20);
+        let notes_cursor = match optional_i64(args_obj, "notes_cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let trace_cursor = match optional_i64(args_obj, "trace_cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let cards_cursor = match optional_i64(args_obj, "cards_cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let graph_diff_cursor = match optional_i64(args_obj, "graph_diff_cursor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let graph_diff_limit = match optional_usize(args_obj, "graph_diff_limit") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let graph_diff = args_obj
+            .get("graph_diff")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let include_graph_diff =
+            graph_diff || graph_diff_limit.is_some() || graph_diff_cursor.is_some();
+        let graph_diff_limit = graph_diff_limit.unwrap_or(50).max(1);
         let read_only = args_obj
             .get("read_only")
             .and_then(|v| v.as_bool())
@@ -5457,6 +5691,7 @@ impl McpServer {
         };
         events.reverse();
         sort_events_by_seq(&mut events);
+        let events_total = events.len();
 
         let (reasoning, reasoning_exists) = match resolve_reasoning_ref_for_read(
             &mut self.store,
@@ -5483,7 +5718,7 @@ impl McpServer {
             &workspace,
             &reasoning.branch,
             &reasoning.notes_doc,
-            None,
+            notes_cursor,
             notes_limit,
         ) {
             Ok(v) => v,
@@ -5494,7 +5729,7 @@ impl McpServer {
             &workspace,
             &reasoning.branch,
             &reasoning.trace_doc,
-            None,
+            trace_cursor,
             trace_limit,
         ) {
             Ok(v) => v,
@@ -5519,7 +5754,7 @@ impl McpServer {
                 tags_any: None,
                 tags_all: None,
                 text: None,
-                cursor: None,
+                cursor: cards_cursor,
                 limit: cards_limit,
                 include_edges: false,
                 edges_limit: 0,
@@ -5543,6 +5778,8 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
+        let cards_next_cursor = cards_slice.next_cursor;
+        let cards_has_more = cards_slice.has_more;
         let cards = graph_nodes_to_cards(cards_slice.nodes);
         let cards_total = cards.len();
         let mut by_type = std::collections::BTreeMap::<String, u64>::new();
@@ -5704,6 +5941,170 @@ impl McpServer {
             degradation_signals.push("trace_only".to_string());
         }
 
+        let mut graph_diff_payload = None;
+        if include_graph_diff {
+            if reasoning_branch_missing {
+                graph_diff_payload = Some(json!({
+                    "available": false,
+                    "reason": "branch_missing",
+                    "branch": reasoning.branch,
+                    "doc": reasoning.graph_doc
+                }));
+                warnings.push(warning(
+                    "GRAPH_DIFF_UNAVAILABLE",
+                    "Graph diff unavailable because the reasoning branch is missing.",
+                    "Seed reasoning via branchmind_think_pipeline or switch read_only=false to create refs.",
+                ));
+            } else {
+                match self.store.branch_base_info(&workspace, &reasoning.branch) {
+                    Ok(Some((base_branch, _base_seq))) => {
+                        let diff_slice = match self.store.graph_diff(
+                            &workspace,
+                            &base_branch,
+                            &reasoning.branch,
+                            &reasoning.graph_doc,
+                            graph_diff_cursor,
+                            graph_diff_limit,
+                        ) {
+                            Ok(v) => Some(v),
+                            Err(StoreError::UnknownBranch) => {
+                                graph_diff_payload = Some(json!({
+                                    "available": false,
+                                    "reason": "branch_missing",
+                                    "branch": reasoning.branch,
+                                    "doc": reasoning.graph_doc
+                                }));
+                                warnings.push(warning(
+                                    "GRAPH_DIFF_UNAVAILABLE",
+                                    "Graph diff unavailable because the reasoning branch is missing.",
+                                    "Seed reasoning via branchmind_think_pipeline or switch read_only=false to create refs.",
+                                ));
+                                None
+                            }
+                            Err(StoreError::InvalidInput(msg)) => {
+                                return ai_error("INVALID_INPUT", msg);
+                            }
+                            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                        };
+                        if let Some(diff_slice) = diff_slice {
+                            let mut nodes_changed = 0usize;
+                            let mut edges_changed = 0usize;
+                            for change in diff_slice.changes.iter() {
+                                match change {
+                                    bm_storage::GraphDiffChange::Node { .. } => nodes_changed += 1,
+                                    bm_storage::GraphDiffChange::Edge { .. } => edges_changed += 1,
+                                }
+                            }
+                            graph_diff_payload = Some(json!({
+                                "available": true,
+                                "branch": reasoning.branch,
+                                "base": base_branch,
+                                "base_source": "branch_base",
+                                "doc": reasoning.graph_doc,
+                                "summary": {
+                                    "nodes_changed": nodes_changed,
+                                    "edges_changed": edges_changed,
+                                    "total": nodes_changed + edges_changed,
+                                    "partial": diff_slice.has_more
+                                },
+                                "pagination": {
+                                    "cursor": graph_diff_cursor.map(|v| Value::Number(serde_json::Number::from(v))).unwrap_or(Value::Null),
+                                    "next_cursor": diff_slice.next_cursor,
+                                    "has_more": diff_slice.has_more,
+                                    "limit": graph_diff_limit,
+                                    "count": diff_slice.changes.len()
+                                }
+                            }));
+                        }
+                    }
+                    Ok(None) => {
+                        let checkout_branch = match self.store.branch_checkout_get(&workspace) {
+                            Ok(v) => v,
+                            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                        };
+                        let checkout_branch = checkout_branch
+                            .filter(|b| b != &reasoning.branch)
+                            .map(|b| b.to_string());
+                        if let Some(base_branch) = checkout_branch {
+                            let diff_slice = match self.store.graph_diff(
+                                &workspace,
+                                &base_branch,
+                                &reasoning.branch,
+                                &reasoning.graph_doc,
+                                graph_diff_cursor,
+                                graph_diff_limit,
+                            ) {
+                                Ok(v) => Some(v),
+                                Err(StoreError::UnknownBranch) => {
+                                    graph_diff_payload = Some(json!({
+                                        "available": false,
+                                        "reason": "branch_missing",
+                                        "branch": reasoning.branch,
+                                        "doc": reasoning.graph_doc
+                                    }));
+                                    warnings.push(warning(
+                                        "GRAPH_DIFF_UNAVAILABLE",
+                                        "Graph diff unavailable because the reasoning branch is missing.",
+                                        "Seed reasoning via branchmind_think_pipeline or switch read_only=false to create refs.",
+                                    ));
+                                    None
+                                }
+                                Err(StoreError::InvalidInput(msg)) => {
+                                    return ai_error("INVALID_INPUT", msg);
+                                }
+                                Err(err) => {
+                                    return ai_error("STORE_ERROR", &format_store_error(err));
+                                }
+                            };
+                            if let Some(diff_slice) = diff_slice {
+                                let mut nodes_changed = 0usize;
+                                let mut edges_changed = 0usize;
+                                for change in diff_slice.changes.iter() {
+                                    match change {
+                                        bm_storage::GraphDiffChange::Node { .. } => {
+                                            nodes_changed += 1
+                                        }
+                                        bm_storage::GraphDiffChange::Edge { .. } => {
+                                            edges_changed += 1
+                                        }
+                                    }
+                                }
+                                graph_diff_payload = Some(json!({
+                                    "available": true,
+                                    "branch": reasoning.branch,
+                                    "base": base_branch,
+                                    "base_source": "checkout",
+                                    "doc": reasoning.graph_doc,
+                                    "summary": {
+                                        "nodes_changed": nodes_changed,
+                                        "edges_changed": edges_changed,
+                                        "total": nodes_changed + edges_changed,
+                                        "partial": diff_slice.has_more
+                                    },
+                                    "pagination": {
+                                        "cursor": graph_diff_cursor.map(|v| Value::Number(serde_json::Number::from(v))).unwrap_or(Value::Null),
+                                        "next_cursor": diff_slice.next_cursor,
+                                        "has_more": diff_slice.has_more,
+                                        "limit": graph_diff_limit,
+                                        "count": diff_slice.changes.len()
+                                    }
+                                }));
+                            }
+                        } else {
+                            graph_diff_payload = Some(json!({
+                                "available": false,
+                                "reason": "no_base",
+                                "branch": reasoning.branch,
+                                "doc": reasoning.graph_doc
+                            }));
+                        }
+                    }
+                    Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                }
+            }
+        }
+
         let mut result = json!({
             "workspace": workspace.as_str(),
             "requested": {
@@ -5732,7 +6133,7 @@ impl McpServer {
                 "notes": {
                     "entries": notes_entries,
                     "pagination": {
-                        "cursor": Value::Null,
+                        "cursor": notes_cursor.map(|v| Value::Number(serde_json::Number::from(v))).unwrap_or(Value::Null),
                         "next_cursor": notes_slice.next_cursor,
                         "has_more": notes_slice.has_more,
                         "limit": notes_limit,
@@ -5742,7 +6143,7 @@ impl McpServer {
                 "trace": {
                     "entries": trace_entries,
                     "pagination": {
-                        "cursor": Value::Null,
+                        "cursor": trace_cursor.map(|v| Value::Number(serde_json::Number::from(v))).unwrap_or(Value::Null),
                         "next_cursor": trace_slice.next_cursor,
                         "has_more": trace_slice.has_more,
                         "limit": trace_limit,
@@ -5750,6 +6151,13 @@ impl McpServer {
                     }
                 },
                 "cards": cards,
+                "cards_pagination": {
+                    "cursor": cards_cursor.map(|v| Value::Number(serde_json::Number::from(v))).unwrap_or(Value::Null),
+                    "next_cursor": cards_next_cursor,
+                    "has_more": cards_has_more,
+                    "limit": cards_limit,
+                    "count": cards_total
+                },
                 "stats": {
                     "cards": cards_total,
                     "by_type": by_type
@@ -5775,6 +6183,14 @@ impl McpServer {
         if let Some(steps) = context.steps {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("steps".to_string(), steps);
+            }
+        }
+        if include_graph_diff {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "graph_diff".to_string(),
+                    graph_diff_payload.unwrap_or(Value::Null),
+                );
             }
         }
 
@@ -5855,6 +6271,24 @@ impl McpServer {
                 truncated = true;
                 mark_trimmed(&mut trimmed_fields, "timeline.events");
             }
+            let events_empty = result
+                .get("timeline")
+                .and_then(|v| v.get("events"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if events_empty && events_total > 0 {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["timeline", "events"],
+                    events_total,
+                    "events",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                    mark_trimmed(&mut trimmed_fields, "timeline.events");
+                }
+            }
             if trim_array_to_budget(&mut result, &["memory", "notes", "entries"], limit, true) {
                 truncated = true;
                 mark_trimmed(&mut trimmed_fields, "memory.notes.entries");
@@ -5877,6 +6311,11 @@ impl McpServer {
                 truncated = true;
                 mark_trimmed(&mut trimmed_fields, "memory.cards");
                 recompute_card_stats_at(&mut result, &["memory", "cards"], &["memory", "stats"]);
+                refresh_pagination_count(
+                    &mut result,
+                    &["memory", "cards"],
+                    &["memory", "cards_pagination"],
+                );
             }
             if trim_array_to_budget(&mut result, &["signals", "decisions"], limit, false) {
                 truncated = true;
@@ -5895,6 +6334,12 @@ impl McpServer {
                 if compact_stats_by_type_at(&mut result, &["memory", "stats"]) {
                     truncated = true;
                     mark_trimmed(&mut trimmed_fields, "memory.stats");
+                }
+            }
+            if json_len_chars(&result) > limit {
+                if drop_fields_at(&mut result, &[], &["graph_diff"]) {
+                    truncated = true;
+                    mark_trimmed(&mut trimmed_fields, "graph_diff");
                 }
             }
 
@@ -5963,6 +6408,11 @@ impl McpServer {
                         &["memory", "stats"],
                         cards_total,
                         &stats_by_type,
+                    );
+                    set_pagination_total_at(
+                        &mut result,
+                        &["memory", "cards_pagination"],
+                        cards_total,
                     );
                 }
             }
@@ -6069,10 +6519,17 @@ impl McpServer {
                         );
                     }
                     if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["graph_diff"]);
+                    }
+                    if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &["timeline"], &["events"]);
                     }
                     if json_len_chars(value) > limit {
-                        changed |= drop_fields_at(value, &["memory"], &["notes", "trace", "cards"]);
+                        changed |= drop_fields_at(
+                            value,
+                            &["memory"],
+                            &["notes", "trace", "cards", "cards_pagination"],
+                        );
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(
@@ -6117,6 +6574,22 @@ impl McpServer {
         } else {
             ai_ok_with_warnings("resume_super", result, warnings, Vec::new())
         }
+    }
+
+    fn tool_tasks_snapshot(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let mut patched = args_obj.clone();
+        patched
+            .entry("graph_diff".to_string())
+            .or_insert_with(|| Value::Bool(true));
+
+        let mut response = self.tool_tasks_resume_super(Value::Object(patched));
+        if let Some(obj) = response.as_object_mut() {
+            obj.insert("intent".to_string(), Value::String("snapshot".to_string()));
+        }
+        response
     }
 
     fn tool_tasks_context_pack(&mut self, args: Value) -> Value {
@@ -7225,10 +7698,16 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let workspace_exists = match self.store.workspace_exists(&workspace) {
+        let mut workspace_exists = match self.store.workspace_exists(&workspace) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
+        if !workspace_exists {
+            if let Err(err) = self.store.workspace_init(&workspace) {
+                return ai_error("STORE_ERROR", &format_store_error(err));
+            }
+            workspace_exists = true;
+        }
         let last_event = match self.store.workspace_last_event_head(&workspace) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -7257,6 +7736,11 @@ impl McpServer {
             "workspace_exists": workspace_exists,
             "checkout": checkout,
             "defaults": defaults,
+            "golden_path": [
+                { "tool": "branchmind_macro_branch_note", "purpose": "start an initiative branch + seed a first note" },
+                { "tool": "tasks_macro_start", "purpose": "create a task with steps and open a resume capsule" },
+                { "tool": "tasks_snapshot", "purpose": "refresh unified snapshot (tasks + reasoning + diff)" }
+            ],
             "last_event": last_event.map(|(seq, ts_ms)| json!({
                 "event_id": format!("evt_{:016}", seq),
                 "ts": ts_ms_to_rfc3339(ts_ms),
@@ -7308,6 +7792,9 @@ impl McpServer {
                         changed |= drop_fields_at(value, &[], &["defaults"]);
                     }
                     if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["golden_path"]);
+                    }
+                    if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["checkout"]);
                     }
                     if json_len_chars(value) > limit {
@@ -7323,6 +7810,206 @@ impl McpServer {
             ai_ok_with("branchmind_status", result, suggestions)
         } else {
             ai_ok_with_warnings("branchmind_status", result, warnings, suggestions)
+        }
+    }
+
+    fn tool_branchmind_diagnostics(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let workspace_exists = match self.store.workspace_exists(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let checkout = match self.store.branch_checkout_get(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let focus = match self.store.focus_get(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let mut issues = Vec::new();
+        let mut suggestions = Vec::new();
+
+        if !workspace_exists {
+            issues.push(json!({
+                "severity": "error",
+                "code": "WORKSPACE_MISSING",
+                "message": "workspace is not initialized",
+                "recovery": "Run branchmind_init to bootstrap workspace storage."
+            }));
+            suggestions.push(suggest_call(
+                "branchmind_init",
+                "Initialize the workspace and bootstrap a default branch.",
+                "high",
+                json!({ "workspace": workspace.as_str() }),
+            ));
+        }
+
+        if checkout.is_none() {
+            issues.push(json!({
+                "severity": "warning",
+                "code": "NO_CHECKOUT",
+                "message": "no checkout branch configured",
+                "recovery": "Create a branch or checkout an existing branch."
+            }));
+            suggestions.push(suggest_call(
+                "branchmind_branch_list",
+                "List known branches for this workspace.",
+                "medium",
+                json!({ "workspace": workspace.as_str() }),
+            ));
+        }
+
+        let target_raw = args_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                args_obj
+                    .get("task")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .or_else(|| {
+                args_obj
+                    .get("plan")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .or_else(|| focus.clone());
+
+        let mut target_info = Value::Null;
+        let mut context_health = Value::Null;
+        if let Some(target_id) = target_raw {
+            let kind = match parse_plan_or_task_kind(&target_id) {
+                Some(v) => v,
+                None => return ai_error("INVALID_INPUT", "target must start with PLAN- or TASK-"),
+            };
+            let mut lint_args = serde_json::Map::new();
+            lint_args.insert(
+                "workspace".to_string(),
+                Value::String(workspace.as_str().to_string()),
+            );
+            match kind {
+                TaskKind::Plan => {
+                    lint_args.insert("plan".to_string(), Value::String(target_id.clone()));
+                }
+                TaskKind::Task => {
+                    lint_args.insert("task".to_string(), Value::String(target_id.clone()));
+                }
+            }
+            let lint = self.tool_tasks_lint(Value::Object(lint_args));
+            if !lint
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return lint;
+            }
+            if let Some(result) = lint.get("result") {
+                if let Some(target) = result.get("target") {
+                    target_info = target.clone();
+                }
+                if let Some(health) = result.get("context_health") {
+                    context_health = health.clone();
+                }
+                if let Some(list) = result.get("issues").and_then(|v| v.as_array()) {
+                    issues.extend(list.clone());
+                }
+            }
+        } else {
+            issues.push(json!({
+                "severity": "warning",
+                "code": "NO_TARGET",
+                "message": "no task/plan target or focus set",
+                "recovery": "Use tasks_context to list items, then set focus via tasks_focus_set."
+            }));
+            suggestions.push(suggest_call(
+                "tasks_context",
+                "List plans and tasks for this workspace to choose a focus target.",
+                "high",
+                json!({ "workspace": workspace.as_str() }),
+            ));
+        }
+
+        let (errors, warnings) = issues.iter().fold((0, 0), |acc, item| {
+            match item.get("severity").and_then(|v| v.as_str()) {
+                Some("error") => (acc.0 + 1, acc.1),
+                Some("warning") => (acc.0, acc.1 + 1),
+                _ => acc,
+            }
+        });
+
+        let golden_path = json!([
+            {
+                "tool": "branchmind_macro_branch_note",
+                "purpose": "start an initiative branch + seed a first note"
+            },
+            {
+                "tool": "tasks_macro_start",
+                "purpose": "create a task with steps and open a resume capsule"
+            },
+            {
+                "tool": "tasks_snapshot",
+                "purpose": "refresh unified snapshot (tasks + reasoning + diff)"
+            }
+        ]);
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "checkout": checkout,
+            "focus": focus,
+            "target": target_info,
+            "summary": {
+                "errors": errors,
+                "warnings": warnings,
+                "total": errors + warnings
+            },
+            "issues": issues,
+            "context_health": context_health,
+            "golden_path": golden_path
+        });
+
+        let mut warnings_out = Vec::new();
+        if let Some(limit) = max_chars {
+            let (limit, clamped) = clamp_budget_max(limit);
+            let mut truncated = false;
+            let mut minimal = false;
+
+            let _used =
+                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
+                    let mut changed = false;
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["context_health"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["issues"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["golden_path"]);
+                    }
+                    changed
+                });
+
+            warnings_out = budget_warnings(truncated, minimal, clamped);
+        }
+
+        if warnings_out.is_empty() {
+            ai_ok_with("branchmind_diagnostics", result, suggestions)
+        } else {
+            ai_ok_with_warnings("branchmind_diagnostics", result, warnings_out, suggestions)
         }
     }
 
@@ -7387,6 +8074,124 @@ impl McpServer {
                     "name": info.name,
                     "base_branch": info.base_branch,
                     "base_seq": info.base_seq
+                }
+            }),
+        )
+    }
+
+    fn tool_branchmind_macro_branch_note(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let name = match require_string(args_obj, "name") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let from = match optional_string(args_obj, "from") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let doc = match optional_string(args_obj, "doc") {
+            Ok(v) => v.unwrap_or_else(|| DEFAULT_NOTES_DOC.to_string()),
+            Err(resp) => return resp,
+        };
+        if let Err(resp) = ensure_nonempty_doc(&Some(doc.clone()), "doc") {
+            return resp;
+        }
+        let content = match require_string(args_obj, "content") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if content.trim().is_empty() {
+            return ai_error("INVALID_INPUT", "content must not be empty");
+        }
+        let title = match optional_string(args_obj, "title") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let format = match optional_string(args_obj, "format") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let meta_json = match optional_object_as_json_string(args_obj, "meta") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let info = match self.store.branch_create(&workspace, &name, from.as_deref()) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown base branch",
+                    Some("Call branchmind_branch_list to discover existing branches, then retry."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::BranchAlreadyExists) => {
+                return ai_error_with(
+                    "CONFLICT",
+                    "Branch already exists",
+                    Some("Choose a different name (or delete/rename the existing branch)."),
+                    vec![suggest_call(
+                        "branchmind_branch_list",
+                        "List known branches for this workspace.",
+                        "high",
+                        json!({ "workspace": workspace.as_str() }),
+                    )],
+                );
+            }
+            Err(StoreError::BranchCycle) => return ai_error("INVALID_INPUT", "Branch base cycle"),
+            Err(StoreError::BranchDepthExceeded) => {
+                return ai_error("INVALID_INPUT", "Branch base depth exceeded");
+            }
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let (previous, current) = match self.store.branch_checkout_set(&workspace, &name) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        let entry = match self.store.doc_append_note(
+            &workspace, &current, &doc, title, format, meta_json, content,
+        ) {
+            Ok(v) => v,
+            Err(StoreError::UnknownBranch) => return unknown_branch_error(&workspace),
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+
+        ai_ok(
+            "branchmind_macro_branch_note",
+            json!({
+                "workspace": workspace.as_str(),
+                "branch": {
+                    "name": info.name,
+                    "base_branch": info.base_branch,
+                    "base_seq": info.base_seq
+                },
+                "checkout": {
+                    "previous": previous,
+                    "current": current
+                },
+                "note": {
+                    "doc": doc,
+                    "seq": entry.seq,
+                    "ts": ts_ms_to_rfc3339(entry.ts_ms),
+                    "ts_ms": entry.ts_ms
                 }
             }),
         )
@@ -8899,6 +9704,7 @@ impl McpServer {
                 )],
             );
         }
+
         let into_exists = match self.store.branch_exists(&workspace, &into) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -9754,7 +10560,7 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let into = match require_string(args_obj, "into") {
+        let into_opt = match optional_string(args_obj, "into") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -9771,6 +10577,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let dry_run = match optional_bool(args_obj, "dry_run") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+        let merge_to_base = match optional_bool(args_obj, "merge_to_base") {
             Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
@@ -9792,6 +10602,56 @@ impl McpServer {
                 )],
             );
         }
+        let into = if merge_to_base {
+            let base = match self.store.branch_base_info(&workspace, &from) {
+                Ok(v) => v,
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(StoreError::UnknownBranch) => {
+                    return ai_error_with(
+                        "UNKNOWN_ID",
+                        "Unknown from-branch",
+                        Some(
+                            "Call branchmind_branch_list to discover existing branches, then retry.",
+                        ),
+                        vec![suggest_call(
+                            "branchmind_branch_list",
+                            "List known branches for this workspace.",
+                            "high",
+                            json!({ "workspace": workspace.as_str() }),
+                        )],
+                    );
+                }
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            let Some((base_branch, _base_seq)) = base else {
+                return ai_error_with(
+                    "MERGE_NOT_SUPPORTED",
+                    "Merge not supported",
+                    Some("merge_to_base requires from.branch_base to be set"),
+                    vec![],
+                );
+            };
+            if let Some(into) = into_opt.as_ref() {
+                if into != &base_branch {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "into: expected base branch for merge_to_base; fix: omit into or set into to the base branch",
+                    );
+                }
+            }
+            base_branch
+        } else {
+            match into_opt {
+                Some(into) => into,
+                None => {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "into: expected branch name; fix: into=\"main\"",
+                    );
+                }
+            }
+        };
+
         let into_exists = match self.store.branch_exists(&workspace, &into) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
@@ -9819,7 +10679,7 @@ impl McpServer {
                 return ai_error_with(
                     "MERGE_NOT_SUPPORTED",
                     "Merge not supported",
-                    Some("v0 supports only merge-back into base: from.base_branch == into"),
+                    Some("Use merge_to_base=true or set into to the base branch."),
                     vec![],
                 );
             }
@@ -9840,26 +10700,60 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        ai_ok(
-            "branchmind_graph_merge",
-            json!({
-                "workspace": workspace.as_str(),
-                "from": from,
-                "into": into,
-                "doc": doc,
-                "merged": merged.merged,
-                "skipped": merged.skipped,
-                "conflicts_created": merged.conflicts_created,
-                "conflict_ids": merged.conflict_ids,
-                "pagination": {
-                    "cursor": cursor,
-                    "next_cursor": merged.next_cursor,
-                    "has_more": merged.has_more,
-                    "limit": limit,
-                    "count": merged.count
-                }
-            }),
-        )
+        let conflicts = merged
+            .conflicts
+            .iter()
+            .map(Self::conflict_detail_to_json)
+            .collect::<Vec<_>>();
+
+        let mut suggestions = Vec::new();
+        if !merged.conflict_ids.is_empty() && !dry_run {
+            if let Some(conflict_id) = merged.conflict_ids.first() {
+                suggestions.push(suggest_call(
+                    "branchmind_graph_conflict_show",
+                    "Inspect the first merge conflict.",
+                    "high",
+                    json!({ "workspace": workspace.as_str(), "conflict_id": conflict_id }),
+                ));
+                suggestions.push(suggest_call(
+                    "branchmind_graph_conflict_resolve",
+                    "Resolve the first conflict (pick ours/theirs).",
+                    "medium",
+                    json!({ "workspace": workspace.as_str(), "conflict_id": conflict_id, "resolution": "ours" }),
+                ));
+            }
+        }
+
+        let result = json!({
+            "workspace": workspace.as_str(),
+            "from": from,
+            "into": into,
+            "doc": doc,
+            "merged": merged.merged,
+            "skipped": merged.skipped,
+            "conflicts_created": merged.conflicts_created,
+            "conflict_ids": merged.conflict_ids,
+            "conflicts": conflicts,
+            "diff_summary": {
+                "nodes_changed": merged.diff_summary.nodes_changed,
+                "edges_changed": merged.diff_summary.edges_changed,
+                "node_fields_changed": merged.diff_summary.node_fields_changed,
+                "edge_fields_changed": merged.diff_summary.edge_fields_changed
+            },
+            "pagination": {
+                "cursor": cursor,
+                "next_cursor": merged.next_cursor,
+                "has_more": merged.has_more,
+                "limit": limit,
+                "count": merged.count
+            }
+        });
+
+        if suggestions.is_empty() {
+            ai_ok("branchmind_graph_merge", result)
+        } else {
+            ai_ok_with("branchmind_graph_merge", result, suggestions)
+        }
     }
 
     fn tool_branchmind_graph_conflicts(&mut self, args: Value) -> Value {
@@ -10000,6 +10894,132 @@ impl McpServer {
         ai_ok("branchmind_graph_conflicts", result)
     }
 
+    fn conflict_detail_to_json(detail: &bm_storage::GraphConflictDetail) -> Value {
+        let base = if detail.kind == "node" {
+            detail
+                .base_node
+                .as_ref()
+                .map(|n| {
+                    json!({
+                        "id": n.id.clone(),
+                        "type": n.node_type.clone(),
+                        "title": n.title.clone(),
+                        "text": n.text.clone(),
+                        "status": n.status.clone(),
+                        "tags": n.tags.clone(),
+                        "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                        "deleted": n.deleted,
+                        "last_seq": n.last_seq,
+                        "last_ts_ms": n.last_ts_ms
+                    })
+                })
+                .unwrap_or(Value::Null)
+        } else {
+            detail
+                .base_edge
+                .as_ref()
+                .map(|e| {
+                    json!({
+                        "from": e.from.clone(),
+                        "rel": e.rel.clone(),
+                        "to": e.to.clone(),
+                        "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                        "deleted": e.deleted,
+                        "last_seq": e.last_seq,
+                        "last_ts_ms": e.last_ts_ms
+                    })
+                })
+                .unwrap_or(Value::Null)
+        };
+        let theirs = if detail.kind == "node" {
+            detail
+                .theirs_node
+                .as_ref()
+                .map(|n| {
+                    json!({
+                        "id": n.id.clone(),
+                        "type": n.node_type.clone(),
+                        "title": n.title.clone(),
+                        "text": n.text.clone(),
+                        "status": n.status.clone(),
+                        "tags": n.tags.clone(),
+                        "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                        "deleted": n.deleted,
+                        "last_seq": n.last_seq,
+                        "last_ts_ms": n.last_ts_ms
+                    })
+                })
+                .unwrap_or(Value::Null)
+        } else {
+            detail
+                .theirs_edge
+                .as_ref()
+                .map(|e| {
+                    json!({
+                        "from": e.from.clone(),
+                        "rel": e.rel.clone(),
+                        "to": e.to.clone(),
+                        "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                        "deleted": e.deleted,
+                        "last_seq": e.last_seq,
+                        "last_ts_ms": e.last_ts_ms
+                    })
+                })
+                .unwrap_or(Value::Null)
+        };
+        let ours = if detail.kind == "node" {
+            detail
+                .ours_node
+                .as_ref()
+                .map(|n| {
+                    json!({
+                        "id": n.id.clone(),
+                        "type": n.node_type.clone(),
+                        "title": n.title.clone(),
+                        "text": n.text.clone(),
+                        "status": n.status.clone(),
+                        "tags": n.tags.clone(),
+                        "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                        "deleted": n.deleted,
+                        "last_seq": n.last_seq,
+                        "last_ts_ms": n.last_ts_ms
+                    })
+                })
+                .unwrap_or(Value::Null)
+        } else {
+            detail
+                .ours_edge
+                .as_ref()
+                .map(|e| {
+                    json!({
+                        "from": e.from.clone(),
+                        "rel": e.rel.clone(),
+                        "to": e.to.clone(),
+                        "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                        "deleted": e.deleted,
+                        "last_seq": e.last_seq,
+                        "last_ts_ms": e.last_ts_ms
+                    })
+                })
+                .unwrap_or(Value::Null)
+        };
+
+        json!({
+            "conflict_id": detail.conflict_id.clone(),
+            "kind": detail.kind.clone(),
+            "key": detail.key.clone(),
+            "from": detail.from_branch.clone(),
+            "into": detail.into_branch.clone(),
+            "doc": detail.doc.clone(),
+            "status": detail.status.clone(),
+            "created_at_ms": detail.created_at_ms,
+            "resolved_at_ms": detail.resolved_at_ms,
+            "base": base,
+            "theirs": theirs,
+            "ours": ours
+        })
+    }
+
     fn tool_branchmind_graph_conflict_show(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
@@ -10020,109 +11040,13 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        let base = if detail.kind == "node" {
-            detail.base_node.as_ref().map(|n| {
-                json!({
-                    "id": n.id.clone(),
-                    "type": n.node_type.clone(),
-                    "title": n.title.clone(),
-                    "text": n.text.clone(),
-                    "status": n.status.clone(),
-                    "tags": n.tags.clone(),
-                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "deleted": n.deleted,
-                    "last_seq": n.last_seq,
-                    "last_ts_ms": n.last_ts_ms
-                })
-            }).unwrap_or(Value::Null)
-        } else {
-            detail.base_edge.as_ref().map(|e| {
-                json!({
-                    "from": e.from.clone(),
-                    "rel": e.rel.clone(),
-                    "to": e.to.clone(),
-                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "deleted": e.deleted,
-                    "last_seq": e.last_seq,
-                    "last_ts_ms": e.last_ts_ms
-                })
-            }).unwrap_or(Value::Null)
-        };
-        let theirs = if detail.kind == "node" {
-            detail.theirs_node.as_ref().map(|n| {
-                json!({
-                    "id": n.id.clone(),
-                    "type": n.node_type.clone(),
-                    "title": n.title.clone(),
-                    "text": n.text.clone(),
-                    "status": n.status.clone(),
-                    "tags": n.tags.clone(),
-                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "deleted": n.deleted,
-                    "last_seq": n.last_seq,
-                    "last_ts_ms": n.last_ts_ms
-                })
-            }).unwrap_or(Value::Null)
-        } else {
-            detail.theirs_edge.as_ref().map(|e| {
-                json!({
-                    "from": e.from.clone(),
-                    "rel": e.rel.clone(),
-                    "to": e.to.clone(),
-                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "deleted": e.deleted,
-                    "last_seq": e.last_seq,
-                    "last_ts_ms": e.last_ts_ms
-                })
-            }).unwrap_or(Value::Null)
-        };
-        let ours = if detail.kind == "node" {
-            detail.ours_node.as_ref().map(|n| {
-                json!({
-                    "id": n.id.clone(),
-                    "type": n.node_type.clone(),
-                    "title": n.title.clone(),
-                    "text": n.text.clone(),
-                    "status": n.status.clone(),
-                    "tags": n.tags.clone(),
-                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "deleted": n.deleted,
-                    "last_seq": n.last_seq,
-                    "last_ts_ms": n.last_ts_ms
-                })
-            }).unwrap_or(Value::Null)
-        } else {
-            detail.ours_edge.as_ref().map(|e| {
-                json!({
-                    "from": e.from.clone(),
-                    "rel": e.rel.clone(),
-                    "to": e.to.clone(),
-                    "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "deleted": e.deleted,
-                    "last_seq": e.last_seq,
-                    "last_ts_ms": e.last_ts_ms
-                })
-            }).unwrap_or(Value::Null)
-        };
+        let detail_json = Self::conflict_detail_to_json(&detail);
 
         ai_ok(
             "branchmind_graph_conflict_show",
             json!({
                 "workspace": workspace.as_str(),
-                "conflict": {
-                    "conflict_id": detail.conflict_id,
-                    "kind": detail.kind,
-                    "key": detail.key,
-                    "from": detail.from_branch,
-                    "into": detail.into_branch,
-                    "doc": detail.doc,
-                    "status": detail.status,
-                    "created_at_ms": detail.created_at_ms,
-                    "resolved_at_ms": detail.resolved_at_ms,
-                    "base": base,
-                    "theirs": theirs,
-                    "ours": ours
-                }
+                "conflict": detail_json
             }),
         )
     }
@@ -15512,7 +16436,7 @@ impl McpServer {
 }
 
 fn tool_definitions() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         json!({
             "name": "storage",
             "description": "Get storage paths and namespaces.",
@@ -15542,6 +16466,21 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "branchmind_diagnostics",
+            "description": "Workspace diagnostics: what is broken and how to recover.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
             "name": "branchmind_branch_create",
             "description": "Create a new branch ref from an existing branch snapshot (no copy). Defaults to checkout when from is omitted.",
             "inputSchema": {
@@ -15552,6 +16491,24 @@ fn tool_definitions() -> Vec<Value> {
                     "from": { "type": "string" }
                 },
                 "required": ["workspace", "name"]
+            }
+        }),
+        json!({
+            "name": "branchmind_macro_branch_note",
+            "description": "One-call branch create + checkout + note.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "name": { "type": "string" },
+                    "from": { "type": "string" },
+                    "doc": { "type": "string" },
+                    "content": { "type": "string" },
+                    "title": { "type": "string" },
+                    "format": { "type": "string" },
+                    "meta": { "type": "object" }
+                },
+                "required": ["workspace", "name", "content"]
             }
         }),
         json!({
@@ -15928,9 +16885,10 @@ fn tool_definitions() -> Vec<Value> {
                     "doc": { "type": "string" },
                     "cursor": { "type": "integer" },
                     "limit": { "type": "integer" },
-                    "dry_run": { "type": "boolean" }
+                    "dry_run": { "type": "boolean" },
+                    "merge_to_base": { "type": "boolean" }
                 },
-                "required": ["workspace", "from", "into"]
+                "required": ["workspace", "from"]
             }
         }),
         json!({
@@ -16780,7 +17738,36 @@ fn tool_definitions() -> Vec<Value> {
                     "status": { "type": "string" },
                     "handoff_max_chars": { "type": "integer" }
                 },
-                "required": ["workspace", "task"]
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_macro_create_done",
+            "description": "One-call create + verify + done (single-step task).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "parent": { "type": "string" },
+                    "plan_title": { "type": "string" },
+                    "task_title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": { "type": "string" },
+                                "success_criteria": { "type": "array", "items": { "type": "string" } },
+                                "tests": { "type": "array", "items": { "type": "string" } },
+                                "blockers": { "type": "array", "items": { "type": "string" } }
+                            },
+                            "required": ["title", "success_criteria", "tests"]
+                        }
+                    }
+                },
+                "required": ["workspace", "task_title", "steps"]
             }
         }),
         json!({
@@ -17258,7 +18245,8 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
-                    "task": { "type": "string" }
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" }
                 },
                 "required": ["workspace", "task"]
             }
@@ -17335,6 +18323,39 @@ fn tool_definitions() -> Vec<Value> {
                     "notes_limit": { "type": "integer" },
                     "trace_limit": { "type": "integer" },
                     "cards_limit": { "type": "integer" },
+                    "notes_cursor": { "type": "integer" },
+                    "trace_cursor": { "type": "integer" },
+                    "cards_cursor": { "type": "integer" },
+                    "graph_diff": { "type": "boolean" },
+                    "graph_diff_cursor": { "type": "integer" },
+                    "graph_diff_limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_snapshot",
+            "description": "Unified snapshot: tasks + reasoning + graph diff summary.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "events_limit": { "type": "integer" },
+                    "decisions_limit": { "type": "integer" },
+                    "evidence_limit": { "type": "integer" },
+                    "blockers_limit": { "type": "integer" },
+                    "notes_limit": { "type": "integer" },
+                    "trace_limit": { "type": "integer" },
+                    "cards_limit": { "type": "integer" },
+                    "notes_cursor": { "type": "integer" },
+                    "trace_cursor": { "type": "integer" },
+                    "cards_cursor": { "type": "integer" },
+                    "graph_diff_cursor": { "type": "integer" },
+                    "graph_diff_limit": { "type": "integer" },
                     "max_chars": { "type": "integer" },
                     "read_only": { "type": "boolean" }
                 },
@@ -17439,7 +18460,58 @@ fn tool_definitions() -> Vec<Value> {
                 "required": ["workspace"]
             }
         }),
-    ]
+    ];
+    augment_target_schemas(&mut tools);
+    tools
+}
+
+fn target_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "kind": { "type": "string", "enum": ["plan", "task"] }
+        },
+        "required": ["id"]
+    })
+}
+
+fn target_any_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "string" },
+            target_ref_schema()
+        ]
+    })
+}
+
+fn augment_target_schemas(tools: &mut Vec<Value>) {
+    for tool in tools.iter_mut() {
+        let name = tool
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let Some(schema_obj) = tool.get_mut("inputSchema").and_then(|v| v.as_object_mut()) else {
+            continue;
+        };
+        let Some(props) = schema_obj
+            .get_mut("properties")
+            .and_then(|v| v.as_object_mut())
+        else {
+            continue;
+        };
+
+        if props.contains_key("target") {
+            props.insert("target".to_string(), target_any_schema());
+            continue;
+        }
+
+        if name.starts_with("tasks_") && (props.contains_key("task") || props.contains_key("plan"))
+        {
+            props.insert("target".to_string(), target_any_schema());
+        }
+    }
 }
 
 fn parse_kind(kind: Option<&str>, has_parent: bool) -> TaskKind {
@@ -17464,6 +18536,132 @@ fn parse_plan_or_task_kind(id: &str) -> Option<TaskKind> {
     } else {
         None
     }
+}
+
+fn normalize_target_map(
+    tool: &str,
+    args: &mut serde_json::Map<String, Value>,
+) -> Result<(), Value> {
+    if !args.contains_key("target") {
+        return Ok(());
+    }
+    let target_value = args.get("target").cloned().unwrap_or(Value::Null);
+    if target_value.is_null() {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            "target: expected string or {id, kind}; fix: target={\"id\":\"TASK-001\"}",
+        ));
+    }
+    let (target_id, target_kind) = parse_target_ref(&target_value)?;
+
+    if tool.starts_with("tasks_") {
+        if args.contains_key("task") || args.contains_key("plan") {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "target: expected single target; fix: provide target OR task/plan (not both)",
+            ));
+        }
+        match target_kind {
+            TaskKind::Plan => {
+                args.insert("plan".to_string(), Value::String(target_id));
+            }
+            TaskKind::Task => {
+                args.insert("task".to_string(), Value::String(target_id));
+            }
+        }
+        args.remove("target");
+        return Ok(());
+    }
+
+    if tool.starts_with("branchmind_") {
+        args.insert("target".to_string(), Value::String(target_id));
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+fn parse_target_ref(value: &Value) -> Result<(String, TaskKind), Value> {
+    if let Some(id) = value.as_str() {
+        return parse_target_id_with_kind(id, None, "target");
+    }
+    let Some(obj) = value.as_object() else {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            "target: expected string or {id, kind}; fix: target={\"id\":\"TASK-001\"}",
+        ));
+    };
+    let id = match obj.get("id").and_then(|v| v.as_str()) {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "target.id: expected string; fix: target={\"id\":\"TASK-001\"}",
+            ));
+        }
+    };
+    let kind = obj.get("kind").and_then(|v| v.as_str());
+    parse_target_id_with_kind(id, kind, "target")
+}
+
+fn parse_target_id_with_kind(
+    id: &str,
+    kind: Option<&str>,
+    field: &str,
+) -> Result<(String, TaskKind), Value> {
+    let inferred = parse_plan_or_task_kind(id);
+    let resolved = match (inferred, kind) {
+        (Some(TaskKind::Plan), Some("plan")) => TaskKind::Plan,
+        (Some(TaskKind::Task), Some("task")) => TaskKind::Task,
+        (Some(kind), None) => kind,
+        (None, Some("plan")) => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!(
+                    "{field}: expected id starting with PLAN-; fix: target={{\"id\":\"PLAN-001\"}}"
+                ),
+            ));
+        }
+        (None, Some("task")) => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!(
+                    "{field}: expected id starting with TASK-; fix: target={{\"id\":\"TASK-001\"}}"
+                ),
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!(
+                    "{field}.kind: expected 'plan' or 'task'; fix: target={{\"id\":\"TASK-001\",\"kind\":\"task\"}}"
+                ),
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!(
+                    "{field}.kind: expected match with id prefix; fix: target={{\"id\":\"{id}\",\"kind\":\"{}\"}}",
+                    if id.starts_with("PLAN-") {
+                        "plan"
+                    } else {
+                        "task"
+                    }
+                ),
+            ));
+        }
+        (None, None) => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!(
+                    "{field}: expected id starting with PLAN-/TASK-; fix: target={{\"id\":\"TASK-001\"}}"
+                ),
+            ));
+        }
+    };
+
+    Ok((id.to_string(), resolved))
 }
 
 fn resolve_target_id(
@@ -17570,6 +18768,7 @@ fn build_radar_context_with_options(
         TaskKind::Plan => match store.get_plan(workspace, target_id)? {
             Some(p) => json!({
                 "id": p.id,
+                "qualified_id": format!("{}:{}", workspace.as_str(), p.id),
                 "kind": "plan",
                 "revision": p.revision,
                 "title": p.title,
@@ -17583,6 +18782,7 @@ fn build_radar_context_with_options(
         TaskKind::Task => match store.get_task(workspace, target_id)? {
             Some(t) => json!({
                 "id": t.id,
+                "qualified_id": format!("{}:{}", workspace.as_str(), t.id),
                 "kind": "task",
                 "revision": t.revision,
                 "parent": t.parent_plan_id,
@@ -17805,7 +19005,10 @@ fn require_workspace(args: &serde_json::Map<String, Value>) -> Result<WorkspaceI
     };
     match WorkspaceId::try_new(v.to_string()) {
         Ok(w) => Ok(w),
-        Err(_) => Err(ai_error("INVALID_INPUT", "workspace is invalid")),
+        Err(_) => Err(ai_error(
+            "INVALID_INPUT",
+            "workspace: expected WorkspaceId; fix: workspace=\"my-workspace\"",
+        )),
     }
 }
 
@@ -18860,6 +20063,11 @@ fn ai_error_with(
     recovery: Option<&str>,
     suggestions: Vec<Value>,
 ) -> Value {
+    let message = if code == "INVALID_INPUT" {
+        enrich_invalid_input_message(message)
+    } else {
+        message.to_string()
+    };
     let error = match recovery {
         None => json!({ "code": code, "message": message }),
         Some(recovery) => json!({ "code": code, "message": message, "recovery": recovery }),
@@ -18882,6 +20090,73 @@ fn ai_ok(intent: &str, result: Value) -> Value {
 
 fn ai_error(code: &str, message: &str) -> Value {
     ai_error_with(code, message, None, Vec::new())
+}
+
+fn enrich_invalid_input_message(message: &str) -> String {
+    let trimmed = message.trim();
+    if trimmed.contains("fix:") || trimmed.contains("expected ") {
+        return trimmed.to_string();
+    }
+
+    if trimmed == "arguments must be an object" {
+        return "arguments: expected object; fix: {\"workspace\":\"ws\"}".to_string();
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" is required") {
+        let field = field.trim();
+        return format!("{field}: expected required value; fix: {field}=\"...\"");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must not be empty") {
+        let field = field.trim();
+        return format!("{field}: expected non-empty value; fix: {field}=\"...\"");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an object") {
+        let field = field.trim();
+        return format!("{field}: expected object; fix: {field}={{...}}");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an array") {
+        let field = field.trim();
+        return format!("{field}: expected array; fix: {field}=[{{...}}]");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an array of strings") {
+        let field = field.trim();
+        return format!("{field}: expected array of strings; fix: {field}=[\"...\"]");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be a string") {
+        let field = field.trim();
+        return format!("{field}: expected string; fix: {field}=\"...\"");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an integer") {
+        let field = field.trim();
+        return format!("{field}: expected integer; fix: {field}=1");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be a positive integer") {
+        let field = field.trim();
+        return format!("{field}: expected positive integer; fix: {field}=1");
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be a boolean") {
+        let field = field.trim();
+        return format!("{field}: expected boolean; fix: {field}=true");
+    }
+
+    if trimmed.contains("must start with PLAN- or TASK-") {
+        let field = trimmed.split_whitespace().next().unwrap_or("target");
+        return format!("{field}: expected PLAN- or TASK- id; fix: {field}=\"TASK-001\"");
+    }
+
+    if trimmed.contains("provide") && trimmed.contains("not both") {
+        return format!("{trimmed}; fix: choose one option (e.g., task=\"TASK-001\")");
+    }
+
+    format!("expected valid input; fix: {trimmed} (e.g., \"...\")")
 }
 
 fn now_rfc3339() -> Value {

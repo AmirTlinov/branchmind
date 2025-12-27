@@ -301,9 +301,9 @@ pub struct ThinkCardCommitResult {
 
 pub use bm_core::graph::{
     GraphApplyResult, GraphConflictDetail, GraphConflictResolveResult, GraphConflictSummary,
-    GraphDiffChange, GraphDiffSlice, GraphEdge, GraphEdgeUpsert, GraphMergeResult, GraphNode,
-    GraphNodeUpsert, GraphOp, GraphQueryRequest, GraphQuerySlice, GraphValidateError,
-    GraphValidateResult,
+    GraphDiffChange, GraphDiffSlice, GraphEdge, GraphEdgeUpsert, GraphMergeDiffSummary,
+    GraphMergeResult, GraphNode, GraphNodeUpsert, GraphOp, GraphQueryRequest, GraphQuerySlice,
+    GraphValidateError, GraphValidateResult,
 };
 
 pub type GraphNodeRow = GraphNode;
@@ -2373,6 +2373,22 @@ impl SqliteStore {
             )
             .optional()?
         {
+            ensure_document_tx(
+                &tx,
+                workspace.as_str(),
+                &row.branch,
+                &row.notes_doc,
+                DocumentKind::Notes.as_str(),
+                now_ms,
+            )?;
+            ensure_document_tx(
+                &tx,
+                workspace.as_str(),
+                &row.branch,
+                &row.trace_doc,
+                DocumentKind::Trace.as_str(),
+                now_ms,
+            )?;
             tx.commit()?;
             return Ok(row);
         }
@@ -2403,6 +2419,23 @@ impl SqliteStore {
             graph_doc: reference.graph_doc,
             trace_doc: reference.trace_doc,
         };
+
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            &row.branch,
+            &row.notes_doc,
+            DocumentKind::Notes.as_str(),
+            now_ms,
+        )?;
+        ensure_document_tx(
+            &tx,
+            workspace.as_str(),
+            &row.branch,
+            &row.trace_doc,
+            DocumentKind::Trace.as_str(),
+            now_ms,
+        )?;
 
         tx.commit()?;
         Ok(row)
@@ -4181,7 +4214,15 @@ impl SqliteStore {
         let mut skipped = 0usize;
         let mut conflicts_created = 0usize;
         let mut conflict_ids = Vec::new();
+        let mut conflicts = Vec::new();
         let mut processed = 0usize;
+        let mut diff_summary = GraphMergeDiffSummary {
+            nodes_changed: 0,
+            edges_changed: 0,
+            node_fields_changed: 0,
+            edge_fields_changed: 0,
+        };
+        let conflict_status = if dry_run { "preview" } else { "open" };
 
         for candidate in candidates.iter().take(scan_limit as usize) {
             if merged as i64 + skipped as i64 + conflicts_created as i64 >= limit {
@@ -4203,6 +4244,9 @@ impl SqliteStore {
                         skipped += 1;
                         continue;
                     }
+                    diff_summary.nodes_changed += 1;
+                    diff_summary.node_fields_changed +=
+                        count_node_field_changes(base.as_ref(), theirs);
                     if graph_node_semantic_eq(base.as_ref(), ours.as_ref()) {
                         if dry_run {
                             merged += 1;
@@ -4259,12 +4303,7 @@ impl SqliteStore {
                     }
 
                     // Diverged: create conflict.
-                    if dry_run {
-                        conflicts_created += 1;
-                        continue;
-                    }
-                    let conflict_id = graph_conflict_create_node_tx(
-                        &tx,
+                    let preview = build_conflict_preview_node(
                         workspace.as_str(),
                         from_branch,
                         into_branch,
@@ -4275,9 +4314,26 @@ impl SqliteStore {
                         Some(theirs),
                         ours.as_ref(),
                         now_ms,
-                    )?;
+                        conflict_status,
+                    );
+                    if !dry_run {
+                        let _ = graph_conflict_create_node_tx(
+                            &tx,
+                            workspace.as_str(),
+                            from_branch,
+                            into_branch,
+                            doc,
+                            base_cutoff_seq,
+                            &key,
+                            base.as_ref(),
+                            Some(theirs),
+                            ours.as_ref(),
+                            now_ms,
+                        )?;
+                    }
                     conflicts_created += 1;
-                    conflict_ids.push(conflict_id);
+                    conflict_ids.push(preview.conflict_id.clone());
+                    conflicts.push(preview);
                 }
                 GraphMergeCandidate::Edge { theirs, .. } => {
                     let key = GraphEdgeKey {
@@ -4296,6 +4352,9 @@ impl SqliteStore {
                         skipped += 1;
                         continue;
                     }
+                    diff_summary.edges_changed += 1;
+                    diff_summary.edge_fields_changed +=
+                        count_edge_field_changes(base.as_ref(), theirs);
                     if graph_edge_semantic_eq(base.as_ref(), ours.as_ref()) {
                         if dry_run {
                             merged += 1;
@@ -4348,12 +4407,7 @@ impl SqliteStore {
                         continue;
                     }
 
-                    if dry_run {
-                        conflicts_created += 1;
-                        continue;
-                    }
-                    let conflict_id = graph_conflict_create_edge_tx(
-                        &tx,
+                    let preview = build_conflict_preview_edge(
                         workspace.as_str(),
                         from_branch,
                         into_branch,
@@ -4364,9 +4418,26 @@ impl SqliteStore {
                         Some(theirs),
                         ours.as_ref(),
                         now_ms,
-                    )?;
+                        conflict_status,
+                    );
+                    if !dry_run {
+                        let _ = graph_conflict_create_edge_tx(
+                            &tx,
+                            workspace.as_str(),
+                            from_branch,
+                            into_branch,
+                            doc,
+                            base_cutoff_seq,
+                            &key,
+                            base.as_ref(),
+                            Some(theirs),
+                            ours.as_ref(),
+                            now_ms,
+                        )?;
+                    }
                     conflicts_created += 1;
-                    conflict_ids.push(conflict_id);
+                    conflict_ids.push(preview.conflict_id.clone());
+                    conflicts.push(preview);
                 }
             }
         }
@@ -4390,6 +4461,8 @@ impl SqliteStore {
             skipped,
             conflicts_created,
             conflict_ids,
+            conflicts,
+            diff_summary,
             count: processed,
             next_cursor,
             has_more,
@@ -5109,6 +5182,20 @@ impl SqliteStore {
         }
 
         Ok(false)
+    }
+
+    pub fn branch_base_info(
+        &mut self,
+        workspace: &WorkspaceId,
+        branch: &str,
+    ) -> Result<Option<(String, i64)>, StoreError> {
+        if branch.trim().is_empty() {
+            return Err(StoreError::InvalidInput("branch must not be empty"));
+        }
+        let tx = self.conn.transaction()?;
+        let info = branch_base_info_tx(&tx, workspace.as_str(), branch)?;
+        tx.commit()?;
+        Ok(info)
     }
 
     pub fn steps_decompose(
@@ -7813,14 +7900,17 @@ impl SqliteStore {
             }
         }
 
+        let artifacts_count = artifacts.len();
+        let checks_count = checks.len();
+        let attachments_count = attachments.len();
         let event_payload_json = build_evidence_captured_payload(
             task_id,
             &entity_kind,
             &entity_id,
             path.as_deref(),
-            artifacts.len(),
-            checks.len(),
-            attachments.len(),
+            artifacts_count,
+            checks_count,
+            attachments_count,
         );
         let event = insert_event_tx(
             &tx,
@@ -7841,6 +7931,58 @@ impl SqliteStore {
             &reasoning_ref.trace_doc,
             &event,
         )?;
+
+        if artifacts_count + checks_count + attachments_count > 0 {
+            let event_id = event.event_id();
+            ensure_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.notes_doc,
+                DocumentKind::Notes.as_str(),
+                now_ms,
+            )?;
+            let meta_json = build_evidence_mirror_meta_json(
+                task_id,
+                &entity_kind,
+                &entity_id,
+                path.as_deref(),
+                artifacts_count,
+                checks_count,
+                attachments_count,
+                &event_id,
+            );
+            let mut content = format!("Evidence captured for {entity_kind} {entity_id}");
+            if let Some(path) = path.as_deref() {
+                content.push_str(&format!(" ({path})"));
+            }
+            content.push_str(&format!(
+                ": artifacts={artifacts_count}, checks={checks_count}, attachments={attachments_count}"
+            ));
+            tx.execute(
+                r#"
+                INSERT INTO doc_entries(workspace, branch, doc, ts_ms, kind, title, meta_json, content)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+                params![
+                    workspace.as_str(),
+                    &reasoning_ref.branch,
+                    &reasoning_ref.notes_doc,
+                    now_ms,
+                    DocEntryKind::Note.as_str(),
+                    "Evidence captured",
+                    meta_json,
+                    &content
+                ],
+            )?;
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.notes_doc,
+                now_ms,
+            )?;
+        }
 
         tx.commit()?;
         Ok(EvidenceCaptureResult {
@@ -9464,12 +9606,29 @@ fn ensure_reasoning_ref_tx(
             now_ms
         ],
     )?;
-    Ok(ReasoningRefRow {
+    let row = ReasoningRefRow {
         branch: reference.branch,
         notes_doc: reference.notes_doc,
         graph_doc: reference.graph_doc,
         trace_doc: reference.trace_doc,
-    })
+    };
+    ensure_document_tx(
+        tx,
+        workspace.as_str(),
+        &row.branch,
+        &row.notes_doc,
+        DocumentKind::Notes.as_str(),
+        now_ms,
+    )?;
+    ensure_document_tx(
+        tx,
+        workspace.as_str(),
+        &row.branch,
+        &row.trace_doc,
+        DocumentKind::Trace.as_str(),
+        now_ms,
+    )?;
+    Ok(row)
 }
 
 fn ingest_task_event_tx(
@@ -10241,6 +10400,48 @@ fn graph_edge_semantic_eq(left: Option<&GraphEdgeRow>, right: Option<&GraphEdgeR
                 && a.meta_json.as_deref().map(str::trim) == b.meta_json.as_deref().map(str::trim)
         }
     }
+}
+
+fn count_node_field_changes(base: Option<&GraphNodeRow>, theirs: &GraphNodeRow) -> usize {
+    let mut changed = 0usize;
+    if base.map(|n| n.node_type.as_str()) != Some(theirs.node_type.as_str()) {
+        changed += 1;
+    }
+    if base.and_then(|n| n.title.as_deref()) != theirs.title.as_deref() {
+        changed += 1;
+    }
+    if base.and_then(|n| n.text.as_deref()) != theirs.text.as_deref() {
+        changed += 1;
+    }
+    let base_tags = base.map(|n| n.tags.as_slice());
+    if base_tags != Some(theirs.tags.as_slice()) {
+        changed += 1;
+    }
+    if base.and_then(|n| n.status.as_deref()) != theirs.status.as_deref() {
+        changed += 1;
+    }
+    if base.and_then(|n| n.meta_json.as_deref()).map(str::trim)
+        != theirs.meta_json.as_deref().map(str::trim)
+    {
+        changed += 1;
+    }
+    if base.map(|n| n.deleted) != Some(theirs.deleted) {
+        changed += 1;
+    }
+    changed
+}
+
+fn count_edge_field_changes(base: Option<&GraphEdgeRow>, theirs: &GraphEdgeRow) -> usize {
+    let mut changed = 0usize;
+    if base.and_then(|e| e.meta_json.as_deref()).map(str::trim)
+        != theirs.meta_json.as_deref().map(str::trim)
+    {
+        changed += 1;
+    }
+    if base.map(|e| e.deleted) != Some(theirs.deleted) {
+        changed += 1;
+    }
+    changed
 }
 
 fn branch_base_info_tx(
@@ -11177,6 +11378,99 @@ fn graph_conflict_id(
     }
 
     format!("CONFLICT-{h1:016x}{h2:016x}")
+}
+
+fn build_conflict_preview_node(
+    workspace: &str,
+    from_branch: &str,
+    into_branch: &str,
+    doc: &str,
+    base_cutoff_seq: i64,
+    key: &str,
+    base: Option<&GraphNodeRow>,
+    theirs: Option<&GraphNodeRow>,
+    ours: Option<&GraphNodeRow>,
+    now_ms: i64,
+    status: &str,
+) -> GraphConflictDetail {
+    let theirs_seq = theirs.map(|n| n.last_seq).unwrap_or(0);
+    let ours_seq = ours.map(|n| n.last_seq).unwrap_or(0);
+    let conflict_id = graph_conflict_id(
+        workspace,
+        from_branch,
+        into_branch,
+        doc,
+        "node",
+        key,
+        base_cutoff_seq,
+        theirs_seq,
+        ours_seq,
+    );
+
+    GraphConflictDetail {
+        conflict_id,
+        kind: "node".to_string(),
+        key: key.to_string(),
+        from_branch: from_branch.to_string(),
+        into_branch: into_branch.to_string(),
+        doc: doc.to_string(),
+        status: status.to_string(),
+        created_at_ms: now_ms,
+        resolved_at_ms: None,
+        base_node: base.cloned(),
+        theirs_node: theirs.cloned(),
+        ours_node: ours.cloned(),
+        base_edge: None,
+        theirs_edge: None,
+        ours_edge: None,
+    }
+}
+
+fn build_conflict_preview_edge(
+    workspace: &str,
+    from_branch: &str,
+    into_branch: &str,
+    doc: &str,
+    base_cutoff_seq: i64,
+    key: &GraphEdgeKey,
+    base: Option<&GraphEdgeRow>,
+    theirs: Option<&GraphEdgeRow>,
+    ours: Option<&GraphEdgeRow>,
+    now_ms: i64,
+    status: &str,
+) -> GraphConflictDetail {
+    let theirs_seq = theirs.map(|n| n.last_seq).unwrap_or(0);
+    let ours_seq = ours.map(|n| n.last_seq).unwrap_or(0);
+    let key_str = format!("{}|{}|{}", key.from, key.rel, key.to);
+    let conflict_id = graph_conflict_id(
+        workspace,
+        from_branch,
+        into_branch,
+        doc,
+        "edge",
+        &key_str,
+        base_cutoff_seq,
+        theirs_seq,
+        ours_seq,
+    );
+
+    GraphConflictDetail {
+        conflict_id,
+        kind: "edge".to_string(),
+        key: key_str,
+        from_branch: from_branch.to_string(),
+        into_branch: into_branch.to_string(),
+        doc: doc.to_string(),
+        status: status.to_string(),
+        created_at_ms: now_ms,
+        resolved_at_ms: None,
+        base_node: None,
+        theirs_node: None,
+        ours_node: None,
+        base_edge: base.cloned(),
+        theirs_edge: theirs.cloned(),
+        ours_edge: ours.cloned(),
+    }
 }
 
 fn graph_conflict_create_node_tx(
@@ -12137,6 +12431,44 @@ fn build_evidence_captured_payload(
     out.push_str(",\"attachments\":");
     out.push_str(&attachments_count.to_string());
     out.push_str("}");
+    out
+}
+
+fn build_evidence_mirror_meta_json(
+    task_id: &str,
+    entity_kind: &str,
+    entity_id: &str,
+    path: Option<&str>,
+    artifacts_count: usize,
+    checks_count: usize,
+    attachments_count: usize,
+    event_id: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str("{\"source\":\"tasks_evidence\",\"task_id\":\"");
+    out.push_str(task_id);
+    out.push_str("\",\"entity_kind\":\"");
+    out.push_str(entity_kind);
+    out.push_str("\",\"entity_id\":\"");
+    out.push_str(entity_id);
+    out.push_str("\",\"path\":");
+    match path {
+        Some(path) => {
+            out.push('"');
+            out.push_str(path);
+            out.push('"');
+        }
+        None => out.push_str("null"),
+    }
+    out.push_str(",\"artifacts\":");
+    out.push_str(&artifacts_count.to_string());
+    out.push_str(",\"checks\":");
+    out.push_str(&checks_count.to_string());
+    out.push_str(",\"attachments\":");
+    out.push_str(&attachments_count.to_string());
+    out.push_str(",\"event_id\":\"");
+    out.push_str(event_id);
+    out.push_str("\"}");
     out
 }
 

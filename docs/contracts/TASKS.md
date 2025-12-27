@@ -34,10 +34,19 @@ All stateful tools in this family operate inside an explicit `workspace` (a stab
 
 - `workspace` is required in v0 to avoid implicit context and silent cross-project writes.
 
+## Unified targeting (v0.3)
+
+All task tools accept a `target` selector as an alias for `task`/`plan`.
+
+Examples:
+
+- `{ workspace, target: "TASK-001" }`
+- `{ workspace, target: { "id": "PLAN-001", "kind": "plan" } }`
+
 ## Payload budgets (v0)
 
 - `tasks_context`, `tasks_delta`, `tasks_radar`, `tasks_handoff`, `tasks_context_pack`, `tasks_resume_pack`, `tasks_resume_super` accept optional `max_chars`.
-- When `max_chars` is provided, responses include `budget` with `{ max_chars, used_chars, truncated }`.
+- When `max_chars` is provided, responses are deterministically truncated and emit warnings (`BUDGET_TRUNCATED`, `BUDGET_MINIMAL`, `BUDGET_MIN_CLAMPED`).
 - If the payload must shrink past normal truncation, the response may drop optional fields and return a minimal signal plus warnings.
 
 ## Tool family
@@ -65,7 +74,7 @@ Parity tool set (v0.2 target):
 - Plans/contracts: `tasks_plan`, `tasks_contract`
 - Batch/ops: `tasks_batch`, `tasks_history`, `tasks_undo`, `tasks_redo`
 - Evidence: `tasks_evidence_capture`
-- Context views: `tasks_resume`, `tasks_context_pack`, `tasks_mirror`, `tasks_handoff`, `tasks_lint`
+- Context views: `tasks_resume`, `tasks_resume_pack`, `tasks_resume_super`, `tasks_snapshot`, `tasks_context_pack`, `tasks_mirror`, `tasks_handoff`, `tasks_lint`
 - Subplans: `tasks_task_add`, `tasks_task_define`, `tasks_task_delete`
 - Templates: `tasks_templates_list`, `tasks_scaffold`
 - Utilities: `tasks_storage`
@@ -88,6 +97,7 @@ Semantics:
   - `steps[].title` and `steps[].success_criteria` are required.
   - `steps[].tests` / `steps[].blockers` are optional and applied via `tasks_define`.
   - Response includes `steps` and `events` for the create + step operations.
+- Responses include `qualified_id` (`<workspace>:<id>`) for stable cross-workspace referencing.
 
 ### `tasks_complete`
 
@@ -281,13 +291,26 @@ Semantics:
 
 Unified супер‑резюме: задачи + reasoning‑пакет + явные сигналы деградации/усечений.
 
-Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, blockers_limit?, notes_limit?, trace_limit?, cards_limit?, max_chars?, read_only? }`
+Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, blockers_limit?, notes_limit?, trace_limit?, cards_limit?, notes_cursor?, trace_cursor?, cards_cursor?, graph_diff?, graph_diff_cursor?, graph_diff_limit?, max_chars?, read_only? }`
 
 Semantics:
 
 - Если `read_only=true`, никаких изменений фокуса/refs; refs вычисляются детерминированно.
 - Возвращает `radar`, `steps`, `timeline`, `signals`, `memory` (notes/trace/cards), `degradation`.
 - `degradation.truncated_fields` перечисляет поля, которые были усечены из‑за бюджета.
+- `notes_cursor` / `trace_cursor` / `cards_cursor` продолжают пагинацию соответствующих разделов.
+- `graph_diff=true` добавляет `graph_diff` (diff against base branch when available).
+
+### `tasks_snapshot`
+
+Unified snapshot: задачи + reasoning + diff.
+
+Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, blockers_limit?, notes_limit?, trace_limit?, cards_limit?, notes_cursor?, trace_cursor?, cards_cursor?, graph_diff_cursor?, graph_diff_limit?, max_chars?, read_only? }`
+
+Semantics:
+
+- Эквивалентно `tasks_resume_super` с `graph_diff=true` и более явным intent.
+- `graph_diff` включает summary и пагинацию diff-изменений.
 
 ### `tasks_context_pack`
 
@@ -342,6 +365,18 @@ One‑call завершение задачи: tasks_complete → handoff.
 Input: `{ workspace, task, status?, handoff_max_chars? }`
 
 Output: `{ task, status, handoff }`
+
+### `tasks_macro_create_done`
+
+One‑call: создать задачу → закрыть первый шаг → завершить задачу.
+
+Input: `{ workspace, plan?, parent?, plan_title?, task_title, description?, steps }`
+
+Output: `{ bootstrap, close, complete }`
+
+Semantics:
+
+- `steps` must contain exactly one step (macro closes the first step immediately).
 
 ## Subplans (v0.2)
 

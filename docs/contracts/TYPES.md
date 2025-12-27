@@ -59,6 +59,29 @@ Human-readable identifiers.
 { "type": "string", "pattern": "^(PLAN|TASK)-[0-9]{3,}$" }
 ```
 
+### QualifiedId
+
+Workspace-scoped identifier for stable cross-workspace references.
+
+Format: `<workspace>:<id>` (e.g. `acme:PLAN-012`).
+
+### TargetRef (plan/task selector)
+
+Unified target input accepted across task and reasoning tools.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^(PLAN|TASK)-[0-9]{3,}$" },
+    "kind": { "type": "string", "enum": ["plan", "task"] }
+  },
+  "required": ["id"]
+}
+```
+
+When a tool accepts `target`, it may be provided as a string (`"TASK-001"`) or `TargetRef`.
+
 ### StepId / TaskNodeId
 
 Stable opaque identifiers.

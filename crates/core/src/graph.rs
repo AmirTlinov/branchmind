@@ -371,9 +371,19 @@ pub struct GraphMergeResult {
     pub skipped: usize,
     pub conflicts_created: usize,
     pub conflict_ids: Vec<String>,
+    pub conflicts: Vec<GraphConflictDetail>,
+    pub diff_summary: GraphMergeDiffSummary,
     pub count: usize,
     pub next_cursor: Option<i64>,
     pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphMergeDiffSummary {
+    pub nodes_changed: usize,
+    pub edges_changed: usize,
+    pub node_fields_changed: usize,
+    pub edge_fields_changed: usize,
 }
 
 #[derive(Clone, Debug)]
