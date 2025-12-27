@@ -356,12 +356,19 @@ impl McpServer {
                     };
                     success_criteria.push(s.to_string());
                 }
+                let success_criteria = match normalize_required_string_list(
+                    success_criteria,
+                    "steps[].success_criteria",
+                ) {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
                 let tests = match optional_string_array(obj, "tests") {
-                    Ok(v) => v.unwrap_or_default(),
+                    Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
                     Err(resp) => return resp,
                 };
                 let blockers = match optional_string_array(obj, "blockers") {
-                    Ok(v) => v.unwrap_or_default(),
+                    Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
                     Err(resp) => return resp,
                 };
                 steps.push((title, success_criteria, tests, blockers));
@@ -570,6 +577,11 @@ impl McpServer {
                 };
                 criteria.push(s.to_string());
             }
+            let criteria =
+                match normalize_required_string_list(criteria, "steps[].success_criteria") {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
 
             let tests_value = obj.get("tests").cloned().unwrap_or(Value::Null);
             let Some(tests_array) = tests_value.as_array() else {
@@ -585,9 +597,13 @@ impl McpServer {
                 };
                 tests.push(s.to_string());
             }
+            let tests = match normalize_required_string_list(tests, "steps[].tests") {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
 
             let blockers = match optional_string_array(obj, "blockers") {
-                Ok(v) => v.unwrap_or_default(),
+                Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
                 Err(resp) => return resp,
             };
 
@@ -707,25 +723,106 @@ impl McpServer {
             events.push(events_to_json(vec![defined.event]).remove(0));
         }
 
-        ai_ok(
-            "tasks_bootstrap",
-            json!({
-                "workspace": workspace.as_str(),
-                "plan": {
-                    "id": parent_plan_id,
-                    "created": plan_created
-                },
-                "task": {
-                    "id": task_id,
-                    "revision": revision
-                },
-                "steps": decompose.steps.iter().map(|s| json!({
-                    "step_id": s.step_id,
-                    "path": s.path
-                })).collect::<Vec<_>>(),
-                "events": events
-            }),
-        )
+        let mut think_pipeline: Option<Value> = None;
+        let mut warnings = Vec::new();
+        if let Some(think_value) = args_obj.get("think") {
+            if !think_value.is_null() {
+                let Some(think_obj) = think_value.as_object() else {
+                    return ai_error("INVALID_INPUT", "think must be an object");
+                };
+                for key in ["target", "branch", "graph_doc", "trace_doc", "notes_doc"] {
+                    if think_obj.contains_key(key) {
+                        return ai_error(
+                            "INVALID_INPUT",
+                            "think overrides are not supported in tasks_bootstrap",
+                        );
+                    }
+                }
+
+                let mut pipeline_args = serde_json::Map::new();
+                pipeline_args.insert(
+                    "workspace".to_string(),
+                    Value::String(workspace.as_str().to_string()),
+                );
+                pipeline_args.insert("target".to_string(), Value::String(task_id.clone()));
+                for key in [
+                    "frame",
+                    "hypothesis",
+                    "test",
+                    "evidence",
+                    "decision",
+                    "status",
+                    "note_decision",
+                    "note_title",
+                    "note_format",
+                ] {
+                    if let Some(value) = think_obj.get(key) {
+                        pipeline_args.insert(key.to_string(), value.clone());
+                    }
+                }
+
+                let pipeline_response =
+                    self.tool_branchmind_think_pipeline(Value::Object(pipeline_args));
+                if pipeline_response
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    think_pipeline = pipeline_response.get("result").cloned();
+                    if let Some(pipeline_warnings) =
+                        pipeline_response.get("warnings").and_then(|v| v.as_array())
+                    {
+                        warnings.extend(pipeline_warnings.clone());
+                    }
+                } else {
+                    let message = pipeline_response
+                        .get("error")
+                        .and_then(|v| v.get("message"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Think pipeline failed");
+                    warnings.push(warning(
+                        "THINK_PIPELINE_FAILED",
+                        message,
+                        &format!(
+                            "Call branchmind_think_pipeline with target={} to seed reasoning.",
+                            task_id
+                        ),
+                    ));
+                    think_pipeline = Some(json!({
+                        "ok": false,
+                        "error": pipeline_response.get("error").cloned().unwrap_or(Value::Null)
+                    }));
+                }
+            }
+        }
+
+        let mut result = json!({
+            "workspace": workspace.as_str(),
+            "plan": {
+                "id": parent_plan_id,
+                "created": plan_created
+            },
+            "task": {
+                "id": task_id,
+                "revision": revision
+            },
+            "steps": decompose.steps.iter().map(|s| json!({
+                "step_id": s.step_id,
+                "path": s.path
+            })).collect::<Vec<_>>(),
+            "events": events
+        });
+        if let Some(think_pipeline) = think_pipeline {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("think_pipeline".to_string(), think_pipeline);
+            }
+        }
+
+        if warnings.is_empty() {
+            ai_ok("tasks_bootstrap", result)
+        } else {
+            ai_ok_with_warnings("tasks_bootstrap", result, warnings, Vec::new())
+        }
     }
 
     fn tool_tasks_decompose(&mut self, args: Value) -> Value {
@@ -784,6 +881,7 @@ impl McpServer {
                 };
                 success_criteria.push(s.to_string());
             }
+            let success_criteria = normalize_string_list(success_criteria);
             steps.push(bm_storage::NewStep {
                 title,
                 success_criteria,
@@ -868,15 +966,15 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let success_criteria = match optional_string_array(args_obj, "success_criteria") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
         let tests = match optional_string_array(args_obj, "tests") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
         let blockers = match optional_string_array(args_obj, "blockers") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
 
@@ -2823,27 +2921,27 @@ impl McpServer {
             .map(|v| v.to_string());
 
         let blockers = match optional_string_array(args_obj, "blockers") {
-            Ok(v) => v.unwrap_or_default(),
+            Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
             Err(resp) => return resp,
         };
         let dependencies = match optional_string_array(args_obj, "dependencies") {
-            Ok(v) => v.unwrap_or_default(),
+            Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
             Err(resp) => return resp,
         };
         let next_steps = match optional_string_array(args_obj, "next_steps") {
-            Ok(v) => v.unwrap_or_default(),
+            Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
             Err(resp) => return resp,
         };
         let problems = match optional_string_array(args_obj, "problems") {
-            Ok(v) => v.unwrap_or_default(),
+            Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
             Err(resp) => return resp,
         };
         let risks = match optional_string_array(args_obj, "risks") {
-            Ok(v) => v.unwrap_or_default(),
+            Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
             Err(resp) => return resp,
         };
         let success_criteria = match optional_string_array(args_obj, "success_criteria") {
-            Ok(v) => v.unwrap_or_default(),
+            Ok(v) => normalize_optional_string_list(v).unwrap_or_default(),
             Err(resp) => return resp,
         };
 
@@ -2957,27 +3055,27 @@ impl McpServer {
         };
 
         let blockers = match optional_string_array(args_obj, "blockers") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
         let dependencies = match optional_string_array(args_obj, "dependencies") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
         let next_steps = match optional_string_array(args_obj, "next_steps") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
         let problems = match optional_string_array(args_obj, "problems") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
         let risks = match optional_string_array(args_obj, "risks") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
         let success_criteria = match optional_string_array(args_obj, "success_criteria") {
-            Ok(v) => v,
+            Ok(v) => normalize_optional_string_list(v),
             Err(resp) => return resp,
         };
 
@@ -4381,11 +4479,26 @@ impl McpServer {
             .map(|v| v as usize)
             .unwrap_or(20);
 
+        let explicit_target = args_obj
+            .get("task")
+            .and_then(|v| v.as_str())
+            .or_else(|| args_obj.get("plan").and_then(|v| v.as_str()));
+
         let (target_id, kind, focus) =
             match resolve_target_id(&mut self.store, &workspace, args_obj) {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };
+
+        let (focus, focus_previous, focus_restored) = match restore_focus_for_explicit_target(
+            &mut self.store,
+            &workspace,
+            explicit_target,
+            focus,
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
             Ok(v) => v,
@@ -4465,6 +4578,15 @@ impl McpServer {
                 "events": events_to_json(events)
             }
         });
+        if focus_restored {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("focus_restored".to_string(), Value::Bool(true));
+                obj.insert(
+                    "focus_previous".to_string(),
+                    focus_previous.map(Value::String).unwrap_or(Value::Null),
+                );
+            }
+        }
         if let Some(steps) = steps_detail.or(context.steps) {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("steps".to_string(), steps);
@@ -4502,11 +4624,26 @@ impl McpServer {
             .map(|v| v as usize)
             .unwrap_or(5);
 
+        let explicit_target = args_obj
+            .get("task")
+            .and_then(|v| v.as_str())
+            .or_else(|| args_obj.get("plan").and_then(|v| v.as_str()));
+
         let (target_id, kind, focus) =
             match resolve_target_id(&mut self.store, &workspace, args_obj) {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };
+
+        let (focus, focus_previous, focus_restored) = match restore_focus_for_explicit_target(
+            &mut self.store,
+            &workspace,
+            explicit_target,
+            focus,
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let context = match build_radar_context(&mut self.store, &workspace, &target_id, kind) {
             Ok(v) => v,
@@ -4595,6 +4732,10 @@ impl McpServer {
             .get("blockers")
             .cloned()
             .unwrap_or_else(|| Value::Array(Vec::new()));
+        let blockers_total = blockers.as_array().map(|arr| arr.len()).unwrap_or(0);
+        let decisions_total = decisions.len();
+        let evidence_total = evidence.len();
+        let events_total = events.len();
 
         let mut result = json!({
             "workspace": workspace.as_str(),
@@ -4615,12 +4756,22 @@ impl McpServer {
                 "decisions": decisions,
                 "evidence": evidence,
                 "stats": {
+                    "blockers": blockers_total,
                     "decisions": decisions.len(),
                     "evidence": evidence.len()
                 }
             },
             "truncated": false
         });
+        if focus_restored {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("focus_restored".to_string(), Value::Bool(true));
+                obj.insert(
+                    "focus_previous".to_string(),
+                    focus_previous.map(Value::String).unwrap_or(Value::Null),
+                );
+            }
+        }
         if let Some(steps) = context.steps {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("steps".to_string(), steps);
@@ -4655,6 +4806,77 @@ impl McpServer {
             truncated |= trim_array_to_budget(&mut result, &["timeline", "events"], limit, true);
             truncated |= trim_array_to_budget(&mut result, &["signals", "decisions"], limit, false);
             truncated |= trim_array_to_budget(&mut result, &["signals", "evidence"], limit, false);
+            if let Some(events) = result
+                .get("timeline")
+                .and_then(|v| v.get("events"))
+                .and_then(|v| v.as_array())
+            {
+                if events.is_empty() && events_total > 0 {
+                    if ensure_minimal_list_at(
+                        &mut result,
+                        &["timeline", "events"],
+                        events_total,
+                        "events",
+                    ) {
+                        truncated = true;
+                        minimal = true;
+                    }
+                }
+            }
+            let decisions_empty = result
+                .get("signals")
+                .and_then(|v| v.get("decisions"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if decisions_empty && decisions_total > 0 {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["signals", "decisions"],
+                    decisions_total,
+                    "decisions",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                    set_signal_stats(&mut result, blockers_total, decisions_total, evidence_total);
+                }
+            }
+            let evidence_empty = result
+                .get("signals")
+                .and_then(|v| v.get("evidence"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if evidence_empty && evidence_total > 0 {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["signals", "evidence"],
+                    evidence_total,
+                    "evidence",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                    set_signal_stats(&mut result, blockers_total, decisions_total, evidence_total);
+                }
+            }
+            let blockers_empty = result
+                .get("signals")
+                .and_then(|v| v.get("blockers"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if blockers_empty && blockers_total > 0 {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["signals", "blockers"],
+                    blockers_total,
+                    "blockers",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                    set_signal_stats(&mut result, blockers_total, decisions_total, evidence_total);
+                }
+            }
             if json_len_chars(&result) > limit {
                 if let Some(steps) = result.get_mut("steps").and_then(|v| v.as_object_mut()) {
                     if let Some(first) = steps.get_mut("first_open").and_then(|v| v.as_object_mut())
@@ -4722,6 +4944,58 @@ impl McpServer {
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["steps"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(
+                            value,
+                            &["timeline", "events"],
+                            events_total,
+                            "events",
+                        ) {
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["signals", "decisions"],
+                            decisions_total,
+                            "decisions",
+                        ) {
+                            changed = true;
+                            set_signal_stats(
+                                value,
+                                blockers_total,
+                                decisions_total,
+                                evidence_total,
+                            );
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["signals", "evidence"],
+                            evidence_total,
+                            "evidence",
+                        ) {
+                            changed = true;
+                            set_signal_stats(
+                                value,
+                                blockers_total,
+                                decisions_total,
+                                evidence_total,
+                            );
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["signals", "blockers"],
+                            blockers_total,
+                            "blockers",
+                        ) {
+                            changed = true;
+                            set_signal_stats(
+                                value,
+                                blockers_total,
+                                decisions_total,
+                                evidence_total,
+                            );
+                        }
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(
@@ -4799,6 +5073,7 @@ impl McpServer {
             }
         };
         events.reverse();
+        let events_total = events.len();
 
         let mut result = json!({
             "workspace": workspace.as_str(),
@@ -4825,6 +5100,23 @@ impl McpServer {
                 truncated |= compact_event_payloads_at(&mut result, &["delta", "events"]);
             }
             truncated |= trim_array_to_budget(&mut result, &["delta", "events"], limit, true);
+            if let Some(events) = result
+                .get("delta")
+                .and_then(|v| v.get("events"))
+                .and_then(|v| v.as_array())
+            {
+                if events.is_empty() && events_total > 0 {
+                    if ensure_minimal_list_at(
+                        &mut result,
+                        &["delta", "events"],
+                        events_total,
+                        "events",
+                    ) {
+                        truncated = true;
+                        minimal = true;
+                    }
+                }
+            }
             if json_len_chars(&result) > limit {
                 if let Some(steps) = result.get_mut("steps").and_then(|v| v.as_object_mut()) {
                     if let Some(first) = steps.get_mut("first_open").and_then(|v| v.as_object_mut())
@@ -4870,6 +5162,16 @@ impl McpServer {
                     changed |= compact_event_payloads_at(value, &["delta", "events"]);
                     if json_len_chars(value) > limit {
                         changed |= retain_one_at(value, &["delta", "events"], true);
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(
+                            value,
+                            &["delta", "events"],
+                            events_total,
+                            "events",
+                        ) {
+                            changed = true;
+                        }
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &["steps"], &["first_open"]);
@@ -7081,6 +7383,7 @@ impl McpServer {
                 }),
             })
             .collect::<Vec<_>>();
+        let entries_count = entries.len();
 
         let mut result = json!({
             "workspace": workspace.as_str(),
@@ -7092,7 +7395,7 @@ impl McpServer {
                 "next_cursor": slice.next_cursor,
                 "has_more": slice.has_more,
                 "limit": limit,
-                "count": entries.len()
+                "count": entries_count
             },
             "truncated": false
         });
@@ -7114,6 +7417,18 @@ impl McpServer {
             if json_len_chars(&result) > limit {
                 truncated |= trim_array_to_budget(&mut result, &["entries"], limit, true);
                 refresh_pagination_count(&mut result, &["entries"], &["pagination"]);
+            }
+            let entries_empty = result
+                .get("entries")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if entries_empty && entries_count > 0 {
+                if ensure_minimal_list_at(&mut result, &["entries"], entries_count, "entries") {
+                    truncated = true;
+                    minimal = true;
+                    set_pagination_total_at(&mut result, &["pagination"], entries_count);
+                }
             }
             if json_len_chars(&result) > limit {
                 if minimalize_doc_entries_at(&mut result, &["entries"]) {
@@ -7141,6 +7456,12 @@ impl McpServer {
                     let mut changed = false;
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["pagination"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(value, &["entries"], entries_count, "entries") {
+                            changed = true;
+                            set_pagination_total_at(value, &["pagination"], entries_count);
+                        }
                     }
                     changed
                 });
@@ -8704,6 +9025,17 @@ impl McpServer {
         }
     }
 
+    fn latest_doc_for_kind(
+        docs: &[bm_storage::DocumentRow],
+        kind: bm_storage::DocumentKind,
+        fallback: &str,
+    ) -> String {
+        docs.iter()
+            .find(|doc| doc.kind == kind)
+            .map(|doc| doc.doc.clone())
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
     fn resolve_think_commit_scope(
         &mut self,
         workspace: &WorkspaceId,
@@ -9888,6 +10220,7 @@ impl McpServer {
                 })
             })
             .collect::<Vec<_>>();
+        let errors_total = errors.len();
 
         let mut result = json!({
             "workspace": workspace.as_str(),
@@ -9907,12 +10240,28 @@ impl McpServer {
 
             let (_used, errors_truncated) = enforce_graph_list_budget(&mut result, "errors", limit);
             truncated |= errors_truncated;
+            let errors_empty = result
+                .get("errors")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if errors_empty && errors_total > 0 {
+                if ensure_minimal_list_at(&mut result, &["errors"], errors_total, "errors") {
+                    truncated = true;
+                    minimal = true;
+                }
+            }
 
             let _used =
                 ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |value| {
                     let mut changed = false;
                     if json_len_chars(value) > limit {
                         changed |= retain_one_at(value, &["errors"], true);
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(value, &["errors"], errors_total, "errors") {
+                            changed = true;
+                        }
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["errors"]);
@@ -10280,6 +10629,12 @@ impl McpServer {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };
+        let frontier_counts = (
+            frontier_hypotheses.len(),
+            frontier_questions.len(),
+            frontier_subgoals.len(),
+            frontier_tests.len(),
+        );
 
         let mut result = json!({
             "workspace": workspace.as_str(),
@@ -10319,7 +10674,17 @@ impl McpServer {
                 trim_array_to_budget(&mut result, &["candidates"], limit, false);
             truncated |= candidates_trimmed;
             if candidates_trimmed {
-                recompute_card_stats(&mut result, "candidates");
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["candidates"],
+                    candidate_count,
+                    "candidates",
+                ) {
+                    minimal = true;
+                    set_card_stats(&mut result, candidate_count, &by_type);
+                } else {
+                    recompute_card_stats(&mut result, "candidates");
+                }
             }
             if json_len_chars(&result) > limit {
                 for path in [
@@ -10332,6 +10697,31 @@ impl McpServer {
                         break;
                     }
                     truncated |= trim_array_to_budget(&mut result, path, limit, false);
+                }
+            }
+            let (hypotheses_total, questions_total, subgoals_total, tests_total) = frontier_counts;
+            let frontier_specs = [
+                (
+                    &["frontier", "hypotheses"][..],
+                    hypotheses_total,
+                    "hypotheses",
+                ),
+                (&["frontier", "questions"][..], questions_total, "questions"),
+                (&["frontier", "subgoals"][..], subgoals_total, "subgoals"),
+                (&["frontier", "tests"][..], tests_total, "tests"),
+            ];
+            for (path, total, label) in frontier_specs {
+                let empty = result
+                    .get(path[0])
+                    .and_then(|v| v.get(path[1]))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.is_empty())
+                    .unwrap_or(true);
+                if empty && total > 0 {
+                    if ensure_minimal_list_at(&mut result, path, total, label) {
+                        truncated = true;
+                        minimal = true;
+                    }
                 }
             }
             if json_len_chars(&result) > limit {
@@ -10374,6 +10764,31 @@ impl McpServer {
                         if retain_one_at(value, &["candidates"], true) {
                             changed = true;
                             recompute_card_stats(value, "candidates");
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(
+                            value,
+                            &["candidates"],
+                            candidate_count,
+                            "candidates",
+                        ) {
+                            changed = true;
+                            set_card_stats(value, candidate_count, &by_type);
+                        }
+                        for (path, total, label) in [
+                            (
+                                &["frontier", "hypotheses"][..],
+                                hypotheses_total,
+                                "hypotheses",
+                            ),
+                            (&["frontier", "questions"][..], questions_total, "questions"),
+                            (&["frontier", "subgoals"][..], subgoals_total, "subgoals"),
+                            (&["frontier", "tests"][..], tests_total, "tests"),
+                        ] {
+                            if ensure_minimal_list_at(value, path, total, label) {
+                                changed = true;
+                            }
                         }
                     }
                     if json_len_chars(value) > limit {
@@ -11657,6 +12072,13 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
         let candidates = graph_nodes_to_cards(slice.nodes);
+        let candidates_total = candidates.len();
+        let frontier_counts = (
+            frontier_hypotheses.len(),
+            frontier_questions.len(),
+            frontier_subgoals.len(),
+            frontier_tests.len(),
+        );
 
         let trace_slice =
             match self
@@ -11758,12 +12180,43 @@ impl McpServer {
                 );
             }
             truncated |= trim_array_to_budget(&mut result, &["candidates"], limit, false);
+            let (hypotheses_total, questions_total, subgoals_total, tests_total) = frontier_counts;
+            let candidates_empty = result
+                .get("candidates")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if candidates_empty && candidates_total > 0 {
+                if ensure_minimal_list_at(
+                    &mut result,
+                    &["candidates"],
+                    candidates_total,
+                    "candidates",
+                ) {
+                    truncated = true;
+                    minimal = true;
+                }
+            }
             if json_len_chars(&result) > limit {
                 let trimmed_trace =
                     trim_array_to_budget(&mut result, &["trace", "entries"], limit, true);
                 if trimmed_trace {
                     refresh_trace_pagination_count(&mut result);
                     truncated = true;
+                }
+            }
+            let trace_empty = result
+                .get("trace")
+                .and_then(|v| v.get("entries"))
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.is_empty())
+                .unwrap_or(true);
+            if trace_empty && trace_count > 0 {
+                if ensure_minimal_list_at(&mut result, &["trace", "entries"], trace_count, "trace")
+                {
+                    truncated = true;
+                    minimal = true;
+                    set_pagination_total_at(&mut result, &["trace", "pagination"], trace_count);
                 }
             }
             if json_len_chars(&result) > limit {
@@ -11777,6 +12230,29 @@ impl McpServer {
                         break;
                     }
                     truncated |= trim_array_to_budget(&mut result, path, limit, false);
+                }
+            }
+            for (path, total, label) in [
+                (
+                    &["frontier", "hypotheses"][..],
+                    hypotheses_total,
+                    "hypotheses",
+                ),
+                (&["frontier", "questions"][..], questions_total, "questions"),
+                (&["frontier", "subgoals"][..], subgoals_total, "subgoals"),
+                (&["frontier", "tests"][..], tests_total, "tests"),
+            ] {
+                let empty = result
+                    .get(path[0])
+                    .and_then(|v| v.get(path[1]))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.is_empty())
+                    .unwrap_or(true);
+                if empty && total > 0 {
+                    if ensure_minimal_list_at(&mut result, path, total, label) {
+                        truncated = true;
+                        minimal = true;
+                    }
                 }
             }
             if json_len_chars(&result) > limit {
@@ -11834,6 +12310,39 @@ impl McpServer {
                         if retain_one_at(value, &["trace", "entries"], true) {
                             changed = true;
                             refresh_trace_pagination_count(value);
+                        }
+                    }
+                    if json_len_chars(value) > limit {
+                        if ensure_minimal_list_at(
+                            value,
+                            &["candidates"],
+                            candidates_total,
+                            "candidates",
+                        ) {
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["trace", "entries"],
+                            trace_count,
+                            "trace",
+                        ) {
+                            changed = true;
+                            set_pagination_total_at(value, &["trace", "pagination"], trace_count);
+                        }
+                        for (path, total, label) in [
+                            (
+                                &["frontier", "hypotheses"][..],
+                                hypotheses_total,
+                                "hypotheses",
+                            ),
+                            (&["frontier", "questions"][..], questions_total, "questions"),
+                            (&["frontier", "subgoals"][..], subgoals_total, "subgoals"),
+                            (&["frontier", "tests"][..], tests_total, "tests"),
+                        ] {
+                            if ensure_minimal_list_at(value, path, total, label) {
+                                changed = true;
+                            }
                         }
                     }
                     if json_len_chars(value) > limit {
@@ -12747,6 +13256,93 @@ impl McpServer {
         let trace_count = trace_entries.len();
         let card_count = cards.len();
 
+        let mut bridge: Option<Value> = None;
+        let mut bridge_warning: Option<Value> = None;
+        if requested_target.is_some()
+            && notes_count == 0
+            && trace_count == 0
+            && card_count == 0
+            && decisions_total == 0
+            && evidence_total == 0
+            && blockers_total == 0
+        {
+            if let Ok(Some(checkout_branch)) = self.store.branch_checkout_get(&workspace) {
+                if checkout_branch != scope.branch {
+                    let docs = self.store.doc_list(&workspace, &checkout_branch);
+                    if let Ok(docs) = docs {
+                        let notes_doc = Self::latest_doc_for_kind(
+                            &docs,
+                            bm_storage::DocumentKind::Notes,
+                            DEFAULT_NOTES_DOC,
+                        );
+                        let trace_doc = Self::latest_doc_for_kind(
+                            &docs,
+                            bm_storage::DocumentKind::Trace,
+                            DEFAULT_TRACE_DOC,
+                        );
+                        let graph_doc = Self::latest_doc_for_kind(
+                            &docs,
+                            bm_storage::DocumentKind::Graph,
+                            DEFAULT_GRAPH_DOC,
+                        );
+
+                        let notes_has = self
+                            .store
+                            .doc_show_tail(&workspace, &checkout_branch, &notes_doc, None, 1)
+                            .map(|slice| !slice.entries.is_empty())
+                            .unwrap_or(false);
+                        let trace_has = self
+                            .store
+                            .doc_show_tail(&workspace, &checkout_branch, &trace_doc, None, 1)
+                            .map(|slice| !slice.entries.is_empty())
+                            .unwrap_or(false);
+                        let graph_has = self
+                            .store
+                            .graph_query(
+                                &workspace,
+                                &checkout_branch,
+                                &graph_doc,
+                                bm_storage::GraphQueryRequest {
+                                    ids: None,
+                                    types: None,
+                                    status: None,
+                                    tags_any: None,
+                                    tags_all: None,
+                                    text: None,
+                                    cursor: None,
+                                    limit: 1,
+                                    include_edges: false,
+                                    edges_limit: 0,
+                                },
+                            )
+                            .map(|slice| !slice.nodes.is_empty())
+                            .unwrap_or(false);
+
+                        if notes_has || trace_has || graph_has {
+                            bridge = Some(json!({
+                                "checkout": checkout_branch,
+                                "docs": {
+                                    "notes": notes_doc,
+                                    "trace": trace_doc,
+                                    "graph": graph_doc
+                                },
+                                "has": {
+                                    "notes": notes_has,
+                                    "trace": trace_has,
+                                    "graph": graph_has
+                                }
+                            }));
+                            bridge_warning = Some(warning(
+                                "CONTEXT_EMPTY_FOR_TARGET",
+                                "Target reasoning scope is empty; checkout branch has recent context.",
+                                "Call branchmind_context_pack with ref=<checkout> or seed reasoning via branchmind_think_pipeline for the target.",
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         let mut result = json!({
             "workspace": workspace.as_str(),
             "requested": {
@@ -12796,10 +13392,18 @@ impl McpServer {
             "cards": cards,
             "truncated": false
         });
+        if let Some(bridge) = bridge {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("bridge".to_string(), bridge);
+            }
+        }
 
         redact_value(&mut result, 6);
 
         let mut warnings = Vec::new();
+        if let Some(warning) = bridge_warning {
+            warnings.push(warning);
+        }
         if let Some(limit) = max_chars {
             let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
@@ -12877,6 +13481,24 @@ impl McpServer {
                     &["notes", "entries"],
                     &["notes", "pagination"],
                 );
+                let notes_empty = result
+                    .get("notes")
+                    .and_then(|v| v.get("entries"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.is_empty())
+                    .unwrap_or(true);
+                if notes_empty && notes_count > 0 {
+                    if ensure_minimal_list_at(
+                        &mut result,
+                        &["notes", "entries"],
+                        notes_count,
+                        "notes",
+                    ) {
+                        truncated = true;
+                        minimal = true;
+                        set_pagination_total_at(&mut result, &["notes", "pagination"], notes_count);
+                    }
+                }
             }
             if json_len_chars(&result) > limit {
                 truncated |= trim_array_to_budget(&mut result, &["trace", "entries"], limit, true);
@@ -12885,6 +13507,24 @@ impl McpServer {
                     &["trace", "entries"],
                     &["trace", "pagination"],
                 );
+                let trace_empty = result
+                    .get("trace")
+                    .and_then(|v| v.get("entries"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.is_empty())
+                    .unwrap_or(true);
+                if trace_empty && trace_count > 0 {
+                    if ensure_minimal_list_at(
+                        &mut result,
+                        &["trace", "entries"],
+                        trace_count,
+                        "trace",
+                    ) {
+                        truncated = true;
+                        minimal = true;
+                        set_pagination_total_at(&mut result, &["trace", "pagination"], trace_count);
+                    }
+                }
             }
             if json_len_chars(&result) > limit {
                 let decisions_trimmed =
@@ -13013,6 +13653,24 @@ impl McpServer {
                         }
                         if ensure_minimal_list_at(
                             value,
+                            &["notes", "entries"],
+                            notes_count,
+                            "notes",
+                        ) {
+                            set_pagination_total_at(value, &["notes", "pagination"], notes_count);
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
+                            &["trace", "entries"],
+                            trace_count,
+                            "trace",
+                        ) {
+                            set_pagination_total_at(value, &["trace", "pagination"], trace_count);
+                            changed = true;
+                        }
+                        if ensure_minimal_list_at(
+                            value,
                             &["signals", "decisions"],
                             decisions_total,
                             "decisions",
@@ -13077,7 +13735,7 @@ impl McpServer {
                 });
 
             set_truncated_flag(&mut result, truncated);
-            warnings = budget_warnings(truncated, minimal, clamped);
+            warnings.extend(budget_warnings(truncated, minimal, clamped));
         }
 
         if warnings.is_empty() {
@@ -14603,6 +15261,20 @@ fn tool_definitions() -> Vec<Value> {
                             },
                             "required": ["title", "success_criteria", "tests"]
                         }
+                    },
+                    "think": {
+                        "type": "object",
+                        "properties": {
+                            "frame": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
+                            "hypothesis": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
+                            "test": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
+                            "evidence": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
+                            "decision": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
+                            "status": { "type": "object" },
+                            "note_decision": { "type": "boolean" },
+                            "note_title": { "type": "string" },
+                            "note_format": { "type": "string" }
+                        }
                     }
                 },
                 "required": ["workspace", "task_title", "steps"]
@@ -15312,6 +15984,24 @@ fn resolve_target_id(
     Ok((target_id, kind, focus))
 }
 
+fn restore_focus_for_explicit_target(
+    store: &mut SqliteStore,
+    workspace: &WorkspaceId,
+    explicit_target: Option<&str>,
+    current_focus: Option<String>,
+) -> Result<(Option<String>, Option<String>, bool), Value> {
+    let Some(explicit) = explicit_target else {
+        return Ok((current_focus, None, false));
+    };
+    if current_focus.as_deref() == Some(explicit) {
+        return Ok((current_focus, None, false));
+    }
+    if let Err(err) = store.focus_set(workspace, explicit) {
+        return Err(ai_error("STORE_ERROR", &format_store_error(err)));
+    }
+    Ok((Some(explicit.to_string()), current_focus, true))
+}
+
 fn build_radar_context(
     store: &mut SqliteStore,
     workspace: &WorkspaceId,
@@ -15729,6 +16419,43 @@ fn optional_string_array(
         out.push(s.to_string());
     }
     Ok(Some(out))
+}
+
+fn normalize_string_list(raw: Vec<String>) -> Vec<String> {
+    use std::collections::HashSet;
+
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for item in raw {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lowered = trimmed.to_ascii_lowercase();
+        if matches!(lowered.as_str(), "none" | "null" | "n/a" | "na") {
+            continue;
+        }
+        let normalized = trimmed.to_string();
+        if seen.insert(normalized.clone()) {
+            out.push(normalized);
+        }
+    }
+    out
+}
+
+fn normalize_optional_string_list(raw: Option<Vec<String>>) -> Option<Vec<String>> {
+    raw.map(normalize_string_list)
+}
+
+fn normalize_required_string_list(raw: Vec<String>, field: &str) -> Result<Vec<String>, Value> {
+    let normalized = normalize_string_list(raw);
+    if normalized.is_empty() {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            &format!("{field} must not be empty"),
+        ));
+    }
+    Ok(normalized)
 }
 
 fn optional_string_values(
@@ -16978,6 +17705,18 @@ fn refresh_pagination_count(value: &mut Value, entries_path: &[&str], pagination
         "count".to_string(),
         Value::Number(serde_json::Number::from(count as u64)),
     );
+}
+
+fn set_pagination_total_at(value: &mut Value, pagination_path: &[&str], total: usize) -> bool {
+    let Some(pagination) = get_object_mut_at(value, pagination_path) else {
+        return false;
+    };
+    pagination.insert(
+        "count".to_string(),
+        Value::Number(serde_json::Number::from(total as u64)),
+    );
+    pagination.insert("has_more".to_string(), Value::Bool(true));
+    true
 }
 
 fn ensure_budget_limit<F>(

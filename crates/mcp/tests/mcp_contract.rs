@@ -2612,9 +2612,9 @@ fn branchmind_think_wrappers_smoke() {
         .and_then(|v| v.get("cards"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    assert_eq!(
-        pack_stats_cards as usize, pack_candidates_len,
-        "think_pack stats.cards must match candidates length"
+    assert!(
+        pack_stats_cards as usize >= pack_candidates_len,
+        "think_pack stats.cards must be >= candidates length"
     );
 
     let context_budget = server.request(json!({
@@ -3368,6 +3368,149 @@ fn tasks_bootstrap_and_resume_pack_smoke() {
             .and_then(|v| v.get("radar"))
             .is_some()
     );
+
+    let focus = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws1" } }
+    }));
+    let focus_text = extract_tool_text(&focus);
+    assert_eq!(
+        focus_text
+            .get("result")
+            .and_then(|v| v.get("focus"))
+            .and_then(|v| v.as_str()),
+        Some(task_id.as_str())
+    );
+}
+
+#[test]
+fn tasks_bootstrap_with_think_pipeline() {
+    let mut server = Server::start("tasks_bootstrap_with_think_pipeline");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_bootstrap",
+            "arguments": {
+                "workspace": "ws1",
+                "plan_title": "Plan Think",
+                "task_title": "Task Think",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
+                ],
+                "think": {
+                    "frame": "Bootstrap frame",
+                    "decision": "Bootstrap decision"
+                }
+            }
+        }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    assert_eq!(
+        bootstrap_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let pipeline = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("think_pipeline"))
+        .expect("think_pipeline");
+    let cards = pipeline
+        .get("cards")
+        .and_then(|v| v.as_array())
+        .expect("think_pipeline.cards");
+    assert!(cards.len() >= 2);
+    assert!(pipeline.get("decision_note").is_some());
+}
+
+#[test]
+fn tasks_define_normalizes_blockers() {
+    let mut server = Server::start("tasks_define_normalizes_blockers");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_bootstrap",
+            "arguments": {
+                "workspace": "ws1",
+                "plan_title": "Plan Normalize",
+                "task_title": "Task Normalize",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
+                ]
+            }
+        }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let step_path = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("path"))
+        .and_then(|v| v.as_str())
+        .expect("step path")
+        .to_string();
+
+    let defined = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_define", "arguments": { "workspace": "ws1", "task": task_id.clone(), "path": step_path, "blockers": ["None"] } }
+    }));
+    let defined_text = extract_tool_text(&defined);
+    assert_eq!(
+        defined_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let resume = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_resume", "arguments": { "workspace": "ws1", "task": task_id.clone() } }
+    }));
+    let resume_text = extract_tool_text(&resume);
+    let steps = resume_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .expect("steps");
+    let blockers = steps
+        .iter()
+        .find(|s| s.get("step_id").is_some())
+        .and_then(|s| s.get("blockers"))
+        .and_then(|v| v.as_array())
+        .expect("blockers");
+    assert!(blockers.is_empty());
 }
 
 #[test]

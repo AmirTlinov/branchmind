@@ -259,11 +259,21 @@ Load a plan/task with optional timeline events.
 
 Input: `{ workspace, task?, plan?, events_limit? }`
 
+Semantics:
+
+- If `task`/`plan` is provided and differs from current focus, focus is restored to the target.
+- When focus changes, response includes `focus_restored=true` and `focus_previous`.
+
 ### `tasks_resume_pack`
 
 Unified resume: radar + timeline + decisions/evidence/blockers (bounded).
 
 Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_limit?, max_chars? }`
+
+Semantics:
+
+- If `task`/`plan` is provided and differs from current focus, focus is restored to the target.
+- When focus changes, response includes `focus_restored=true` and `focus_previous`.
 
 ### `tasks_context_pack`
 
@@ -370,13 +380,19 @@ Input:
 
 One-call bootstrap: create plan (optional), task, steps, and checkpoints.
 
-Input: `{ workspace, plan?, parent?, plan_title?, task_title, description?, steps[] }` where each step
-requires `title`, `success_criteria[]`, `tests[]`, optional `blockers[]`.
+Input: `{ workspace, plan?, parent?, plan_title?, task_title, description?, steps[], think? }`
+where each step requires `title`, `success_criteria[]`, `tests[]`, optional `blockers[]`.
+
+Optional `think` payload:
+
+- `{ frame?, hypothesis?, test?, evidence?, decision?, status?, note_decision?, note_title?, note_format? }`
+- Seeds the task reasoning pipeline via `branchmind_think_pipeline` with strict defaults.
 
 Semantics:
 
 - Accepts either `plan` (existing) or `plan_title` (create new plan).
 - Rejects empty `success_criteria` or `tests` to keep checkpoints gate-ready.
+- When `think` is provided, output includes `think_pipeline` (or a warning if seeding fails).
 
 Output:
 

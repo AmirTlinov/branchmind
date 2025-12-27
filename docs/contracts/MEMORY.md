@@ -687,7 +687,12 @@ Defaults:
 
 Output:
 
-- `{ requested:{ target, ref }, branch, docs:{ notes, trace, graph }, notes:{...}, trace:{...}, cards:[...], signals:{ blockers, decisions, evidence, stats }, stats:{...}, truncated }`
+- `{ requested:{ target, ref }, branch, docs:{ notes, trace, graph }, notes:{...}, trace:{...}, cards:[...], signals:{ blockers, decisions, evidence, stats }, stats:{...}, bridge?, truncated }`
+
+Notes:
+
+- If `target` is provided but its scope is empty and the checkout branch has recent context,
+  `bridge` is included with `{ checkout, docs, has }` and a `CONTEXT_EMPTY_FOR_TARGET` warning.
 
 ### `branchmind_think_frontier` / `branchmind_think_next`
 
