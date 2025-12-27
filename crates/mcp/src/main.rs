@@ -11752,6 +11752,7 @@ impl McpServer {
             let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
             let mut minimal = false;
+            let mut forced_minimal = false;
 
             if json_len_chars(&result) > limit {
                 truncated |= compact_card_fields_at(
@@ -11881,9 +11882,24 @@ impl McpServer {
                             changed = true;
                         }
                     }
+                    if json_len_chars(value) > limit {
+                        *value = minimal_frontier_value(
+                            limit,
+                            hypotheses_total,
+                            questions_total,
+                            subgoals_total,
+                            tests_total,
+                        );
+                        forced_minimal = true;
+                        changed = true;
+                    }
                     changed
                 });
 
+            if forced_minimal {
+                truncated = true;
+                minimal = true;
+            }
             set_truncated_flag(&mut result, truncated);
             warnings = budget_warnings(truncated, minimal, clamped);
         }
@@ -11942,6 +11958,12 @@ impl McpServer {
             let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
             let mut minimal = false;
+            let mut forced_minimal = false;
+
+            let candidate_stub = result.get("candidate").cloned().map(|mut value| {
+                minimalize_card_value(&mut value);
+                value
+            });
 
             if json_len_chars(&result) > limit {
                 if let Some(candidate) = result.get_mut("candidate") {
@@ -11972,9 +11994,18 @@ impl McpServer {
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["graph_doc"]);
                     }
+                    if json_len_chars(value) > limit {
+                        *value = minimal_next_value(limit, candidate_stub.clone());
+                        forced_minimal = true;
+                        changed = true;
+                    }
                     changed
                 });
 
+            if forced_minimal {
+                truncated = true;
+                minimal = true;
+            }
             set_truncated_flag(&mut result, truncated);
             warnings = budget_warnings(truncated, minimal, clamped);
         }
@@ -19425,6 +19456,57 @@ fn minimal_signal_value(max_chars: usize) -> Value {
         }
     }
     json!({})
+}
+
+fn minimal_frontier_value(
+    max_chars: usize,
+    hypotheses_total: usize,
+    questions_total: usize,
+    subgoals_total: usize,
+    tests_total: usize,
+) -> Value {
+    let total_all = hypotheses_total + questions_total + subgoals_total + tests_total;
+    let candidates = [
+        json!({
+            "frontier": {
+                "hypotheses": [{ "type": "summary", "label": "hypotheses", "count": hypotheses_total }],
+                "questions": [{ "type": "summary", "label": "questions", "count": questions_total }],
+                "subgoals": [{ "type": "summary", "label": "subgoals", "count": subgoals_total }],
+                "tests": [{ "type": "summary", "label": "tests", "count": tests_total }]
+            },
+            "truncated": true
+        }),
+        json!({
+            "frontier": {
+                "hypotheses": [{ "count": hypotheses_total }],
+                "questions": [{ "count": questions_total }],
+                "subgoals": [{ "count": subgoals_total }],
+                "tests": [{ "count": tests_total }]
+            },
+            "truncated": true
+        }),
+        json!({ "frontier": { "count": total_all }, "truncated": true }),
+    ];
+    for candidate in candidates {
+        if json_len_chars(&candidate) <= max_chars {
+            return candidate;
+        }
+    }
+    minimal_signal_value(max_chars)
+}
+
+fn minimal_next_value(max_chars: usize, candidate: Option<Value>) -> Value {
+    if let Some(candidate) = candidate {
+        let candidate_obj = json!({ "candidate": candidate, "truncated": true });
+        if json_len_chars(&candidate_obj) <= max_chars {
+            return candidate_obj;
+        }
+        let candidate_only = json!({ "candidate": candidate });
+        if json_len_chars(&candidate_only) <= max_chars {
+            return candidate_only;
+        }
+    }
+    minimal_signal_value(max_chars)
 }
 
 fn enforce_branchmind_show_budget(value: &mut Value, max_chars: usize) -> (usize, bool) {

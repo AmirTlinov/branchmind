@@ -704,6 +704,7 @@ Input: `{ workspace, target?, ref?, graph_doc?, limit_*?, max_chars? }`
 Notes:
 
 - If `max_chars` is set, responses include `budget.used_chars` and may truncate lists with minimal summaries.
+- Under very small budgets, tools return a minimal frontier/candidate stub (or a `signal` fallback) instead of an empty payload.
 
 ### `branchmind_think_link` / `branchmind_think_set_status`
 

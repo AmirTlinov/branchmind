@@ -2580,6 +2580,13 @@ fn branchmind_think_wrappers_smoke() {
         frontier_used <= frontier_max,
         "budget.used_chars must be <= max_chars for think_frontier"
     );
+    let frontier_result = frontier_budgeted_text
+        .get("result")
+        .expect("frontier result");
+    assert!(
+        frontier_result.get("frontier").is_some() || frontier_result.get("signal").is_some(),
+        "think_frontier should return minimal frontier or signal under tiny max_chars"
+    );
 
     let next = server.request(json!({
         "jsonrpc": "2.0",
@@ -2615,6 +2622,11 @@ fn branchmind_think_wrappers_smoke() {
     assert!(
         next_used <= next_max,
         "budget.used_chars must be <= max_chars for think_next"
+    );
+    let next_result = next_budgeted_text.get("result").expect("next result");
+    assert!(
+        next_result.get("candidate").is_some() || next_result.get("signal").is_some(),
+        "think_next should return minimal candidate or signal under tiny max_chars"
     );
 
     let pack = server.request(json!({
