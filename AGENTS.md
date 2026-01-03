@@ -103,17 +103,11 @@ These rules exist to make the codebase **cheap to modify** for AI agents and hum
   3) call storage via request structs (storage API discipline),
   4) map errors → typed MCP errors with recovery hints.
 
-### AI-agents DX (tool UX discipline)
+### Tool usage rules (moved)
 
-- Treat the **tool list size** as a UX budget: provide a curated “daily driver” subset for `tools/list` so agents
-  don’t waste context on rarely-used operations.
-- For flagship UX, the daily-driver set should be **≤ 5 portal tools** (progressive disclosure).
-- Preserve the full parity surface for compatibility, but allow clients to opt into a reduced advertised set
-  (e.g., `full` vs `daily`) without changing tool semantics.
-- Prefer “focus-first” targeting for daily work: after explicitly setting focus once, subsequent `tasks_*` calls
-  should be able to omit repetitive `task`/`plan` identifiers safely.
-- Prefer “template-first” bootstrapping for common workflows: use `tasks_macro_start` with `template` to avoid
-  repeating boilerplate step criteria/tests, and discover built-ins via `tasks_templates_list`.
+Rules for *using* BranchMind tools day-to-day (portal set, progressive disclosure, focus/template discipline)
+are configured in the local Codex config (`config.toml`) to stay consistent across repositories.
+Project-level UX doctrine still lives in `docs/architecture/AGENT_UX.md`.
 
 ### Storage API discipline (request structs)
 
@@ -136,13 +130,10 @@ If we ever change one of these, it must be an explicit decision with contract + 
 - **Storage boundary:** a *single embedded store* with transactional atomicity for “task mutation + emitted event” writes.
 - **Dependency policy:** “minimal audited deps” in adapters; `bm_core` stays std-only (no “0 deps strict” mandate).
 
-## Practical development workflow (once code exists)
+## Practical development workflow (moved)
 
-- Formatting: `cargo fmt --all`
-- Lints: `cargo clippy --all-targets -- -D warnings`
-- Tests: `cargo test --all`
-- If your MCP client is configured to run the release binary, rebuild it after changes: `cargo build --release`
-- To load a newly built MCP binary, restart the MCP client session (it typically pins the server process per session).
+Local “how to run” workflow rules (format/lints/tests/release build + session restart) are kept in the Codex
+`config.toml` so agents don’t need to re-learn them per repo.
 
 ## Aliases (quick navigation)
 
