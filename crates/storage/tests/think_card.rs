@@ -2,7 +2,10 @@
 
 use bm_core::ids::WorkspaceId;
 use bm_core::model::TaskKind;
-use bm_storage::{GraphQueryRequest, SqliteStore, StoreError, ThinkCardInput};
+use bm_storage::{
+    GraphQueryRequest, SqliteStore, StoreError, TaskCreateRequest, ThinkCardCommitRequest,
+    ThinkCardInput,
+};
 use std::path::PathBuf;
 
 fn temp_dir(test_name: &str) -> PathBuf {
@@ -26,27 +29,31 @@ fn think_card_commit_is_atomic_and_idempotent() {
     let (plan_id, _, _) = store
         .create(
             &workspace,
-            TaskKind::Plan,
-            "Plan".to_string(),
-            None,
-            None,
-            None,
-            None,
-            "plan_created".to_string(),
-            r#"{"title":"Plan"}"#.to_string(),
+            TaskCreateRequest {
+                kind: TaskKind::Plan,
+                title: "Plan".to_string(),
+                parent_plan_id: None,
+                description: None,
+                contract: None,
+                contract_json: None,
+                event_type: "plan_created".to_string(),
+                event_payload_json: r#"{"title":"Plan"}"#.to_string(),
+            },
         )
         .expect("create plan");
     let (task_id, _, _) = store
         .create(
             &workspace,
-            TaskKind::Task,
-            "Task".to_string(),
-            Some(plan_id),
-            None,
-            None,
-            None,
-            "task_created".to_string(),
-            r#"{"title":"Task"}"#.to_string(),
+            TaskCreateRequest {
+                kind: TaskKind::Task,
+                title: "Task".to_string(),
+                parent_plan_id: Some(plan_id),
+                description: None,
+                contract: None,
+                contract_json: None,
+                event_type: "task_created".to_string(),
+                event_payload_json: r#"{"title":"Task"}"#.to_string(),
+            },
         )
         .expect("create task");
 
@@ -69,12 +76,14 @@ fn think_card_commit_is_atomic_and_idempotent() {
     let out2 = store
         .think_card_commit(
             &workspace,
-            &reasoning.branch,
-            &reasoning.trace_doc,
-            &reasoning.graph_doc,
-            card2,
-            &[],
-            &[],
+            ThinkCardCommitRequest {
+                branch: reasoning.branch.clone(),
+                trace_doc: reasoning.trace_doc.clone(),
+                graph_doc: reasoning.graph_doc.clone(),
+                card: card2,
+                supports: vec![],
+                blocks: vec![],
+            },
         )
         .expect("commit card2");
     assert!(out2.inserted);
@@ -97,12 +106,14 @@ fn think_card_commit_is_atomic_and_idempotent() {
     let out1 = store
         .think_card_commit(
             &workspace,
-            &reasoning.branch,
-            &reasoning.trace_doc,
-            &reasoning.graph_doc,
-            card1,
-            &["CARD-2".to_string()],
-            &[],
+            ThinkCardCommitRequest {
+                branch: reasoning.branch.clone(),
+                trace_doc: reasoning.trace_doc.clone(),
+                graph_doc: reasoning.graph_doc.clone(),
+                card: card1,
+                supports: vec!["CARD-2".to_string()],
+                blocks: vec![],
+            },
         )
         .expect("commit card1");
     assert!(out1.inserted);
@@ -113,23 +124,25 @@ fn think_card_commit_is_atomic_and_idempotent() {
     let out1_again = store
         .think_card_commit(
             &workspace,
-            &reasoning.branch,
-            &reasoning.trace_doc,
-            &reasoning.graph_doc,
-            ThinkCardInput {
-                card_id: "CARD-1".to_string(),
-                card_type: "hypothesis".to_string(),
-                title: Some("Hypothesis".to_string()),
-                text: Some("It works".to_string()),
-                status: Some("open".to_string()),
-                tags: vec!["ux".to_string(), "mvp".to_string()],
-                meta_json: None,
-                content: "It works".to_string(),
-                payload_json: r#"{"id":"CARD-1","type":"hypothesis","title":"Hypothesis","text":"It works","status":"open","tags":["mvp","ux"]}"#
-                    .to_string(),
+            ThinkCardCommitRequest {
+                branch: reasoning.branch.clone(),
+                trace_doc: reasoning.trace_doc.clone(),
+                graph_doc: reasoning.graph_doc.clone(),
+                card: ThinkCardInput {
+                    card_id: "CARD-1".to_string(),
+                    card_type: "hypothesis".to_string(),
+                    title: Some("Hypothesis".to_string()),
+                    text: Some("It works".to_string()),
+                    status: Some("open".to_string()),
+                    tags: vec!["ux".to_string(), "mvp".to_string()],
+                    meta_json: None,
+                    content: "It works".to_string(),
+                    payload_json: r#"{"id":"CARD-1","type":"hypothesis","title":"Hypothesis","text":"It works","status":"open","tags":["mvp","ux"]}"#
+                        .to_string(),
+                },
+                supports: vec!["CARD-2".to_string()],
+                blocks: vec![],
             },
-            &["CARD-2".to_string()],
-            &[],
         )
         .expect("commit card1 again");
     assert!(!out1_again.inserted);
@@ -205,27 +218,31 @@ fn think_card_commit_rejects_payload_mismatch_for_same_id() {
     let (plan_id, _, _) = store
         .create(
             &workspace,
-            TaskKind::Plan,
-            "Plan".to_string(),
-            None,
-            None,
-            None,
-            None,
-            "plan_created".to_string(),
-            r#"{"title":"Plan"}"#.to_string(),
+            TaskCreateRequest {
+                kind: TaskKind::Plan,
+                title: "Plan".to_string(),
+                parent_plan_id: None,
+                description: None,
+                contract: None,
+                contract_json: None,
+                event_type: "plan_created".to_string(),
+                event_payload_json: r#"{"title":"Plan"}"#.to_string(),
+            },
         )
         .expect("create plan");
     let (task_id, _, _) = store
         .create(
             &workspace,
-            TaskKind::Task,
-            "Task".to_string(),
-            Some(plan_id),
-            None,
-            None,
-            None,
-            "task_created".to_string(),
-            r#"{"title":"Task"}"#.to_string(),
+            TaskCreateRequest {
+                kind: TaskKind::Task,
+                title: "Task".to_string(),
+                parent_plan_id: Some(plan_id),
+                description: None,
+                contract: None,
+                contract_json: None,
+                event_type: "task_created".to_string(),
+                event_payload_json: r#"{"title":"Task"}"#.to_string(),
+            },
         )
         .expect("create task");
 
@@ -236,46 +253,50 @@ fn think_card_commit_rejects_payload_mismatch_for_same_id() {
     store
         .think_card_commit(
             &workspace,
-            &reasoning.branch,
-            &reasoning.trace_doc,
-            &reasoning.graph_doc,
-            ThinkCardInput {
-                card_id: "CARD-1".to_string(),
-                card_type: "note".to_string(),
-                title: Some("A".to_string()),
-                text: Some("B".to_string()),
-                status: Some("open".to_string()),
-                tags: vec![],
-                meta_json: None,
-                content: "B".to_string(),
-                payload_json: r#"{"id":"CARD-1","type":"note","title":"A","text":"B","status":"open","tags":[]}"#
-                    .to_string(),
+            ThinkCardCommitRequest {
+                branch: reasoning.branch.clone(),
+                trace_doc: reasoning.trace_doc.clone(),
+                graph_doc: reasoning.graph_doc.clone(),
+                card: ThinkCardInput {
+                    card_id: "CARD-1".to_string(),
+                    card_type: "note".to_string(),
+                    title: Some("A".to_string()),
+                    text: Some("B".to_string()),
+                    status: Some("open".to_string()),
+                    tags: vec![],
+                    meta_json: None,
+                    content: "B".to_string(),
+                    payload_json: r#"{"id":"CARD-1","type":"note","title":"A","text":"B","status":"open","tags":[]}"#
+                        .to_string(),
+                },
+                supports: vec![],
+                blocks: vec![],
             },
-            &[],
-            &[],
         )
         .expect("first commit");
 
     let err = store
         .think_card_commit(
             &workspace,
-            &reasoning.branch,
-            &reasoning.trace_doc,
-            &reasoning.graph_doc,
-            ThinkCardInput {
-                card_id: "CARD-1".to_string(),
-                card_type: "note".to_string(),
-                title: Some("A".to_string()),
-                text: Some("CHANGED".to_string()),
-                status: Some("open".to_string()),
-                tags: vec![],
-                meta_json: None,
-                content: "CHANGED".to_string(),
-                payload_json: r#"{"id":"CARD-1","type":"note","title":"A","text":"CHANGED","status":"open","tags":[]}"#
-                    .to_string(),
+            ThinkCardCommitRequest {
+                branch: reasoning.branch.clone(),
+                trace_doc: reasoning.trace_doc.clone(),
+                graph_doc: reasoning.graph_doc.clone(),
+                card: ThinkCardInput {
+                    card_id: "CARD-1".to_string(),
+                    card_type: "note".to_string(),
+                    title: Some("A".to_string()),
+                    text: Some("CHANGED".to_string()),
+                    status: Some("open".to_string()),
+                    tags: vec![],
+                    meta_json: None,
+                    content: "CHANGED".to_string(),
+                    payload_json: r#"{"id":"CARD-1","type":"note","title":"A","text":"CHANGED","status":"open","tags":[]}"#
+                        .to_string(),
+                },
+                supports: vec![],
+                blocks: vec![],
             },
-            &[],
-            &[],
         )
         .expect_err("expected payload mismatch error");
 

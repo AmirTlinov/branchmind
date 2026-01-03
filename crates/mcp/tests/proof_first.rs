@@ -1,0 +1,238 @@
+#![forbid(unsafe_code)]
+
+mod support;
+use support::*;
+
+use serde_json::json;
+
+fn assert_tag_light(text: &str) {
+    assert!(
+        !text.trim_start().starts_with('{'),
+        "fmt=lines must not fall back to JSON envelopes"
+    );
+    assert!(
+        !text.contains("WATERMARK:") && !text.contains("ANSWER:"),
+        "fmt=lines must not include legacy tag prefixes for content lines"
+    );
+    assert!(
+        !text.contains("\n\n"),
+        "fmt=lines must not include empty lines"
+    );
+    for (idx, line) in text.lines().enumerate() {
+        assert!(
+            !line.trim().is_empty(),
+            "fmt=lines must not include empty line at {idx}"
+        );
+    }
+}
+
+#[test]
+fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_required_step_fails_portal_first_and_recovers_with_proof",
+        &["--toolset", "daily", "--workspace", "ws_proof_required"],
+    );
+
+    // Start a principal task (principal templates include proof-required verification step).
+    let started = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Task", "template": "principal-task" } }
+    }));
+    let start_text = extract_tool_text_str(&started);
+    assert_tag_light(&start_text);
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!( {
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(
+            !text.starts_with("ERROR:"),
+            "early step closure should succeed without proof"
+        );
+    }
+
+    // Snapshot should proactively include a proof placeholder in the next action.
+    let snapshot = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks_snapshot", "arguments": {} }
+    }));
+    let snap_text = extract_tool_text_str(&snapshot);
+    assert_tag_light(&snap_text);
+    let snap_lines = snap_text.lines().collect::<Vec<_>>();
+    assert_eq!(
+        snap_lines.len(),
+        2,
+        "snapshot should remain 2 lines even when proof is required"
+    );
+    assert!(
+        snap_lines[1].starts_with("tasks_macro_close_step"),
+        "snapshot should suggest closing the next step"
+    );
+    assert!(
+        snap_lines[1].contains("proof=["),
+        "proof-required step should inject a proof placeholder into the next action"
+    );
+
+    // Attempting to close without proof must produce a typed error with a portal-first retry.
+    let close_without_proof = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_close_step", "arguments": {} }
+    }));
+    let err_text = extract_tool_text_str(&close_without_proof);
+    assert_tag_light(&err_text);
+    let err_lines = err_text.lines().collect::<Vec<_>>();
+    assert_eq!(err_lines.len(), 2, "proof-required error should be 2 lines");
+    assert!(
+        err_lines[0].starts_with("ERROR: PROOF_REQUIRED"),
+        "error must be typed as PROOF_REQUIRED"
+    );
+    assert!(
+        err_lines[1].starts_with("tasks_macro_close_step"),
+        "recovery must stay portal-first (retry macro)"
+    );
+    assert!(
+        err_lines[1].contains("proof="),
+        "recovery command should include a proof placeholder"
+    );
+
+    // Providing proof should allow the macro to capture evidence and close the step.
+    let close_with_proof = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_close_step", "arguments": { "proof": "cargo test" } }
+    }));
+    let ok_text = extract_tool_text_str(&close_with_proof);
+    assert_tag_light(&ok_text);
+    assert!(
+        !ok_text.starts_with("ERROR:"),
+        "macro_close_step should succeed when proof is provided"
+    );
+}
+
+#[test]
+fn proof_weak_warning_is_soft_and_does_not_block_closing() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_weak_warning_is_soft_and_does_not_block_closing",
+        &["--toolset", "daily", "--workspace", "ws_proof_weak"],
+    );
+
+    let started = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Weak Task", "template": "principal-task" } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!( {
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    // Provide a minimal proof (command only). The macro should auto-normalize it to a CMD receipt
+    // and emit a soft PROOF_WEAK warning for the missing LINK receipt.
+    let closed = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_close_step",
+            "arguments": {
+                "proof": "cargo test"
+            }
+        }
+    }));
+    let text = extract_tool_text_str(&closed);
+    assert_tag_light(&text);
+    assert!(
+        !text.starts_with("ERROR:"),
+        "closing should not be blocked by proof lint"
+    );
+    assert!(
+        text.lines().any(|l| l.starts_with("WARNING: PROOF_WEAK")),
+        "soft proof lint warning should be surfaced"
+    );
+}
+
+#[test]
+fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate",
+        &["--toolset", "daily", "--workspace", "ws_proof_placeholder"],
+    );
+
+    let started = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Placeholder Task", "template": "principal-task" } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!( {
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    // Attempt to close the proof-required step with the literal placeholder proof.
+    // This must NOT satisfy the proof-required gate.
+    let closed = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_close_step",
+            "arguments": {
+                "proof": [
+                    "CMD: <fill: command you ran>",
+                    "LINK: <fill: CI run / artifact / log>"
+                ]
+            }
+        }
+    }));
+    let text = extract_tool_text_str(&closed);
+    assert_tag_light(&text);
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "error must stay 2 lines");
+    assert!(
+        lines[0].starts_with("ERROR: PROOF_REQUIRED"),
+        "placeholder-only proof must be ignored (still PROOF_REQUIRED)"
+    );
+    assert!(
+        lines[1].starts_with("tasks_macro_close_step"),
+        "recovery must stay portal-first"
+    );
+    assert!(
+        lines[1].contains("proof="),
+        "recovery command must include proof template"
+    );
+}

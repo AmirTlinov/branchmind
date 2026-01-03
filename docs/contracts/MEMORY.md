@@ -20,6 +20,14 @@ All stateful tools in this family operate inside an explicit `workspace` (a stab
 
 - `workspace` is required in v0 to avoid implicit context and silent cross-project writes.
 
+## Focus-first targeting (DX rule)
+
+To keep daily agent usage **cognitively cheap**, tools that accept a `target` may omit it when the workspace focus is set.
+
+- Explicit `target` always wins.
+- If no explicit target/scope is provided, the tool uses the current workspace focus (set via `tasks_focus_set`).
+- If focus is not set, tools fall back to checkout-based defaults as described per tool.
+
 ## Document model (v0 MVP)
 
 In v0, the primary memory primitives are **documents**:
@@ -61,7 +69,7 @@ This produces a snapshot-like experience without copying logs.
 
 ## Tool surface (Milestone 2–3 MVP)
 
-### `branchmind_init`
+### `init`
 
 Ensures the workspace storage is initialized and bootstraps a default branch.
 
@@ -80,21 +88,34 @@ Defaults:
 - `defaults.docs.graph` = `graph`
 - `defaults.docs.trace` = `trace`
 
-### `branchmind_status`
+### `status`
 
 Fast storage and workspace snapshot.
 
 Input: `{ workspace }`  
+DX note: `workspace` may be omitted when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
 Output:
 
 - `{ workspace, schema_version, workspace_exists, checkout?, defaults, golden_path?, last_event?, last_doc_entry? }`
 - `last_event` shape: `{ event_id, ts, ts_ms }`
 - `last_doc_entry` shape: `{ seq, ts, ts_ms, branch, doc, kind }`
 - `checkout` is the current checkout branch (or `null` if unset).
-- `defaults` match `branchmind_init` defaults.
+- `defaults` match `init` defaults.
 - `golden_path` lists the recommended minimal DX flow (macros + snapshot).
 
-### `branchmind_notes_commit`
+### `help`
+
+Agent-first help: protocol semantics, proof conventions, and the daily portal workflow.
+
+Input: `{ max_chars? }`  
+Output: a bounded help text (string).
+
+Semantics:
+
+- Read-only, no workspace required.
+- Intended as the single place where the system explains tag semantics and “how to use the portals” (to avoid repeating this in every response).
+
+### `notes_commit`
 
 Appends a single note entry to the **notes** document of a target (plan/task), or to an explicit `(branch, doc)`.
 
@@ -107,14 +128,16 @@ Input (one of):
 
 Defaults:
 
-- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
-- If `doc` is omitted in that mode, it defaults to `notes`.
+- If `target` is not provided and `branch`/`doc` are omitted:
+  - If workspace focus is set, it is used as the implicit `target`.
+  - Otherwise the current checkout branch is used.
+- If `doc` is omitted in `(branch, doc)` mode, it defaults to `notes`.
 
 Output:
 
 - `{ entry: { seq, ts, branch, doc, kind:"note", title?, format?, meta?, content } }`
 
-### `branchmind_show`
+### `show`
 
 Reads a bounded slice (tail/pagination) of a document.
 
@@ -125,7 +148,9 @@ Input (one of):
 
 Defaults:
 
-- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `target` is not provided and `branch` is omitted:
+  - If workspace focus is set, it is used as the implicit `target`.
+  - Otherwise the current checkout branch is used.
 - If `doc` is omitted in that mode, it defaults to:
   - `notes` when `doc_kind="notes"`
   - `trace` when `doc_kind="trace"` (default)
@@ -136,10 +161,10 @@ Output:
 
 Semantics:
 
-- If `branch` has a recorded base, `branchmind_show` returns the **effective view** (base snapshot + branch entries).
+- If `branch` has a recorded base, `show` returns the **effective view** (base snapshot + branch entries).
 - If `branch` has no base, it returns entries written to that branch only.
 
-### `branchmind_export`
+### `export`
 
 Builds a bounded snapshot for fast IDE/agent resumption: target metadata + reasoning refs + tail of notes and trace.
 
@@ -152,17 +177,17 @@ Output:
 Semantics:
 
 - Resolves the canonical branch/docs via `target` (plan/task).
-- `notes` and `trace` are equivalent to calling `branchmind_show` with `cursor=null` and the provided limits.
+- `notes` and `trace` are equivalent to calling `show` with `cursor=null` and the provided limits.
 - `max_chars` applies to the whole snapshot payload; truncation must be explicit.
 
-### `branchmind_diff`
+### `diff`
 
 Directional diff between two branches for a single document.
 
 Input: `{ workspace, from, to, doc?, cursor?, limit?, max_chars? }`
 
 - `doc` defaults to `"notes"`.
-- `cursor`/`limit` follow the same semantics as `branchmind_show` (tail pagination by `seq`).
+- `cursor`/`limit` follow the same semantics as `show` (tail pagination by `seq`).
 
 Output:
 
@@ -173,7 +198,7 @@ Semantics:
 - `entries` are those present in the **effective view** of `(to, doc)` but **not** present in the effective view of `(from, doc)`.
 - This is a reasoning-log diff (append-only): “removed” does not exist; reverse arguments to see the opposite direction.
 
-### `branchmind_merge`
+### `merge`
 
 Idempotent merge of note entries from one branch into another (VCS-like for reasoning notes).
 
@@ -249,7 +274,7 @@ Although MCP inputs/outputs are JSON strings, the server treats graph keys as ty
 - `tags` are normalized (lowercased, deduplicated, stable ordering).
 - Reserved namespaces: task projection uses `task:` and `step:` node id prefixes.
 
-### `branchmind_graph_apply`
+### `graph_apply`
 
 Apply a batch of typed graph operations to a target’s graph document or an explicit `(branch, doc)`.
 
@@ -260,7 +285,9 @@ Input (one of):
 
 Defaults:
 
-- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `target` is not provided and `branch` is omitted:
+  - If workspace focus is set, it is used as the implicit `target`.
+  - Otherwise the current checkout branch is used.
 - If `doc` is omitted in that mode, it defaults to `graph`.
 
 Where `ops[]` is an array of operations:
@@ -280,7 +307,7 @@ Semantics:
 - Each op creates a new version (`last_seq` increases monotonically).
 - IDs must be non-empty; tools must be deterministic.
 
-### `branchmind_graph_query`
+### `graph_query`
 
 Query a bounded slice of the effective graph view.
 
@@ -294,7 +321,9 @@ Defaults:
 - `include_edges=true`
 - `limit=50` (nodes)
 - `edges_limit=200`
-- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `target` is not provided and `branch` is omitted:
+  - If workspace focus is set, it is used as the implicit `target`.
+  - Otherwise the current checkout branch is used.
 - If `doc` is omitted in that mode, it defaults to `graph`.
 
 Output:
@@ -304,11 +333,11 @@ Output:
 Semantics:
 
 - Nodes are ordered by `last_seq DESC` (recent-first).
-- Pagination uses a `cursor` that behaves like `branchmind_show`: `last_seq < cursor` (tail pagination by seq).
+- Pagination uses a `cursor` that behaves like `show`: `last_seq < cursor` (tail pagination by seq).
 - `edges` are limited to those connecting returned nodes and bounded by `edges_limit`.
 - `max_chars` truncates by dropping older nodes/edges first; truncation must be explicit.
 
-### `branchmind_graph_validate`
+### `graph_validate`
 
 Validate invariants of the effective graph view.
 
@@ -319,7 +348,9 @@ Input (one of):
 
 Defaults:
 
-- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
+- If `target` is not provided and `branch` is omitted:
+  - If workspace focus is set, it is used as the implicit `target`.
+  - Otherwise the current checkout branch is used.
 - If `doc` is omitted in that mode, it defaults to `graph`.
 
 Output:
@@ -331,14 +362,14 @@ Semantics (v0):
 - Every edge endpoint must exist as a non-deleted node in the same effective view.
 - Errors are bounded by `max_errors` (default 50).
 
-### `branchmind_graph_diff`
+### `graph_diff`
 
 Directional diff between two branches for a single graph document (patch-style).
 
 Input: `{ workspace, from, to, doc?, cursor?, limit?, max_chars? }`
 
 - `doc` defaults to `"graph"`.
-- `cursor`/`limit` follow the same semantics as `branchmind_show` (tail pagination by `seq`).
+- `cursor`/`limit` follow the same semantics as `show` (tail pagination by `seq`).
 
 Output:
 
@@ -358,7 +389,7 @@ Semantics:
 
 Graph merges are 3-way and conflicts are first-class entities.
 
-### `branchmind_graph_merge`
+### `graph_merge`
 
 Merge graph changes from a derived branch back into its base branch.
 
@@ -386,7 +417,7 @@ Semantics:
 - If `into` also changed the same key differently since the base snapshot → create a conflict entity and skip applying that key.
 - Conflict discovery must be deterministic and idempotent.
 
-### `branchmind_graph_conflicts`
+### `graph_conflicts`
 
 List conflicts for a target merge destination.
 
@@ -400,7 +431,7 @@ Output:
 
 - `{ into, doc, conflicts:[{ conflict_id, kind, key, status, created_at_ms }], pagination:{...}, truncated }`
 
-### `branchmind_graph_conflict_show`
+### `graph_conflict_show`
 
 Show a single conflict with base/from/into snapshots.
 
@@ -410,7 +441,7 @@ Output:
 
 - `{ conflict:{ conflict_id, kind, key, from, into, doc, status, base, theirs, ours, created_at_ms, resolved_at_ms? } }`
 
-### `branchmind_graph_conflict_resolve`
+### `graph_conflict_resolve`
 
 Resolve a conflict explicitly and (optionally) apply the chosen state into the destination branch.
 
@@ -425,7 +456,7 @@ Semantics:
 - `use_from` writes the `from` snapshot into `into` as a new version (then marks conflict resolved).
 - `use_into` keeps the destination state and just marks conflict resolved.
 
-### `branchmind_branch_create`
+### `branch_create`
 
 Creates a new branch ref from an existing branch snapshot (no copy).
 
@@ -436,7 +467,7 @@ Input: `{ workspace, name, from? }`
 
 Output: `{ workspace, branch: { name, base_branch, base_seq } }`
 
-### `branchmind_diagnostics`
+### `diagnostics`
 
 Single-shot health check for reasoning + tasks with recovery suggestions.
 
@@ -449,36 +480,45 @@ Semantics:
 - Aggregates reasoning refs + task lint in one call.
 - `golden_path` lists the recommended DX flow (macros + snapshot).
 
-### `branchmind_macro_branch_note`
+### `macro_branch_note`
 
-One-call: create branch → checkout → seed a note.
+Daily portal: append a note, optionally creating/switching a branch.
 
-Input: `{ workspace, name, from?, doc?, content, format?, title?, meta? }`
+Input: `{ workspace, name?, from?, doc?, content?, template?, goal?, format?, title?, meta? }`
+DX note: `workspace` may be omitted when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
 
 Output: `{ workspace, branch, checkout, note }`
 
-### `branchmind_branch_list`
+Semantics:
+
+- If `name` is provided: create branch `name` (base `from` or current checkout) → checkout to `name` → append the note.
+- If `name` is omitted:
+  - if `from` is provided: checkout to existing branch `from` → append the note,
+  - otherwise: append the note to the current checkout branch.
+- `branch.created` is `true` only when a new branch was created in this call.
+
+### `branch_list`
 
 Lists known branch refs for a workspace (including canonical task/plan branches).
 
 Input: `{ workspace, limit?, max_chars? }`  
 Output: `{ workspace, branches:[...], truncated? }`
 
-### `branchmind_checkout`
+### `checkout`
 
 Sets the current workspace branch ref (convenience; does not affect tasks).
 
 Input: `{ workspace, ref }`  
 Output: `{ workspace, previous?, current }`
 
-### `branchmind_branch_rename`
+### `branch_rename`
 
 Renames a branch ref and updates dependent artifacts (documents, refs, tags, checkout).
 
 Input: `{ workspace, old, new }`  
 Output: `{ workspace, previous, current }`
 
-### `branchmind_branch_delete`
+### `branch_delete`
 
 Deletes a branch ref and its stored artifacts if it is safe to remove.
 
@@ -512,7 +552,7 @@ Supported card types (v0):
 
 - `frame`, `hypothesis`, `question`, `test`, `evidence`, `decision`, `note`, `update`
 
-### `branchmind_think_template`
+### `think_template`
 
 Return a deterministic card skeleton so agents never guess required fields.
 
@@ -527,7 +567,7 @@ Semantics:
 - Unknown `type` must be a typed error with a recovery hint listing `supported_types`.
 - `template` is a JSON object that includes at least: `id`, `type`, `title?`, `text?`, `status?`, `tags?`, `meta?`.
 
-### `branchmind_think_card`
+### `think_card`
 
 Atomically commit a thinking card into `trace_doc` and upsert the corresponding node/edges into `graph_doc`.
 
@@ -568,7 +608,7 @@ Semantics:
   - A repeated call with identical normalized `card` + edges must not create a second trace entry.
   - It must not create new graph versions if the effective node/edges are already semantically equal.
 
-### `branchmind_think_pipeline`
+### `think_pipeline`
 
 Canonical multi-stage pipeline: `frame → hypothesis → test → evidence → decision`.
 
@@ -598,7 +638,7 @@ Semantics:
 - If `note_decision=true`, the decision is summarized into `notes_doc`.
 - `status` keys must match provided stages; unknown keys or statuses for missing stages are errors.
 
-### `branchmind_think_context`
+### `think_context`
 
 Return a bounded, low-noise “thinking context slice” for fast resumption.
 
@@ -630,7 +670,7 @@ Semantics:
 These tools provide a lightweight, notes-focused VCS surface. They are wrappers over
 `documents` + `doc_entries` and do not alter task semantics.
 
-### `branchmind_commit`
+### `commit`
 
 Appends a note entry and returns a commit-like record.
 
@@ -641,7 +681,7 @@ Semantics:
 - `artifact` is stored as the note `content`.
 - `docs` defaults to `notes` when omitted.
 
-### `branchmind_log`
+### `log`
 
 Returns recent commit-like entries.
 
@@ -651,21 +691,21 @@ Defaults:
 
 - `ref` defaults to the current checkout branch.
 
-### `branchmind_docs_list`
+### `docs_list`
 
 List known documents for a branch/ref.
 
 Input: `{ workspace, ref? }`
 
-### `branchmind_tag_create` / `branchmind_tag_list` / `branchmind_tag_delete`
+### `tag_create` / `tag_list` / `tag_delete`
 
 Create, list, and delete lightweight tags that point to commit entries.
 
-### `branchmind_reflog`
+### `reflog`
 
 Returns ref movements for the VCS-style surface.
 
-### `branchmind_reset`
+### `reset`
 
 Moves a ref pointer to a specified commit entry.
 
@@ -680,22 +720,22 @@ Defaults:
 - If `target` is absent, explicit `branch`/`ref` wins; otherwise fallback to checkout.
 - Doc keys default to `notes` / `graph` / `trace` when supported by the tool.
 
-### `branchmind_think_add_hypothesis` / `branchmind_think_add_question` / `branchmind_think_add_test` / `branchmind_think_add_note` / `branchmind_think_add_decision` / `branchmind_think_add_evidence` / `branchmind_think_add_frame` / `branchmind_think_add_update`
+### `think_add_hypothesis` / `think_add_question` / `think_add_test` / `think_add_note` / `think_add_decision` / `think_add_evidence` / `think_add_frame` / `think_add_update`
 
-Thin wrappers over `branchmind_think_card` that enforce the corresponding `card.type`
+Thin wrappers over `think_card` that enforce the corresponding `card.type`
 and normalize fields.
 
-### `branchmind_think_query`
+### `think_query`
 
 Query thinking cards via graph filters.
 
 Input: `{ workspace, target?, graph_doc?, ref?, ids?, status?, tags_any?, tags_all?, text?, limit?, max_chars? }`
 
-### `branchmind_think_pack`
+### `think_pack`
 
 Bounded low-noise pack: a compact `think_context` + stats summary.
 
-### `branchmind_context_pack`
+### `context_pack`
 
 Bounded resumption pack that merges **notes**, **trace**, and **graph cards** into one response.
 
@@ -722,7 +762,7 @@ Notes:
   `bridge` is included with `{ checkout, docs, has }` and a `CONTEXT_EMPTY_FOR_TARGET` warning.
 - If `read_only=true`, the tool avoids creating missing reasoning refs and derives default docs from the target id.
 
-### `branchmind_think_frontier` / `branchmind_think_next`
+### `think_frontier` / `think_next`
 
 Return prioritized candidates for next actions (by recency + status).
 
@@ -733,27 +773,27 @@ Notes:
 - If `max_chars` is set, responses include `budget.used_chars` and may truncate lists with minimal summaries.
 - Under very small budgets, tools return a minimal frontier/candidate stub (or a `signal` fallback) instead of an empty payload.
 
-### `branchmind_think_link` / `branchmind_think_set_status`
+### `think_link` / `think_set_status`
 
 Graph edge creation and status updates for card nodes.
 
-### `branchmind_think_pin` / `branchmind_think_pins`
+### `think_pin` / `think_pins`
 
 Pin/unpin cards and list pins.
 
-### `branchmind_think_nominal_merge`
+### `think_nominal_merge`
 
 Deduplicate highly similar cards into a canonical one (idempotent by `card_id`).
 
-### `branchmind_think_playbook`
+### `think_playbook`
 
 Return a deterministic playbook skeleton by name.
 
-### `branchmind_think_subgoal_open` / `branchmind_think_subgoal_close`
+### `think_subgoal_open` / `think_subgoal_close`
 
 Open/close a subgoal card that links a parent question to a child trace.
 
-### `branchmind_think_watch`
+### `think_watch`
 
 Return a bounded watch view (frontier + recent trace steps).
 
@@ -764,19 +804,19 @@ Defaults:
 
 ## Trace tools (v0.2)
 
-### `branchmind_trace_step`
+### `trace_step`
 
 Append a structured trace step entry.
 
-### `branchmind_trace_sequential_step`
+### `trace_sequential_step`
 
 Append a step in a sequential trace (with ordering metadata).
 
-### `branchmind_trace_hydrate`
+### `trace_hydrate`
 
 Return a bounded trace slice for fast resumption.
 
-### `branchmind_trace_validate`
+### `trace_validate`
 
 Validate trace invariants (ordering, required fields).
 
@@ -789,18 +829,18 @@ Defaults:
 ## Tool groups (future)
 
 - Repo/workspace:
-  - `branchmind_status` / `branchmind_init`
-  - `branchmind_branch_create` / `branchmind_branch_list` / `branchmind_checkout`
+  - `status` / `init`
+  - `branch_create` / `branch_list` / `checkout`
 - Versioned artifacts:
-  - `branchmind_notes_commit` (notes-only fast path)
-  - `branchmind_commit` / `branchmind_log` / `branchmind_show` / `branchmind_diff`
+  - `notes_commit` (notes-only fast path)
+  - `commit` / `log` / `show` / `diff`
 - Merges and conflicts:
-  - `branchmind_merge`
-  - `branchmind_graph_merge` + `branchmind_graph_conflict_show` + `branchmind_graph_conflict_resolve`
+  - `merge`
+  - `graph_merge` + `graph_conflict_show` + `graph_conflict_resolve`
 - Graph:
-  - `branchmind_graph_apply` / `branchmind_graph_query` / `branchmind_graph_validate` / `branchmind_graph_diff`
+  - `graph_apply` / `graph_query` / `graph_validate` / `graph_diff`
 - Thinking structure (optional but powerful):
-  - `branchmind_think_template` / `branchmind_think_next` / `branchmind_think_card` / `branchmind_think_context`
+  - `think_template` / `think_next` / `think_card` / `think_context`
 
 ## Output budgets
 

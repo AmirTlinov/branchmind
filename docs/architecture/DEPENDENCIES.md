@@ -1,4 +1,4 @@
-# Dependency Policy (draft)
+# Dependency Policy (current)
 
 The long-term goal is a low-dependency, high-performance Rust MCP server suitable for IDE embedding.
 
@@ -11,17 +11,27 @@ The long-term goal is a low-dependency, high-performance Rust MCP server suitabl
   - risks (supply chain, size, maintenance),
   - how it is isolated (core vs adapter).
 
-## Default allowance (until decided otherwise)
+## Policy decision (current)
 
-- Allow small, widely-audited crates for:
-  - JSON (schema + serialization),
-  - SQLite bindings (if an embedded DB is chosen),
-  - RFC3339 time formatting (agent-facing timestamps),
-  - MCP stdio protocol helpers.
+- We use a **minimal audited dependency set** (not “0 deps strict”).
+- `bm_core` remains **std-only**.
+- External crates are allowed only in adapters (`bm_storage`, `bm_mcp`) with explicit justification.
 
 If “0 deps strict” is required, replace these with in-house minimal implementations and document the trade-offs.
 
-## Current usage (justified)
+## Current usage (by crate)
 
-- `serde_json`: JSON parsing/serialization for MCP payloads and ops history snapshots (core logic
-  remains std-only; JSON is isolated to adapters and persistence).
+### `bm_core` (domain core)
+
+- *(no external dependencies)*
+
+### `bm_storage` (persistence adapter)
+
+- `rusqlite`: embedded SQLite persistence with transactional atomicity (task mutations + emitted events).
+- `serde_json`: JSON payload/meta storage for documents, graph node meta, and MCP-compatible persistence shapes.
+
+### `bm_mcp` (MCP adapter)
+
+- `serde`: typed request parsing for MCP JSON-RPC envelopes.
+- `serde_json`: JSON values + construction for tool inputs/outputs.
+- `time`: RFC3339 timestamps in agent-facing payloads.

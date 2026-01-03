@@ -43,6 +43,16 @@ Examples:
 - `{ workspace, target: "TASK-001" }`
 - `{ workspace, target: { "id": "PLAN-001", "kind": "plan" } }`
 
+### Focus-first targeting (DX rule)
+
+To keep daily agent usage **cognitively cheap**, any tool that operates on a specific plan/task may omit
+`task`/`plan`/`target` **if the workspace focus is set**.
+
+- Explicit `task`/`plan`/`target` always wins.
+- If no explicit target is provided, the tool uses the current workspace focus (set via `tasks_focus_set`).
+- Tools that are workspace-scoped (e.g., `tasks_context`, `tasks_delta`) ignore focus.
+- Focus is convenience only: tools must not silently change focus as a side-effect.
+
 ## Payload budgets (v0)
 
 - `tasks_context`, `tasks_delta`, `tasks_radar`, `tasks_handoff`, `tasks_context_pack`, `tasks_resume_pack`, `tasks_resume_super` accept optional `max_chars`.
@@ -254,12 +264,18 @@ Semantics:
 
 Attach artifacts/checks to a step (or task/plan root).
 
-Input: `{ workspace, task, path?, items?, checks?, attachments? }`
+Input: `{ workspace, task, path?, step_id?, items?, checks?, attachments?, checkpoint? }`
 
 Semantics:
 
 - Does not complete steps; it only records evidence.
 - Artifacts are bounded by `max_items` and `max_artifact_bytes`.
+- `checkpoint` is optional and may be either:
+  - a string (`"security"`), or
+  - an array of strings (`["security","docs"]`).
+- Allowed checkpoint kinds: `criteria`, `tests`, `security`, `perf`, `docs` (invalid values are rejected).
+- If `checkpoint` is provided, the captured evidence is linked to that checkpoint (or checkpoints) for the target entity.
+  - This makes optional checkpoints (security/perf/docs) become **required** for step completion once evidence exists.
 
 ## Context views (v0.2)
 
@@ -296,10 +312,15 @@ Input: `{ workspace, task?, plan?, events_limit?, decisions_limit?, evidence_lim
 Semantics:
 
 - Если `read_only=true`, никаких изменений фокуса/refs; refs вычисляются детерминированно.
-- Возвращает `radar`, `steps`, `timeline`, `signals`, `memory` (notes/trace/cards), `degradation`.
+- Возвращает `radar`, `steps`, `timeline`, `signals`, `memory` (notes/trace/cards), `degradation`, `capsule`.
+- `steps` includes compact gating/proof status:
+  - `missing_proof_*` counts track **proof-required** steps that still lack attached proofs.
+  - `first_open` may include `proof_*_mode` (`off|warn|require`) and `proof_*_present` flags.
 - `degradation.truncated_fields` перечисляет поля, которые были усечены из‑за бюджета.
 - `notes_cursor` / `trace_cursor` / `cards_cursor` продолжают пагинацию соответствующих разделов.
 - `graph_diff=true` добавляет `graph_diff` (diff against base branch when available).
+- `capsule` — версия‑стабильный “handoff‑контейнер” малого размера: цель/состояние, короткий handoff (done/remaining/risks), счётчики, последняя активность, и рекомендованное следующее действие (с подсказкой об эскалации toolset при необходимости).
+- `capsule.action` может учитывать гейтинг чекпойнтов (включая optional категории `security/perf/docs`, которые становятся required, если к ним привязано evidence).
 
 ### `tasks_snapshot`
 
@@ -311,6 +332,7 @@ Semantics:
 
 - Эквивалентно `tasks_resume_super` с `graph_diff=true` и более явным intent.
 - `graph_diff` включает summary и пагинацию diff-изменений.
+- Наследует `capsule` из `tasks_resume_super`; это рекомендуемый “one‑screen handoff” для подхвата задач другим агентом.
 
 ### `tasks_context_pack`
 
@@ -342,21 +364,61 @@ Semantics:
 
 ## DX‑макросы (v0.3)
 
+DX note (default workspace):
+
+- Portal macros may accept omitted `workspace` when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
+- Explicit `workspace` always wins.
+
 ### `tasks_macro_start`
 
 One‑call запуск: создать задачу+шаги+гейты, вернуть супер‑резюме.
 
-Input: `{ workspace, plan?, parent?, plan_title?, task_title, description?, steps, resume_max_chars? }`
+Input: `{ workspace, plan?, parent?, plan_title?, plan_template?, task_title, description?, template?, steps?, think?, resume_max_chars? }`
 
 Output: `{ task_id, plan_id?, steps, resume }`
+
+Semantics:
+
+- Provide either `steps` or `template` (not both). If neither is provided, the macro defaults to `template="basic-task"` to keep daily usage low-syntax while preserving step discipline.
+- `template` uses built‑in task templates (see `tasks_templates_list`) to reduce input verbosity.
+- `plan_template` is allowed only when creating a new plan via `plan_title`.
+- If neither `plan` nor `parent` nor `plan_title` is provided and the workspace focus is a plan, that plan is used as the implicit parent (focus-first DX).
+- If neither `plan` nor `parent` nor `plan_title` is provided and the workspace focus is a task, the macro uses that task’s parent plan (stay-in-plan DX).
+- If no implicit parent can be derived from focus, the macro uses the first plan with title `"Inbox"` if it exists; otherwise it creates a new `"Inbox"` plan.
+- If `think` is provided, it is forwarded to the bootstrap pipeline and the response may include `think_pipeline` as confirmation.
+- Reasoning-first default for principal tasks: if `template="principal-task"` and `think` is omitted, the server seeds a minimal `think.frame` card derived from `task_title` and `description` (deterministic, low-noise).
 
 ### `tasks_macro_close_step`
 
 One‑call закрытие шага: подтвердить чекпойнты → закрыть → вернуть супер‑резюме.
 
-Input: `{ workspace, task, path?|step_id?, checkpoints, expected_revision?, resume_max_chars? }`
+Input: `{ workspace, task?, path?|step_id?, checkpoints?, expected_revision?, note?, proof?, resume_max_chars? }`
 
 Output: `{ task, revision, step, resume }`
+
+Semantics:
+
+- If `note` is provided, the server records a progress note before closing the step (and returns `note_event`).
+- If `proof` is provided, the server captures evidence before closing the step (proof‑first) and returns `evidence_event`.
+  - `proof` is an agent‑DX shortcut for `tasks_evidence_capture` scoped to the same step:
+    - string → treated as `checks[]` (untagged lines are auto‑normalized to receipts: bare URL → `LINK: ...`, otherwise → `CMD: ...`),
+    - array of strings → treated as `checks[]` (same auto‑normalization as the string form),
+    - object → forwarded as `{ items?, checks?, attachments?, checkpoint? }` (same shape as `tasks_evidence_capture` minus target fields).
+  - If `checkpoint` is omitted, proof is linked to `"tests"` by default.
+- `checkpoints` defaults to `"gate"` when omitted.
+- `checkpoints` can be either:
+  - `"gate"` (string shortcut: criteria+tests), or
+  - `"all"` (string shortcut), or
+  - object form (v0.2), including shorthand booleans like `{ "criteria": true }`.
+- If neither `path` nor `step_id` is provided, the server closes the **first open step** of the focused task (focus-first DX).
+- If the task has **no open steps**, the macro is treated as “advance progress” and will attempt to finish the task
+  deterministically (set status to `DONE`) and return an updated super-resume (idempotent if already `DONE`).
+- Proof requirements are **hybrid** (warning-first + require-first by policy):
+  - By default, steps do not require proofs.
+  - Built-in “principal” templates may mark specific steps (e.g. “Verify with proofs”) as proof-required for `tests`.
+  - When a step requires proof for a checkpoint and proof is missing, closing fails with `error.code="PROOF_REQUIRED"` and a portal-first recovery suggestion.
+  - Soft proof lint: proof checks are treated as receipts (`CMD:` + `LINK:`). If one of the receipts is missing or still a placeholder, the server emits `WARNING: PROOF_WEAK` (does not block closing).
+  - Placeholders do not count as proof: any `<fill: ...>` receipts are ignored and must be replaced with real commands/links to satisfy proof-required steps.
 
 ### `tasks_macro_finish`
 
@@ -453,23 +515,32 @@ Input:
 }
 ```
 
+Shorthand:
+
+- `checkpoints: "gate"` — compact shortcut for confirming only the gate checkpoints (criteria + tests).
+- `checkpoints: "all"` — compact shortcut for confirming all checkpoint categories.
+- Boolean shortcut is allowed inside object form, e.g. `{ "criteria": true, "tests": true }`.
+
 ## DX macros (v0.3)
 
 ### `tasks_bootstrap`
 
 One-call bootstrap: create plan (optional), task, steps, and checkpoints.
 
-Input: `{ workspace, plan?, parent?, plan_title?, task_title, description?, steps[], think? }`
+Input: `{ workspace, plan?, parent?, plan_title?, plan_template?, task_title, description?, template?, steps[]?, think? }`
 where each step requires `title`, `success_criteria[]`, `tests[]`, optional `blockers[]`.
 
 Optional `think` payload:
 
 - `{ frame?, hypothesis?, test?, evidence?, decision?, status?, note_decision?, note_title?, note_format? }`
-- Seeds the task reasoning pipeline via `branchmind_think_pipeline` with strict defaults.
+- Seeds the task reasoning pipeline via `think_pipeline` with strict defaults.
 
 Semantics:
 
 - Accepts either `plan` (existing) or `plan_title` (create new plan).
+- Provide either `steps` or `template` (not both).
+- `template` uses built‑in task templates (see `tasks_templates_list`) to reduce input verbosity.
+- `plan_template` is allowed only when creating a new plan via `plan_title` (applies a checklist).
 - Rejects empty `success_criteria` or `tests` to keep checkpoints gate-ready.
 - When `think` is provided, output includes `think_pipeline` (or a warning if seeding fails).
 

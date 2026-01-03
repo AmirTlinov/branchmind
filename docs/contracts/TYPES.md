@@ -21,6 +21,35 @@ All tools return a single stable envelope:
 
 On failure: `success=false` and `error={code,message,recovery?}`.
 
+### Output format — context-first (BM-L1)
+
+AI agents pay a real token tax on repeated structural boilerplate. For daily usage, the server is **context-first**:
+portal tools render a compact “tag-light” line protocol by default, with semantics defined once in docs/contracts
+and enforced by tests (DX-DoD).
+
+Design rule: **no json/context toggle for portals**. If a tool needs a structured payload, it should be exposed as a
+separate explicit “full view” tool rather than teaching agents to switch formats.
+
+BM-L1 line protocol (tag-light):
+
+- Plain content line: stable, skimmable state (e.g. focus + next), **without a tag prefix**.
+- Untagged command lines: one or more copy/paste-ready next actions (tools/methods), placed after the state line.
+  (We intentionally omit a `COMMAND:` prefix to avoid constant semantic noise.)
+- Tagged utility lines:
+  - `ERROR:` error (typed, actionable, with a recovery hint)
+  - `WARNING:` warning / heads-up (typed, actionable, with a recovery hint)
+  - `MORE:` continuation marker (pagination cursor / “more available”)
+  - `REFERENCE:` reserved for rare anchors (external evidence, doc seq, ids) and should not appear by default.
+- `WATERMARK:` is reserved for future use; it does not appear in normal BM-L1 outputs.
+
+In BM-L1 mode, the server may intentionally leave `warnings[]` / `suggestions[]` empty because those are
+rendered into `WARNING:` lines and plain command lines to keep the response envelope low-noise.
+
+Transport note (MCP text output):
+
+- When a tool renders BM-L1, the MCP server may return the **raw line-protocol text** directly as the tool `text`
+  content to avoid wasting tokens on a JSON envelope.
+
 ### Suggestions (executable actions)
 
 `suggestions[]` are server-emitted, tool-ready actions intended to be executed as-is:
@@ -33,6 +62,20 @@ On failure: `success=false` and `error={code,message,recovery?}`.
   "priority": "high",
   "validated": true,
   "params": { "..." : "..." }
+}
+```
+
+In addition to `call_tool`, the server may emit a `call_method` suggestion for MCP-native methods
+(most commonly progressive disclosure via `tools/list`):
+
+```json
+{
+  "action": "call_method",
+  "method": "tools/list",
+  "reason": "Reveal full tool surface for recovery",
+  "priority": "high",
+  "validated": true,
+  "params": { "toolset": "full" }
 }
 ```
 
@@ -50,6 +93,11 @@ A stable namespace for a project/workspace (IDE-provided).
   "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
 }
 ```
+
+DX note (default workspace):
+
+- Portal tools may allow omitting `workspace` when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
+- Explicit `workspace` always wins (no silent re-targeting).
 
 ### PlanId / TaskId
 

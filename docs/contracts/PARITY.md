@@ -3,7 +3,7 @@
 This document defines the **parity target** for branchmind-rust: the union of
 the `apply_task` and `branchmind` tool surfaces used by agents in the ecosystem.
 
-Status legend:
+Status key:
 
 - **present** — implemented in branchmind-rust v0
 - **planned** — parity target for this initiative (implementation pending)
@@ -58,27 +58,29 @@ Planned:
 
 Present:
 
-- branchmind_init / branchmind_status
-- branchmind_branch_create / branchmind_branch_list / branchmind_checkout
-- branchmind_notes_commit / branchmind_show / branchmind_diff / branchmind_merge / branchmind_export
-- branchmind_graph_apply / branchmind_graph_query / branchmind_graph_validate
-- branchmind_graph_diff / branchmind_graph_merge
-- branchmind_graph_conflicts / branchmind_graph_conflict_show / branchmind_graph_conflict_resolve
-- branchmind_think_template / branchmind_think_card / branchmind_think_context
-- branchmind_think_pipeline
-- branchmind_commit / branchmind_log / branchmind_docs_list
-- branchmind_branch_delete / branchmind_branch_rename
-- branchmind_tag_create / branchmind_tag_list / branchmind_tag_delete
-- branchmind_reflog / branchmind_reset
-- branchmind_think_add_hypothesis / branchmind_think_add_question / branchmind_think_add_test
-- branchmind_think_add_note / branchmind_think_add_decision / branchmind_think_add_evidence / branchmind_think_add_frame / branchmind_think_add_update
-- branchmind_think_next / branchmind_think_frontier / branchmind_think_pack
-- branchmind_think_query / branchmind_think_lint / branchmind_think_watch
-- branchmind_think_link / branchmind_think_set_status
-- branchmind_think_nominal_merge / branchmind_think_pin / branchmind_think_pins
-- branchmind_think_playbook
-- branchmind_think_subgoal_open / branchmind_think_subgoal_close
-- branchmind_trace_step / branchmind_trace_sequential_step / branchmind_trace_hydrate / branchmind_trace_validate
+- init / status / help / diagnostics
+- branch_create / branch_list / checkout
+- macro_branch_note
+- notes_commit / show / diff / merge / export
+- context_pack
+- graph_apply / graph_query / graph_validate
+- graph_diff / graph_merge
+- graph_conflicts / graph_conflict_show / graph_conflict_resolve
+- think_template / think_card / think_context
+- think_pipeline
+- commit / log / docs_list
+- branch_delete / branch_rename
+- tag_create / tag_list / tag_delete
+- reflog / reset
+- think_add_hypothesis / think_add_question / think_add_test
+- think_add_note / think_add_decision / think_add_evidence / think_add_frame / think_add_update
+- think_next / think_frontier / think_pack
+- think_query / think_lint / think_watch
+- think_link / think_set_status
+- think_nominal_merge / think_pin / think_pins
+- think_playbook
+- think_subgoal_open / think_subgoal_close
+- trace_step / trace_sequential_step / trace_hydrate / trace_validate
 
 Planned:
 

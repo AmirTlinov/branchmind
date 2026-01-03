@@ -1,0 +1,60 @@
+#![forbid(unsafe_code)]
+
+use crate::McpServer;
+use serde_json::Value;
+
+pub(crate) fn dispatch_tasks_tool(
+    server: &mut McpServer,
+    name: &str,
+    args: Value,
+) -> Option<Value> {
+    let resp = match name {
+        "create" => server.tool_tasks_create(args),
+        "bootstrap" => server.tool_tasks_bootstrap(args),
+        "macro_start" => server.tool_tasks_macro_start(args),
+        "macro_close_step" => server.tool_tasks_macro_close_step(args),
+        "macro_finish" => server.tool_tasks_macro_finish(args),
+        "macro_create_done" => server.tool_tasks_macro_create_done(args),
+        "decompose" => server.tool_tasks_decompose(args),
+        "define" => server.tool_tasks_define(args),
+        "note" => server.tool_tasks_note(args),
+        "verify" => server.tool_tasks_verify(args),
+        "done" => server.tool_tasks_done(args),
+        "close_step" => server.tool_tasks_close_step(args),
+        "block" => server.tool_tasks_block(args),
+        "progress" => server.tool_tasks_progress(args),
+        "edit" => server.tool_tasks_edit(args),
+        "patch" => server.tool_tasks_patch(args),
+        "delete" => server.tool_tasks_delete(args),
+        "task_add" => server.tool_tasks_task_add(args),
+        "task_define" => server.tool_tasks_task_define(args),
+        "task_delete" => server.tool_tasks_task_delete(args),
+        "evidence_capture" => server.tool_tasks_evidence_capture(args),
+        "history" => server.tool_tasks_history(args),
+        "undo" => server.tool_tasks_undo(args),
+        "redo" => server.tool_tasks_redo(args),
+        "batch" => server.tool_tasks_batch(args),
+        "context" => server.tool_tasks_context(args),
+        "delta" => server.tool_tasks_delta(args),
+        "plan" => server.tool_tasks_plan(args),
+        "contract" => server.tool_tasks_contract(args),
+        "complete" => server.tool_tasks_complete(args),
+        "focus_get" => server.tool_tasks_focus_get(args),
+        "focus_set" => server.tool_tasks_focus_set(args),
+        "focus_clear" => server.tool_tasks_focus_clear(args),
+        "radar" => server.tool_tasks_radar(args),
+        "resume" => server.tool_tasks_resume(args),
+        "resume_pack" => server.tool_tasks_resume_pack(args),
+        "resume_super" => server.tool_tasks_resume_super(args),
+        "snapshot" => server.tool_tasks_snapshot(args),
+        "context_pack" => server.tool_tasks_context_pack(args),
+        "mirror" => server.tool_tasks_mirror(args),
+        "handoff" => server.tool_tasks_handoff(args),
+        "lint" => server.tool_tasks_lint(args),
+        "templates_list" => server.tool_tasks_templates_list(args),
+        "scaffold" => server.tool_tasks_scaffold(args),
+        "storage" => server.tool_tasks_storage(args),
+        _ => return None,
+    };
+    Some(resp)
+}

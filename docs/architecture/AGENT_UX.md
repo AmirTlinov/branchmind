@@ -6,6 +6,77 @@ This is not a human UI project. The MCP surface *is* the UX.
 
 - Provide compact, stable snapshots by default.
 - Require explicit flags for large expansions.
+- Every unified resume/snapshot must include a **small, versioned handoff capsule** (`capsule`) that stays useful even under aggressive `max_chars` trimming.
+
+## 1.1) Semantic de-duplication: tagged line protocol
+
+Agents should not spend 90% of their context budget on repeated schema boilerplate.
+
+For portal workflows, the server is **context-first** and renders a compact “tagged line” protocol (BM-L1) where:
+
+- the response is **tag-light**: 1 plain content line plus a few tagged utility lines,
+- the meaning of each tag is defined once in docs/contracts (and enforced by DX-DoD tests),
+- the default portal mode optimizes for “read fast, do the next right action” rather than “dump a full tree”.
+
+Semantics rule:
+
+- The protocol and conventions are explained by a dedicated `help` tool, not repeated in daily portal responses.
+
+BM-L1 (tag-light) structure:
+
+- Plain content lines: stable, skimmable state (e.g. focus/next).
+- Untagged command lines: one or more copy/paste-ready next actions, placed after the state line.
+  (We intentionally omit a `COMMAND:` prefix to avoid constant semantic noise.)
+- Tagged utility lines:
+  - `ERROR:` typed error (code + fix)
+  - `WARNING:` typed heads-up (code + fix)
+- `MORE:` continuation marker (pagination cursor / “more available”)
+- `REFERENCE:` is reserved for rare anchors (external evidence, ids) and should not appear by default.
+- `WATERMARK:` is reserved for future use; it does not appear in normal BM-L1 outputs.
+
+Invariants:
+
+- Prefer **1** plain content line (keep it stable and skimmable).
+- Always provide a command line for the best next action when there is one.
+- Keep command lines copy/paste-minimal by omitting stable defaults when the server can supply them safely
+  (e.g., omit `checkpoints="gate"` when it is the deterministic default).
+- Prefer **one primary** command line. If progressive disclosure is required, allow at most **two** commands:
+  first `tools/list toolset=...`, then `<the action>`.
+- Keep `ERROR:` lines typed and actionable (code + recovery hint).
+- Keep `WARNING:` lines typed and actionable (warning/heads-up + recovery hint).
+- Do not teach “switch to json” as a daily habit. If a structured payload is needed, expose it as an explicit
+  full-view tool instead (and keep portals context-first).
+
+Transport note:
+
+- When the tool renders BM-L1, the MCP server may return the raw line-protocol text as the tool text output
+  (no JSON envelope) to minimize token waste in daily agent workflows.
+
+## 1.2) DX-DoD (flagship guardrail)
+
+This is the small “definition of done” that protects daily AX from slowly regressing back into noise.
+
+If you change portal output formatting, recovery, or toolset curation, the change is only acceptable if:
+
+1) Tag-light invariant holds: no JSON envelope, no blank lines, no legacy `WATERMARK:` / `ANSWER:` prefixes in BM-L1.
+2) Happy path stays tiny: for daily portals, BM-L1 is **2 lines max**:
+   - 1 untagged state line
+   - 1 next action command line
+3) Errors stay typed and minimal: `ERROR:` plus at most **one** recovery command line (two only for disclosure).
+4) Progressive disclosure stays deterministic: if next action is hidden, return exactly:
+   - `tools/list toolset=...`
+   - `<action> ...` (must include copy/paste-ready args via `args_hint`)
+5) Budget signals stay warnings: truncation/clamps must render as `WARNING: BUDGET_*`, never as errors, and should keep
+   the output within a single screen.
+
+Canonical smoke scenarios (must stay green in tests):
+
+- `status` in `toolset=daily` → 1 state line + 1 next action command line.
+- `tasks_macro_start` → `tasks_snapshot` → both are 2-line “state + command”.
+- `tasks_macro_close_step` without focus in an empty workspace → typed error + portal recovery command (`tasks_macro_start`).
+- `tasks_macro_close_step` on a proof-required step without proof → typed error (`PROOF_REQUIRED`) + a single portal recovery command (retry with `proof=...`).
+- Hidden action recommended (e.g. decompose) → 1 state line + 2 commands (disclosure then action).
+- Tiny budget snapshot → `WARNING: BUDGET_*` appears and output remains small.
 
 ## 2) Make the next action obvious
 
@@ -14,6 +85,19 @@ If an operation fails due to a fixable precondition, return:
 - a typed error,
 - a minimal recovery explanation,
 - **one best next action** as an executable suggestion.
+
+## 2.1) Recovery UX for hidden operations (progressive disclosure)
+
+When the server advertises a reduced toolset (`core`/`daily`), the internal implementation may still produce recovery suggestions
+that point at low-level tools (because those are the raw building blocks).
+
+The MCP adapter must keep recovery **cognitively cheap**:
+
+- Prefer portal equivalents over low-level suggestions (portals are accelerators, not bypasses).
+- If a required action is outside the currently advertised toolset, include a single progressive-disclosure suggestion
+  (`call_method` → `tools/list`) for the minimal tier that unlocks recovery (`daily` or `full`).
+  - Place the disclosure suggestion first so clients that enforce “advertised tools only” can recover deterministically.
+- Never “double-suggest” the same fix (no prepend + keep the original hidden action): replace when possible.
 
 ## 3) Prefer diffs and deltas
 
@@ -24,6 +108,23 @@ If an operation fails due to a fixable precondition, return:
 
 - Explicit identifiers always win.
 - Focus is convenience only; strict targeting must be supported.
+
+## 4.1) Tool surface must be cognitively cheap
+
+The number of tools is part of the UX.
+
+- Provide a **curated “daily driver” toolset** that covers the common workflow with a *tiny* subset of tools.
+- Target: **≤ 5 tools** for daily usage (portal tools), with progressive disclosure for everything else.
+- Keep the full parity surface available, but allow MCP clients to opt into a smaller `tools/list` set to reduce
+  token waste and command-selection confusion.
+- Prefer fewer high-leverage tools + composable macros over many “one-off” wrappers.
+
+Progressive disclosure mechanism:
+
+- `tools/list` accepts optional `{ "toolset": "full|daily|core" }` params to override the server default for that call.
+- To reduce boilerplate, portal tools may accept omitted `workspace` when the server is configured with a default
+  workspace (`--workspace` / `BRANCHMIND_WORKSPACE`). Explicit `workspace` always wins.
+- When a default workspace is configured, portal outputs should avoid repeating it in “next action” args (keep actions copy/paste-ready but minimal).
 
 ## 5) Budgets everywhere
 

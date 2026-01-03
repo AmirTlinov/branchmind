@@ -1,0 +1,15 @@
+#![forbid(unsafe_code)]
+
+mod branches;
+mod core;
+mod definitions;
+mod dispatch;
+mod docs;
+mod graph;
+mod notes_vcs;
+mod packs;
+mod think;
+mod trace;
+
+pub(crate) use definitions::branchmind_tool_definitions;
+pub(crate) use dispatch::dispatch_branchmind_tool;
