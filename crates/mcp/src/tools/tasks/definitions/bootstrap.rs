@@ -6,6 +6,7 @@ fn think_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "agent_id": { "type": "string" },
             "frame": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
             "hypothesis": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
             "test": { "anyOf": [{ "type": "string" }, { "type": "object" }] },
@@ -28,6 +29,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "agent_id": { "type": "string" },
                     "plan": { "type": "string" },
                     "parent": { "type": "string" },
                     "plan_title": { "type": "string" },
@@ -60,6 +62,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "agent_id": { "type": "string" },
                     "plan": { "type": "string" },
                     "parent": { "type": "string" },
                     "plan_title": { "type": "string" },
@@ -81,6 +84,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                         }
                     },
                     "think": think_schema(),
+                    "view": { "type": "string" },
                     "resume_max_chars": { "type": "integer" }
                 },
                 "required": ["task_title"]
@@ -93,6 +97,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
+                    "agent_id": { "type": "string" },
                     "task": { "type": "string" },
                     "step_id": { "type": "string" },
                     "path": { "type": "string" },
@@ -111,6 +116,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                             { "type": "object" }
                         ]
                     },
+                    "view": { "type": "string" },
                     "resume_max_chars": { "type": "integer" }
                 },
                 "required": []
@@ -125,6 +131,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "status": { "type": "string" },
+                    "final_note": { "type": "string" },
                     "handoff_max_chars": { "type": "integer" }
                 },
                 "required": ["workspace"]

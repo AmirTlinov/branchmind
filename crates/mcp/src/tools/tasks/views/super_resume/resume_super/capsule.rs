@@ -9,10 +9,13 @@ pub(super) struct HandoffCapsuleArgs<'a> {
     pub(super) omit_workspace: bool,
     pub(super) kind: TaskKind,
     pub(super) focus: Option<&'a str>,
+    pub(super) agent_id: Option<&'a str>,
+    pub(super) audit_all_lanes: bool,
     pub(super) target: &'a Value,
     pub(super) reasoning_ref: &'a Value,
     pub(super) radar: &'a Value,
     pub(super) steps_summary: Option<&'a Value>,
+    pub(super) step_focus: Option<&'a Value>,
     pub(super) handoff: &'a HandoffCore,
     pub(super) timeline: &'a super::timeline::TimelineEvents,
     pub(super) notes_count: usize,
@@ -52,6 +55,44 @@ fn minimal_target(target: &Value) -> Value {
         "revision": revision,
         "parent": parent
     })
+}
+
+fn minimal_step_focus(step_focus: Option<&Value>, steps_summary: Option<&Value>) -> Value {
+    // Prefer the explicit step_focus payload (when available) because it can carry
+    // extra room metadata (e.g. step lease).
+    if let Some(step_focus) = step_focus {
+        let step_id = step_focus
+            .get("step")
+            .and_then(|v| v.get("step_id"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let path = step_focus
+            .get("step")
+            .and_then(|v| v.get("path"))
+            .cloned()
+            .unwrap_or(Value::Null);
+
+        let lease = step_focus
+            .get("detail")
+            .and_then(|v| v.get("lease"))
+            .cloned()
+            .unwrap_or(Value::Null);
+
+        let mut out = json!({ "step_id": step_id, "path": path });
+        if !lease.is_null()
+            && let Some(obj) = out.as_object_mut()
+        {
+            obj.insert("lease".to_string(), lease);
+        }
+        return out;
+    }
+
+    let Some(first_open) = steps_summary.and_then(|v| v.get("first_open")) else {
+        return Value::Null;
+    };
+    let step_id = first_open.get("step_id").cloned().unwrap_or(Value::Null);
+    let path = first_open.get("path").cloned().unwrap_or(Value::Null);
+    json!({ "step_id": step_id, "path": path })
 }
 
 fn last_event_meta(timeline: &super::timeline::TimelineEvents) -> Value {
@@ -104,6 +145,108 @@ fn tool_available(toolset: Toolset, tool: &str) -> bool {
                 | "tasks_snapshot"
         ),
         Toolset::Core => matches!(tool, "status" | "tasks_macro_start" | "tasks_snapshot"),
+    }
+}
+
+fn active_step_lease_holder(step_focus: Option<&Value>) -> Option<String> {
+    step_focus
+        .and_then(|v| v.get("detail"))
+        .and_then(|v| v.get("lease"))
+        .and_then(|v| v.get("holder_agent_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
+    if args.focus.is_none() {
+        return (Value::Null, None);
+    }
+
+    match args.kind {
+        TaskKind::Task => {
+            let status = args
+                .target
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if status == "DONE" {
+                return (Value::Null, None);
+            }
+
+            let total_steps = args
+                .steps_summary
+                .and_then(|v| v.get("total"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            if total_steps <= 0 {
+                return (Value::Null, None);
+            }
+
+            let first_open = args.steps_summary.and_then(|v| v.get("first_open"));
+            if first_open.is_none() {
+                return (Value::Null, None);
+            }
+
+            let tool = "think_pipeline";
+            let required_toolset = if tool_available(args.toolset, tool) {
+                None
+            } else {
+                Some(Value::String("full".to_string()))
+            };
+
+            let target_id = args
+                .target
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string());
+            let need_target = target_id
+                .as_deref()
+                .zip(args.focus)
+                .map(|(target, focus)| target != focus)
+                .unwrap_or(true);
+
+            let mut args_obj = serde_json::Map::new();
+            if !args.omit_workspace {
+                args_obj.insert(
+                    "workspace".to_string(),
+                    Value::String(args.workspace.as_str().to_string()),
+                );
+            }
+            if need_target && let Some(task) = target_id {
+                args_obj.insert("target".to_string(), Value::String(task));
+            }
+
+            // Deterministic DX: step="focus" makes this a copy/paste-safe two-step flow.
+            args_obj.insert("step".to_string(), Value::String("focus".to_string()));
+            if let Some(agent_id) = args.agent_id {
+                args_obj.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+            }
+
+            // Keep capsule small: provide a single stage placeholder; other stages are optional.
+            args_obj.insert("frame".to_string(), Value::String("<fill>".to_string()));
+            args_obj.insert("note_decision".to_string(), Value::Bool(true));
+            args_obj.insert(
+                "note_title".to_string(),
+                Value::String("Decision".to_string()),
+            );
+            args_obj.insert("note_format".to_string(), Value::String("text".to_string()));
+
+            let action = json!({
+                "tool": tool,
+                "purpose": "prepare step-scoped thinking (frame→hypothesis→test→evidence→decision)",
+                "available": tool_available(args.toolset, tool),
+                "args_hint": Value::Object(args_obj)
+            });
+            let escalation = required_toolset.map(|ts| {
+                json!({
+                    "required": true,
+                    "toolset": ts,
+                    "reason": "thinking ops are hidden in the current toolset"
+                })
+            });
+            (action, escalation)
+        }
+        TaskKind::Plan => (Value::Null, None),
     }
 }
 
@@ -186,6 +329,79 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
                 .map(|v| v.to_string());
 
             if let Some(_path) = first_path {
+                // Multi-agent safety: when the current step is leased by another agent,
+                // avoid wasting a RTT on a guaranteed step mutation failure.
+                if let Some(holder) = active_step_lease_holder(args.step_focus) {
+                    let owned_by_me = args
+                        .agent_id
+                        .map(|me| me == holder.as_str())
+                        .unwrap_or(false);
+                    if !owned_by_me {
+                        let tool = "tasks_step_lease_get";
+                        let required_toolset = if tool_available(args.toolset, tool) {
+                            None
+                        } else {
+                            Some(Value::String("full".to_string()))
+                        };
+
+                        let target_id = args
+                            .target
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|v| v.to_string());
+                        let need_task = target_id
+                            .as_deref()
+                            .zip(args.focus)
+                            .map(|(target, focus)| target != focus)
+                            .unwrap_or(true);
+
+                        let mut args_obj = serde_json::Map::new();
+                        if !args.omit_workspace {
+                            args_obj.insert(
+                                "workspace".to_string(),
+                                Value::String(args.workspace.as_str().to_string()),
+                            );
+                        }
+                        if need_task && let Some(task) = target_id.clone() {
+                            args_obj.insert("task".to_string(), Value::String(task));
+                        }
+                        if let Some(step_id) = first_open
+                            .and_then(|v| v.get("step_id"))
+                            .and_then(|v| v.as_str())
+                        {
+                            args_obj
+                                .insert("step_id".to_string(), Value::String(step_id.to_string()));
+                        }
+                        if let Some(path) = first_open
+                            .and_then(|v| v.get("path"))
+                            .and_then(|v| v.as_str())
+                        {
+                            args_obj.insert("path".to_string(), Value::String(path.to_string()));
+                        }
+                        if let Some(agent_id) = args.agent_id {
+                            args_obj.insert(
+                                "agent_id".to_string(),
+                                Value::String(agent_id.to_string()),
+                            );
+                        }
+
+                        let action = json!({
+                            "tool": tool,
+                            "purpose": format!("inspect step lease (held by {holder})"),
+                            "available": tool_available(args.toolset, tool),
+                            "args": Value::Object(args_obj)
+                        });
+                        let escalation = required_toolset.map(|ts| {
+                            json!({
+                                "required": true,
+                                "toolset": ts,
+                                "reason": "lease ops are hidden in the current toolset"
+                            })
+                        });
+                        return (action, escalation);
+                    }
+                }
+
                 let tool = "tasks_macro_close_step";
                 let required_toolset = if tool_available(args.toolset, tool) {
                     None
@@ -214,6 +430,7 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
                 if need_task && let Some(task) = target_id.clone() {
                     args_obj.insert("task".to_string(), Value::String(task));
                 }
+
                 let require_security = first_open
                     .and_then(|v| v.get("require_security"))
                     .and_then(|v| v.as_bool())
@@ -227,22 +444,39 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                let missing_security = require_security
-                    && !first_open
-                        .and_then(|v| v.get("security_confirmed"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                let missing_perf = require_perf
-                    && !first_open
-                        .and_then(|v| v.get("perf_confirmed"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                let missing_docs = require_docs
-                    && !first_open
-                        .and_then(|v| v.get("docs_confirmed"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+                let security_confirmed = first_open
+                    .and_then(|v| v.get("security_confirmed"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let perf_confirmed = first_open
+                    .and_then(|v| v.get("perf_confirmed"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let docs_confirmed = first_open
+                    .and_then(|v| v.get("docs_confirmed"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
+                let proof_tests_mode = first_open
+                    .and_then(|v| v.get("proof_tests_mode"))
+                    .and_then(|v| v.as_str());
+                let proof_security_mode = first_open
+                    .and_then(|v| v.get("proof_security_mode"))
+                    .and_then(|v| v.as_str());
+                let proof_perf_mode = first_open
+                    .and_then(|v| v.get("proof_perf_mode"))
+                    .and_then(|v| v.as_str());
+                let proof_docs_mode = first_open
+                    .and_then(|v| v.get("proof_docs_mode"))
+                    .and_then(|v| v.as_str());
+
+                // Portal DX: always include a copy/paste-safe default for `tasks_macro_close_step`.
+                // If extra confirmations become required (e.g., checkpoint evidence exists), include
+                // them explicitly so the macro can succeed in one call.
+                let missing_security =
+                    (require_security || proof_security_mode == Some("require")) && !security_confirmed;
+                let missing_perf = (require_perf || proof_perf_mode == Some("require")) && !perf_confirmed;
+                let missing_docs = (require_docs || proof_docs_mode == Some("require")) && !docs_confirmed;
                 if missing_security || missing_perf || missing_docs {
                     let mut cp = serde_json::Map::new();
                     cp.insert("criteria".to_string(), Value::Bool(true));
@@ -257,23 +491,12 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
                         cp.insert("docs".to_string(), Value::Bool(true));
                     }
                     args_obj.insert("checkpoints".to_string(), Value::Object(cp));
+                } else {
+                    args_obj.insert("checkpoints".to_string(), Value::String("gate".to_string()));
                 }
 
                 // Proof-first (hybrid): inject proof placeholders only when the step explicitly requires proofs.
                 // Keep it copy/paste-ready and standardized so agents can attach real receipts quickly.
-                let proof_tests_mode = first_open
-                    .and_then(|v| v.get("proof_tests_mode"))
-                    .and_then(|v| v.as_str());
-                let proof_security_mode = first_open
-                    .and_then(|v| v.get("proof_security_mode"))
-                    .and_then(|v| v.as_str());
-                let proof_perf_mode = first_open
-                    .and_then(|v| v.get("proof_perf_mode"))
-                    .and_then(|v| v.as_str());
-                let proof_docs_mode = first_open
-                    .and_then(|v| v.get("proof_docs_mode"))
-                    .and_then(|v| v.as_str());
-
                 let proof_tests_present = first_open
                     .and_then(|v| v.get("proof_tests_present"))
                     .and_then(|v| v.as_bool())
@@ -330,8 +553,12 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
                 .unwrap_or(0);
             if open_steps <= 0 {
                 // No open steps: the next right action is to finish the task (status DONE).
-                // Daily driver keeps this inside the progress macro to avoid expanding the surface.
-                let tool = "tasks_macro_close_step";
+                // In full toolsets, prefer the explicit finish macro (includes handoff).
+                // In portal toolsets, keep this inside the progress macro to avoid expanding the surface.
+                let tool = match args.toolset {
+                    Toolset::Full => "tasks_macro_finish",
+                    Toolset::Daily | Toolset::Core => "tasks_macro_close_step",
+                };
 
                 let required_toolset = if tool_available(args.toolset, tool) {
                     None
@@ -363,7 +590,7 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
 
                 let action = json!({
                     "tool": tool,
-                    "purpose": "finish task (set status DONE)",
+                    "purpose": if tool == "tasks_macro_finish" { "finish task + handoff" } else { "finish task (set status DONE)" },
                     "available": tool_available(args.toolset, tool),
                     "args": Value::Object(args_obj)
                 });
@@ -424,13 +651,23 @@ pub(super) fn build_handoff_capsule(args: HandoffCapsuleArgs<'_>) -> Value {
         obj.insert("why".to_string(), why);
     }
 
+    let (prep_action, prep_escalation) = recommended_prep_action(&args);
     let (action, escalation) = recommended_action(&args);
+    let lane = if args.audit_all_lanes {
+        json!({ "kind": "all" })
+    } else {
+        lane_meta_value(args.agent_id)
+    };
     json!({
         "type": "handoff_capsule",
         "version": 1,
         "toolset": args.toolset.as_str(),
         "workspace": args.workspace.as_str(),
         "focus": args.focus.map(|v| Value::String(v.to_string())).unwrap_or(Value::Null),
+        "where": {
+            "lane": lane,
+            "step_focus": minimal_step_focus(args.step_focus, args.steps_summary)
+        },
         "target": minimal_target(args.target),
         "reasoning_ref": args.reasoning_ref,
         "radar": radar,
@@ -452,6 +689,8 @@ pub(super) fn build_handoff_capsule(args: HandoffCapsuleArgs<'_>) -> Value {
         },
         "last_event": last_event_meta(args.timeline),
         "graph_diff": graph_diff_meta(args.graph_diff_payload),
+        "prep_action": prep_action,
+        "prep_escalation": prep_escalation.unwrap_or(Value::Null),
         "action": action,
         "escalation": escalation.unwrap_or(Value::Null)
     })

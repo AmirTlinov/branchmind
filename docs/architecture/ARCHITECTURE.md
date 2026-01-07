@@ -71,3 +71,9 @@ cannot drift apart.
   - checkpoint gating,
   - conflict lifecycle (create → discover → resolve → disappear).
 - Budget tests for truncation semantics.
+
+## Memory model (native-feeling UX)
+
+The “native memory” user experience is specified separately as an explicit model and invariants:
+
+- See `docs/architecture/MEMORY_MODEL.md`.

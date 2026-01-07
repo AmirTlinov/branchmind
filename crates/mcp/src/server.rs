@@ -9,12 +9,18 @@ impl McpServer {
         store: bm_storage::SqliteStore,
         toolset: crate::Toolset,
         default_workspace: Option<String>,
+        workspace_lock: bool,
+        project_guard: Option<String>,
+        default_agent_id: Option<String>,
     ) -> Self {
         Self {
             initialized: false,
             store,
             toolset,
             default_workspace,
+            workspace_lock,
+            project_guard,
+            default_agent_id,
         }
     }
 
@@ -153,6 +159,39 @@ impl McpServer {
                 "workspace".to_string(),
                 Value::String(default_workspace.to_string()),
             );
+        }
+
+        // Multi-agent DX: when a default agent_id is configured, implicitly apply it to tool calls
+        // unless the caller explicitly provides agent_id (including null to disable).
+        if let Some(default_agent_id) = self.default_agent_id.as_deref()
+            && !args_obj.contains_key("agent_id")
+        {
+            args_obj.insert(
+                "agent_id".to_string(),
+                Value::String(default_agent_id.to_string()),
+            );
+        }
+
+        // Anti-drift: when workspace lock is enabled, reject any explicit workspace that differs
+        // from the configured default workspace. This prevents accidental cross-project reads/writes.
+        if self.workspace_lock
+            && let Some(default_workspace) = self.default_workspace.as_deref()
+            && let Some(workspace) = args_obj.get("workspace").and_then(|v| v.as_str())
+            && workspace != default_workspace
+        {
+            return Some(crate::ai_error_with(
+                "WORKSPACE_LOCKED",
+                "workspace is locked to the configured default workspace",
+                Some(
+                    "Drop the workspace argument (use the default) or restart the server without workspace lock.",
+                ),
+                vec![crate::suggest_call(
+                    name,
+                    "Retry using the default workspace (omit workspace).",
+                    "high",
+                    json!({}),
+                )],
+            ));
         }
 
         // AI-first invariant: portal tools are always context-first (BM-L1 lines).
@@ -347,15 +386,47 @@ impl McpServer {
                         &crate::format_store_error(err),
                     ));
                 }
+                if let Some(resp) = self.enforce_project_guard(&workspace) {
+                    return Some(resp);
+                }
                 None
             }
             Ok(false) => match self.store.workspace_init(&workspace) {
-                Ok(()) => None,
+                Ok(()) => self.enforce_project_guard(&workspace),
                 Err(err) => Some(crate::ai_error(
                     "STORE_ERROR",
                     &crate::format_store_error(err),
                 )),
             },
+            Err(err) => Some(crate::ai_error(
+                "STORE_ERROR",
+                &crate::format_store_error(err),
+            )),
+        }
+    }
+
+    fn enforce_project_guard(&mut self, workspace: &crate::WorkspaceId) -> Option<Value> {
+        let Some(expected) = self.project_guard.as_deref() else {
+            return None;
+        };
+        match self
+            .store
+            .workspace_project_guard_ensure(workspace, expected)
+        {
+            Ok(()) => None,
+            Err(crate::StoreError::ProjectGuardMismatch { expected, stored }) => {
+                Some(crate::ai_error_with(
+                    "PROJECT_GUARD_MISMATCH",
+                    "Workspace belongs to a different project guard",
+                    Some(&format!(
+                        "Expected project_guard={expected}, but workspace is guarded as {stored}.",
+                    )),
+                    Vec::new(),
+                ))
+            }
+            Err(crate::StoreError::InvalidInput(msg)) => {
+                Some(crate::ai_error("INVALID_INPUT", msg))
+            }
             Err(err) => Some(crate::ai_error(
                 "STORE_ERROR",
                 &crate::format_store_error(err),

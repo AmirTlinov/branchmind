@@ -13,6 +13,37 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
+        let context_budget = match optional_usize(args_obj, "context_budget") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let view = match parse_relevance_view(
+            args_obj,
+            "view",
+            if context_budget.is_some() {
+                RelevanceView::Smart
+            } else {
+                RelevanceView::Explore
+            },
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let all_lanes = match optional_bool(args_obj, "all_lanes") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+        let warm_archive = view.warm_archive();
+        let all_lanes = all_lanes || view.implies_all_lanes();
+        let step = match optional_string(args_obj, "step") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
         let target = args_obj
             .get("target")
             .and_then(|v| v.as_str())
@@ -46,6 +77,18 @@ impl McpServer {
         let branch = scope.branch;
         let graph_doc = scope.graph_doc;
 
+        let step_ctx = if let Some(step_raw) = step.as_deref() {
+            match super::step_context::resolve_step_context_from_args(
+                self, &workspace, args_obj, step_raw,
+            ) {
+                Ok(v) => Some(v),
+                Err(resp) => return resp,
+            }
+        } else {
+            None
+        };
+        let step_tag = step_ctx.as_ref().map(|ctx| ctx.step_tag.as_str());
+
         let limit_cards = match optional_usize(args_obj, "limit_cards") {
             Ok(v) => v.unwrap_or(30),
             Err(resp) => return resp,
@@ -54,67 +97,34 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let max_chars = match (context_budget, max_chars) {
+            (None, v) => v,
+            (Some(budget), None) => Some(budget),
+            (Some(budget), Some(explicit)) => Some(explicit.min(budget)),
+        };
 
-        let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
-        let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
-        let slice = match self.store.graph_query(
+        let cards = match fetch_relevance_first_cards(
+            self,
             &workspace,
             &branch,
             &graph_doc,
-            bm_storage::GraphQueryRequest {
-                ids: None,
-                types: Some(types),
-                status: None,
-                tags_any: None,
-                tags_all: None,
-                text: None,
-                cursor: None,
-                limit: limit_cards,
-                include_edges: false,
-                edges_limit: 0,
-            },
+            limit_cards,
+            step_tag,
+            agent_id.as_deref(),
+            warm_archive,
+            all_lanes,
+            false,
         ) {
-            Ok(v) => v,
-            Err(StoreError::UnknownBranch) => {
-                return ai_error_with(
-                    "UNKNOWN_ID",
-                    "Unknown branch",
-                    Some("Call branch_list to discover existing branches, then retry."),
-                    vec![suggest_call(
-                        "branch_list",
-                        "List known branches for this workspace.",
-                        "high",
-                        json!({ "workspace": workspace.as_str() }),
-                    )],
-                );
-            }
-            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
-            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            Ok(v) => v.cards,
+            Err(err) => return err,
         };
 
         let mut by_type = std::collections::BTreeMap::<String, u64>::new();
-        for n in &slice.nodes {
-            *by_type.entry(n.node_type.clone()).or_insert(0) += 1;
+        for card in &cards {
+            if let Some(ty) = card.get("type").and_then(|v| v.as_str()) {
+                *by_type.entry(ty.to_string()).or_insert(0) += 1;
+            }
         }
-
-        let cards = slice
-            .nodes
-            .into_iter()
-            .map(|n| {
-                json!({
-                    "id": n.id,
-                    "type": n.node_type,
-                    "title": n.title,
-                    "text": n.text,
-                    "status": n.status,
-                    "tags": n.tags,
-                    "meta": n.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
-                    "deleted": n.deleted,
-                    "last_seq": n.last_seq,
-                    "last_ts_ms": n.last_ts_ms
-                })
-            })
-            .collect::<Vec<_>>();
 
         let cards_total = cards.len();
         let stats_by_type = by_type.clone();
@@ -123,6 +133,12 @@ impl McpServer {
             "workspace": workspace.as_str(),
             "branch": branch,
             "graph_doc": graph_doc,
+            "step_focus": step_ctx.as_ref().map(|ctx| json!({
+                "task_id": ctx.task_id,
+                "step_id": ctx.step.step_id,
+                "path": ctx.step.path,
+                "tag": ctx.step_tag
+            })).unwrap_or(Value::Null),
             "stats": {
                 "cards": cards.len(),
                 "by_type": by_type

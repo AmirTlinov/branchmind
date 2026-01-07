@@ -39,6 +39,10 @@ impl McpServer {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
+        let project_guard_stored = match self.store.workspace_project_guard_get(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
 
         let defaults = json!({
             "branch": self.store.default_branch_name(),
@@ -126,6 +130,13 @@ impl McpServer {
             "workspace_exists": workspace_exists,
             "checkout": checkout,
             "defaults": defaults,
+            "workspace_policy": {
+                "default_workspace": self.default_workspace.clone(),
+                "workspace_lock": self.workspace_lock,
+                "project_guard_configured": self.project_guard.is_some(),
+                "project_guard_stored": project_guard_stored,
+                "default_agent_id": self.default_agent_id.clone()
+            },
             "toolset": self.toolset.as_str(),
             "portals": portals,
             "recommended_templates": recommended_templates,
@@ -180,6 +191,9 @@ impl McpServer {
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["defaults"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["workspace_policy"]);
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["progressive_disclosure"]);

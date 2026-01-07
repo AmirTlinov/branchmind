@@ -85,6 +85,7 @@ pub struct StepPatch {
 pub struct StepDefineRequest {
     pub task_id: String,
     pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub patch: StepPatch,
 }
@@ -93,6 +94,7 @@ pub struct StepDefineRequest {
 pub struct StepVerifyRequest {
     pub task_id: String,
     pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub criteria_confirmed: Option<bool>,
     pub tests_confirmed: Option<bool>,
@@ -105,6 +107,7 @@ pub struct StepVerifyRequest {
 pub struct StepCloseRequest {
     pub task_id: String,
     pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub criteria_confirmed: Option<bool>,
     pub tests_confirmed: Option<bool>,
@@ -117,6 +120,7 @@ pub struct StepCloseRequest {
 pub struct StepProgressRequest {
     pub task_id: String,
     pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub completed: bool,
     pub force: bool,
@@ -127,6 +131,7 @@ pub struct StepProgressRequest {
 pub struct StepBlockSetRequest {
     pub task_id: String,
     pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub blocked: bool,
     pub reason: Option<String>,
@@ -137,6 +142,7 @@ pub struct StepBlockSetRequest {
 pub struct StepPatchRequest {
     pub task_id: String,
     pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub patch: StepPatch,
     pub event_payload_json: String,
@@ -214,6 +220,9 @@ pub struct StepListRow {
     pub path: String,
     pub title: String,
     pub completed: bool,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
     pub criteria_confirmed: bool,
     pub tests_confirmed: bool,
     pub security_confirmed: bool,
@@ -221,4 +230,57 @@ pub struct StepListRow {
     pub docs_confirmed: bool,
     pub blocked: bool,
     pub block_reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepLease {
+    pub step_id: String,
+    pub holder_agent_id: String,
+    pub acquired_seq: i64,
+    pub expires_seq: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepLeaseGetRequest {
+    pub task_id: String,
+    pub selector: StepSelector,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepLeaseClaimRequest {
+    pub task_id: String,
+    pub selector: StepSelector,
+    pub agent_id: String,
+    pub ttl_seq: i64,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepLeaseRenewRequest {
+    pub task_id: String,
+    pub selector: StepSelector,
+    pub agent_id: String,
+    pub ttl_seq: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepLeaseReleaseRequest {
+    pub task_id: String,
+    pub selector: StepSelector,
+    pub agent_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepLeaseGetResult {
+    pub step: StepRef,
+    pub lease: Option<StepLease>,
+    pub now_seq: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepLeaseOpResult {
+    pub step: StepRef,
+    pub lease: Option<StepLease>,
+    pub event: Option<EventRow>,
+    pub now_seq: i64,
 }

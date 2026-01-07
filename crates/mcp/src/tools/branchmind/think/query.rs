@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use super::step_context::resolve_step_context_from_args;
 use crate::*;
 use serde_json::{Value, json};
 
@@ -10,6 +11,18 @@ impl McpServer {
         };
         let workspace = match require_workspace(args_obj) {
             Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let context_budget = match optional_usize(args_obj, "context_budget") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let all_lanes = match optional_bool(args_obj, "all_lanes") {
+            Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
         let ids = match optional_string_values(args_obj, "ids") {
@@ -24,11 +37,15 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let step = match optional_string(args_obj, "step") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
         let tags_any = match optional_string_values(args_obj, "tags_any") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let tags_all = match optional_string_values(args_obj, "tags_all") {
+        let mut tags_all = match optional_string_values(args_obj, "tags_all") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -44,16 +61,45 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let max_chars = match (context_budget, max_chars) {
+            (None, v) => v,
+            (Some(budget), None) => Some(budget),
+            (Some(budget), Some(explicit)) => Some(explicit.min(budget)),
+        };
 
         let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
 
+        if let Some(step_raw) = step {
+            let step_ctx =
+                match resolve_step_context_from_args(self, &workspace, args_obj, &step_raw) {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
+            let mut all = std::collections::BTreeSet::<String>::new();
+            if let Some(existing) = tags_all.take() {
+                all.extend(existing);
+            }
+            all.insert(step_ctx.step_tag);
+            tags_all = Some(all.into_iter().collect());
+        }
+
         let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
         let types =
             types.or_else(|| Some(supported.iter().map(|v| v.to_string()).collect::<Vec<_>>()));
 
+        let raw_limit = limit;
+        let query_limit = if raw_limit == 0 {
+            0
+        } else {
+            raw_limit.saturating_mul(if !all_lanes && agent_id.is_some() {
+                2
+            } else {
+                1
+            })
+        };
         let slice = match self.store.graph_query(
             &workspace,
             &branch,
@@ -66,7 +112,7 @@ impl McpServer {
                 tags_all,
                 text,
                 cursor: None,
-                limit,
+                limit: query_limit,
                 include_edges: false,
                 edges_limit: 0,
             },
@@ -89,7 +135,16 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        let cards = graph_nodes_to_cards(slice.nodes);
+        let mut cards = graph_nodes_to_cards(slice.nodes);
+        let agent_id = agent_id.as_deref();
+        if !all_lanes {
+            cards.retain(|card| lane_matches_card_value(card, agent_id));
+        }
+        if raw_limit > 0 {
+            cards.truncate(raw_limit);
+        } else {
+            cards.clear();
+        }
         let cards_total = cards.len();
         let mut result = json!({
             "workspace": workspace.as_str(),

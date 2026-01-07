@@ -20,9 +20,12 @@ This glossary keeps terms consistent across task execution and reasoning memory.
 - **Conflict**: A first-class entity representing incompatible changes that must be resolved explicitly.
 - **Graph**: A typed knowledge graph linking hypotheses/questions/tests/evidence/decisions.
 - **Trace**: A structured, time-ordered sequence of thinking cards/events for recoverability.
+- **Step focus ("room")**: The current step slice used as the default retrieval scope for smart views (typically the first open step of the focused task).
+- **Lane**: A noise-isolation “stripe” inside a workspace (`shared` + per-agent lanes) for parallel work without cross-talk.
+- **Publish**: An explicit promotion of an artifact from an agent lane into the shared lane (often as a pinned anchor).
+- **Cold archive**: A retrieval policy where closed/unpinned/unscoped history is excluded from default views and only returned on explicit request.
 
 ## Integration
 
 - **Reasoning reference**: Stable identifiers (branch/docs) that bind a task/plan to its reasoning memory.
 - **Single organism**: A guarantee that task mutations and reasoning events stay consistent without manual sync.
-

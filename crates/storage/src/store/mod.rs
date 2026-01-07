@@ -93,6 +93,64 @@ impl SqliteStore {
             .is_some())
     }
 
+    pub fn workspace_project_guard_get(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT project_guard FROM workspaces WHERE workspace=?1",
+                params![workspace.as_str()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    pub fn workspace_project_guard_ensure(
+        &mut self,
+        workspace: &WorkspaceId,
+        expected_guard: &str,
+    ) -> Result<(), StoreError> {
+        let expected_guard = expected_guard.trim();
+        if expected_guard.is_empty() {
+            return Err(StoreError::InvalidInput("project_guard must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        let stored_guard = tx
+            .query_row(
+                "SELECT project_guard FROM workspaces WHERE workspace=?1",
+                params![workspace.as_str()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+
+        match stored_guard {
+            Some(stored) if stored == expected_guard => {
+                tx.commit()?;
+                Ok(())
+            }
+            Some(stored) => Err(StoreError::ProjectGuardMismatch {
+                expected: expected_guard.to_string(),
+                stored,
+            }),
+            None => {
+                tx.execute(
+                    "UPDATE workspaces SET project_guard=?2 WHERE workspace=?1",
+                    params![workspace.as_str(), expected_guard],
+                )?;
+                tx.commit()?;
+                Ok(())
+            }
+        }
+    }
+
     pub fn workspace_last_event_head(
         &self,
         workspace: &WorkspaceId,
@@ -128,6 +186,70 @@ impl SqliteStore {
             )
             .optional()?)
     }
+
+    /// Returns a stable default agent id for this store when the MCP server is launched with
+    /// `--agent-id auto` (or `BRANCHMIND_AGENT_ID=auto`).
+    ///
+    /// The id is persisted in the store-level `meta` table, so it survives process restarts.
+    ///
+    /// Note: This is a storage-level fallback (per store). Multi-agent isolation still requires
+    /// explicit per-agent ids when multiple concurrent agents share the same store.
+    pub fn default_agent_id_auto_get_or_create(&mut self) -> Result<String, StoreError> {
+        const KEY: &str = "default_agent_id";
+
+        let tx = self.conn.transaction()?;
+
+        let existing: Option<String> = tx
+            .query_row("SELECT value FROM meta WHERE key=?1", params![KEY], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        if let Some(value) = existing {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(StoreError::InvalidInput(
+                    "meta.default_agent_id must not be empty",
+                ));
+            }
+            tx.commit()?;
+            return Ok(trimmed.to_string());
+        }
+
+        let now_ms = now_ms().max(0) as u64;
+        let pid = std::process::id() as u64;
+        let candidate = format!("a{}_{}", base36(now_ms), base36(pid));
+
+        // Race-safe: if another process inserted concurrently, we read back what won.
+        tx.execute(
+            "INSERT OR IGNORE INTO meta(key, value) VALUES (?1, ?2)",
+            params![KEY, candidate],
+        )?;
+
+        let stored: Option<String> = tx
+            .query_row("SELECT value FROM meta WHERE key=?1", params![KEY], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        let stored = stored.unwrap_or_else(|| "self".to_string());
+        tx.commit()?;
+        Ok(stored)
+    }
+}
+
+fn base36(mut value: u64) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if value == 0 {
+        return "0".to_string();
+    }
+
+    let mut out = Vec::<u8>::new();
+    while value > 0 {
+        let idx = (value % 36) as usize;
+        out.push(DIGITS[idx]);
+        value /= 36;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_else(|_| "0".to_string())
 }
 
 #[derive(Clone, Debug)]

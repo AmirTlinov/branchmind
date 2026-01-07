@@ -2,6 +2,7 @@
 
 mod args;
 mod capsule;
+mod focus_only;
 mod queries;
 
 mod memory;
@@ -24,6 +25,7 @@ impl McpServer {
         };
 
         let explicit_target = args.explicit_target.as_deref();
+        let focus_view = args.view;
 
         let (target_id, kind, focus) =
             match resolve_target_id(&mut self.store, &args.workspace, args_obj) {
@@ -62,6 +64,27 @@ impl McpServer {
             Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown id"),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
+
+        let first_open_step = if matches!(
+            focus_view,
+            args::ResumeSuperView::FocusOnly
+                | args::ResumeSuperView::Smart
+                | args::ResumeSuperView::Explore
+                | args::ResumeSuperView::Audit
+        ) && kind == TaskKind::Task
+        {
+            focus_only::parse_first_open_step(context.steps.as_ref())
+        } else {
+            None
+        };
+        let focus_step_tag = first_open_step
+            .as_ref()
+            .map(|step| step_tag_for(&step.step_id));
+        let focus_step_path = first_open_step
+            .as_ref()
+            .and_then(|step| step.first_open.get("path"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let timeline = match timeline::load_timeline_events(
             &mut self.store,
@@ -106,6 +129,11 @@ impl McpServer {
                 trace_limit: args.trace_limit,
                 cards_cursor: args.cards_cursor,
                 cards_limit: args.cards_limit,
+                focus_step_tag: focus_step_tag.clone(),
+                focus_task_id: focus_step_path.as_ref().map(|_| target_id.clone()),
+                focus_step_path: focus_step_path.clone(),
+                agent_id: args.agent_id.clone(),
+                view: focus_view,
                 read_only: args.read_only,
             },
             &mut reasoning_branch_missing,
@@ -122,6 +150,11 @@ impl McpServer {
                 decisions_limit: args.decisions_limit,
                 evidence_limit: args.evidence_limit,
                 blockers_limit: args.blockers_limit,
+                agent_id: args.agent_id.clone(),
+                all_lanes: matches!(
+                    focus_view,
+                    args::ResumeSuperView::Full | args::ResumeSuperView::Audit
+                ),
                 read_only: args.read_only,
             },
             &mut reasoning_branch_missing,
@@ -161,6 +194,84 @@ impl McpServer {
             degradation_signals.push("trace_only".to_string());
         }
 
+        let engine = derive_reasoning_engine_step_aware(
+            EngineScope {
+                workspace: args.workspace.as_str(),
+                branch: reasoning.branch.as_str(),
+                graph_doc: reasoning.graph_doc.as_str(),
+                trace_doc: reasoning.trace_doc.as_str(),
+            },
+            &memory.cards,
+            &memory.edges,
+            &memory.trace.entries,
+            focus_step_tag.as_deref(),
+            EngineLimits {
+                signals_limit: args.engine_signals_limit,
+                actions_limit: args.engine_actions_limit,
+            },
+        );
+
+        let step_focus = if matches!(
+            focus_view,
+            args::ResumeSuperView::FocusOnly
+                | args::ResumeSuperView::Smart
+                | args::ResumeSuperView::Explore
+                | args::ResumeSuperView::Audit
+        ) && kind == TaskKind::Task
+        {
+            if let Some(first_open) = first_open_step.as_ref() {
+                let lease_state = match self.store.step_lease_get(
+                    &args.workspace,
+                    bm_storage::StepLeaseGetRequest {
+                        task_id: target_id.clone(),
+                        selector: bm_storage::StepSelector {
+                            step_id: Some(first_open.step_id.clone()),
+                            path: None,
+                        },
+                    },
+                ) {
+                    Ok(v) => v.lease.map(|lease| (lease, v.now_seq)),
+                    Err(StoreError::StepNotFound) => None,
+                    Err(StoreError::UnknownId) => None,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                match self.store.step_detail(
+                    &args.workspace,
+                    &target_id,
+                    Some(first_open.step_id.as_str()),
+                    None,
+                ) {
+                    Ok(detail) => {
+                        let mut payload = focus_only::build_step_focus_detail(
+                            detail,
+                            Some(&first_open.first_open),
+                        );
+                        if let Some((lease, now_seq)) = lease_state
+                            && let Some(obj) =
+                                payload.get_mut("detail").and_then(|v| v.as_object_mut())
+                        {
+                            obj.insert(
+                                "lease".to_string(),
+                                serde_json::json!({
+                                    "holder_agent_id": lease.holder_agent_id,
+                                    "acquired_seq": lease.acquired_seq,
+                                    "expires_seq": lease.expires_seq,
+                                    "now_seq": now_seq
+                                }),
+                            );
+                        }
+                        Some(payload)
+                    }
+                    Err(StoreError::StepNotFound) => None,
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let graph_diff_payload = if args.include_graph_diff {
             match self.build_resume_super_graph_diff_payload(
                 &args.workspace,
@@ -186,6 +297,17 @@ impl McpServer {
         let evidence_total = signals.evidence.len();
         let stats_by_type = memory.stats_by_type.clone();
 
+        let lane_summary = if focus_view == args::ResumeSuperView::Audit {
+            let mut cards = Vec::<Value>::new();
+            cards.extend(memory.cards.iter().cloned());
+            cards.extend(signals.decisions.iter().cloned());
+            cards.extend(signals.evidence.iter().cloned());
+            cards.extend(signals.blockers.iter().cloned());
+            Some(build_lane_summary(&cards, 8))
+        } else {
+            None
+        };
+
         let omit_workspace = self
             .default_workspace
             .as_deref()
@@ -196,10 +318,13 @@ impl McpServer {
             omit_workspace,
             kind,
             focus: focus.as_deref(),
+            agent_id: args.agent_id.as_deref(),
+            audit_all_lanes: focus_view == args::ResumeSuperView::Audit,
             target: &context.target,
             reasoning_ref: &context.reasoning_ref,
             radar: &context.radar,
             steps_summary: context.steps.as_ref(),
+            step_focus: step_focus.as_ref(),
             handoff: &handoff,
             timeline: &timeline,
             notes_count,
@@ -234,6 +359,15 @@ impl McpServer {
         });
         if let Some(obj) = result.as_object_mut() {
             obj.insert("capsule".to_string(), capsule);
+            if let Some(engine) = engine {
+                obj.insert("engine".to_string(), engine);
+            }
+            if let Some(step_focus) = step_focus {
+                obj.insert("step_focus".to_string(), step_focus);
+            }
+            if let Some(lane_summary) = lane_summary {
+                obj.insert("lane_summary".to_string(), lane_summary);
+            }
         }
 
         self.apply_resume_super_budget(
@@ -249,6 +383,22 @@ impl McpServer {
             &mut degradation_signals,
             &mut warnings,
         );
+
+        if focus_view == args::ResumeSuperView::FocusOnly {
+            let step_path = result
+                .get("steps")
+                .and_then(|v| v.get("first_open"))
+                .and_then(|v| v.get("path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            focus_only::apply_focus_only_shaping(
+                &mut result,
+                step_path.as_deref(),
+                focus_step_tag.as_deref(),
+                12,
+                args.include_graph_diff,
+            );
+        }
 
         if warnings.is_empty() {
             ai_ok("resume_super", result)

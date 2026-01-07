@@ -12,6 +12,7 @@ impl SqliteStore {
         workspace: &WorkspaceId,
         task_id: &str,
         expected_revision: Option<i64>,
+        agent_id: Option<&str>,
         step_id: Option<&str>,
         path: Option<&StepPath>,
         note: String,
@@ -27,6 +28,7 @@ impl SqliteStore {
             bump_task_revision_tx(&tx, workspace.as_str(), task_id, expected_revision, now_ms)?;
         let (step_id, path) =
             resolve_step_selector_tx(&tx, workspace.as_str(), task_id, step_id, path)?;
+        super::lease::enforce_step_lease_tx(&tx, workspace.as_str(), &step_id, agent_id)?;
 
         tx.execute(
             "INSERT INTO step_notes(workspace, task_id, step_id, ts_ms, note) VALUES (?1, ?2, ?3, ?4, ?5)",

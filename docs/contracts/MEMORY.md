@@ -96,12 +96,14 @@ Input: `{ workspace }`
 DX note: `workspace` may be omitted when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
 Output:
 
-- `{ workspace, schema_version, workspace_exists, checkout?, defaults, golden_path?, last_event?, last_doc_entry? }`
+- `{ workspace, schema_version, workspace_exists, checkout?, defaults, golden_path?, last_event?, last_doc_entry?, workspace_policy? }`
 - `last_event` shape: `{ event_id, ts, ts_ms }`
 - `last_doc_entry` shape: `{ seq, ts, ts_ms, branch, doc, kind }`
 - `checkout` is the current checkout branch (or `null` if unset).
 - `defaults` match `init` defaults.
 - `golden_path` lists the recommended minimal DX flow (macros + snapshot).
+- `workspace_policy` is an optional block exposing anti-drift configuration and guard state (best-effort):
+  - `{ default_workspace?, workspace_lock?, project_guard_configured?, project_guard_stored?, default_agent_id? }`
 
 ### `help`
 
@@ -121,8 +123,8 @@ Appends a single note entry to the **notes** document of a target (plan/task), o
 
 Input (one of):
 
-- `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta? }`
-- `{ workspace, branch, doc, content, title?, format?, meta? }`
+- `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta?, agent_id? }`
+- `{ workspace, branch, doc, content, title?, format?, meta?, agent_id? }`
 
 `target` may be a string id or `TargetRef` (see `TYPES.md`), e.g. `{ "id": "TASK-001", "kind": "task" }`.
 
@@ -157,12 +159,13 @@ Defaults:
 
 Output:
 
-- `{ branch, doc, entries:[...], pagination:{ cursor, next_cursor?, has_more, limit, count }, truncated }`
+- `{ branch, doc, entries:[...], sequential?, pagination:{ cursor, next_cursor?, has_more, limit, count }, truncated }`
 
 Semantics:
 
 - If `branch` has a recorded base, `show` returns the **effective view** (base snapshot + branch entries).
 - If `branch` has no base, it returns entries written to that branch only.
+- When reading a trace document (`doc_kind="trace"`), `show` may include a derived `sequential` graph (nodes/edges + missing refs) when sequential trace metadata is present (see “Sequential trace graph (derived)”).
 
 ### `export`
 
@@ -172,13 +175,16 @@ Input: `{ workspace, target, notes_limit?, trace_limit?, max_chars? }`
 
 Output:
 
-- `{ target, reasoning_ref, notes:{...}, trace:{...}, truncated }`
+- `{ target, reasoning_ref, notes:{...}, trace:{ entries, sequential?, ... }, truncated }`
 
 Semantics:
 
 - Resolves the canonical branch/docs via `target` (plan/task).
 - `notes` and `trace` are equivalent to calling `show` with `cursor=null` and the provided limits.
+  - For `trace`, this includes the derived `sequential` graph when sequential metadata is present.
 - `max_chars` applies to the whole snapshot payload; truncation must be explicit.
+- `notes_limit=0` disables `notes.entries` (returns an empty array).
+- `trace_limit=0` disables `trace.entries` (returns an empty array) and yields `trace.sequential=null`.
 
 ### `diff`
 
@@ -484,7 +490,7 @@ Semantics:
 
 Daily portal: append a note, optionally creating/switching a branch.
 
-Input: `{ workspace, name?, from?, doc?, content?, template?, goal?, format?, title?, meta? }`
+Input: `{ workspace, name?, from?, doc?, content?, template?, goal?, format?, title?, meta?, agent_id? }`
 DX note: `workspace` may be omitted when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
 
 Output: `{ workspace, branch, checkout, note }`
@@ -573,8 +579,8 @@ Atomically commit a thinking card into `trace_doc` and upsert the corresponding 
 
 Input (one of):
 
-- `{ workspace, target, branch?, card, supports?, blocks? }`
-- `{ workspace, branch, trace_doc, graph_doc, card, supports?, blocks? }`
+- `{ workspace, target?, card, supports?, blocks?, step?, agent_id? }`
+- `{ workspace, branch, trace_doc, graph_doc, card, supports?, blocks?, agent_id? }`
 
 Where:
 
@@ -589,13 +595,24 @@ Where:
 - Optional:
   - `card.status` (default: `"open"`),
   - `card.tags` (default: `[]`),
+  - `step` (TASK targets only): either `"focus"`, a `STEP-...` id, or a StepPath (`s:0`, `s:0.s:1`).
+  - `agent_id` (optional): when provided, the card is stamped into the agent lane (see lane convention in `TYPES.md`).
   - `supports[]` / `blocks[]` — arrays of other card ids (graph edges from `card.id`).
 
 Defaults:
 
-- If `target` is not provided and `branch` is omitted, the current checkout branch is used.
-- If `trace_doc` is omitted in that mode, it defaults to `trace`.
-- If `graph_doc` is omitted in that mode, it defaults to `graph`.
+- If `target` is omitted and no explicit scope overrides are provided, the workspace `focus` is used (if set).
+- If neither `target` nor `focus` is available, the current checkout branch is used.
+- If `trace_doc` is omitted in checkout-branch mode, it defaults to `trace`.
+- If `graph_doc` is omitted in checkout-branch mode, it defaults to `graph`.
+
+Step scoping:
+
+- When `step` is provided, the server also:
+  - adds a canonical tag `step:<lower(step_id)>` to `card.tags`,
+  - writes `card.meta.step={ task_id, step_id, path }`.
+- `step="focus"` resolves the first open step of the target task (or focused task). If there is no open step, it is a typed error.
+- `step` is not supported with explicit `branch`/`*_doc` overrides.
 
 Output:
 
@@ -618,6 +635,8 @@ Input:
 {
   "workspace": "acme/repo",
   "target": "TASK-001",
+  "agent_id": "agent-1",
+  "step": "focus",
   "frame": "...",
   "hypothesis": "...",
   "test": "...",
@@ -636,7 +655,10 @@ Semantics:
 - Each stage becomes a `think_card` with `card.type=<stage>`.
 - Each stage is auto-linked via `supports` to the previous stage (if present).
 - If `note_decision=true`, the decision is summarized into `notes_doc`.
+- If `note_decision=true` and `step` is provided, the decision note is stamped with `meta.step` (so step-scoped packs can retrieve it deterministically).
 - `status` keys must match provided stages; unknown keys or statuses for missing stages are errors.
+- If `step` is provided, all stages share the same step scoping (tag + `meta.step`) and `step` follows the same rules as `think_card`.
+- If `agent_id` is provided, all stages share the same lane stamp (tag + `meta.lane`) and follow the same rules as `think_card`.
 
 ### `think_context`
 
@@ -644,8 +666,8 @@ Return a bounded, low-noise “thinking context slice” for fast resumption.
 
 Input (one of):
 
-- `{ workspace, target, branch?, limit_cards?, max_chars? }`
-- `{ workspace, branch, graph_doc, limit_cards?, max_chars? }`
+- `{ workspace, target, branch?, view?, step?, limit_cards?, context_budget?, max_chars?, agent_id?, all_lanes? }`
+- `{ workspace, branch, graph_doc, view?, limit_cards?, context_budget?, max_chars?, agent_id?, all_lanes? }`
 
 Defaults:
 
@@ -655,13 +677,27 @@ Defaults:
 
 Output:
 
-- `{ branch, graph_doc, stats:{ cards, by_type:{...} }, cards:[...], truncated }`
+- `{ branch, graph_doc, step_focus?, stats:{ cards, by_type:{...} }, cards:[...], truncated }`
 
 Semantics:
 
-- `cards[]` are graph nodes filtered to `supported_types`, ordered by `last_seq DESC`.
+- `view` (optional): `smart | explore | audit`.
+  - `smart` — relevance-first + **cold archive** (prioritize pins + open frontier; recent fill uses `status="open"`).
+  - `explore` — relevance-first + **warm archive** (recent fill includes any status).
+  - `audit` — like `smart`, but implies cross-lane reads (equivalent to `all_lanes=true` unless explicitly overridden by tool-specific rules).
+  - Default: if `view` is omitted, it defaults to `smart` when `context_budget` is provided; otherwise defaults to `explore` for compatibility.
+- `cards[]` are graph nodes filtered to `supported_types`, selected **relevance-first** (stable ordering):
+  1) pinned cards (anchors),
+  2) open frontier (hypotheses/questions/subgoals/tests),
+  3) recent fill (cold/warm depends on `view`).
 - `max_chars` truncates by dropping older cards first; truncation must be explicit.
 - If a precondition fails (unknown target/branch), return a typed error and a single best next action suggestion.
+- Optional `step` (TASK targets only): `"focus"`, `STEP-...`, or a StepPath (`s:0`, `s:0.s:1`).
+  - `step="focus"` resolves the first open step of the target/focused task.
+  - When `step` is provided, results are filtered to step-scoped cards (via `tags_all=["step:<...>"]`).
+  - `step` is not supported with explicit branch/doc overrides (use `target`/focus scope).
+- If `agent_id` is provided, cards may be filtered to `lane:shared` + `lane:agent:<agent_id>` (legacy cards without a lane tag are treated as shared).
+- If `all_lanes=true`, lane filtering is disabled for this read view (shows `lane:shared` + all `lane:agent:*`). If both `agent_id` and `all_lanes` are provided, `all_lanes` wins.
 
 ## Parity tools (v0.2)
 
@@ -729,11 +765,42 @@ and normalize fields.
 
 Query thinking cards via graph filters.
 
-Input: `{ workspace, target?, graph_doc?, ref?, ids?, status?, tags_any?, tags_all?, text?, limit?, max_chars? }`
+Input: `{ workspace, target?, graph_doc?, ref?, step?, ids?, status?, tags_any?, tags_all?, text?, limit?, context_budget?, max_chars?, agent_id?, all_lanes? }`
+
+Step scoping:
+
+- Optional `step` (TASK targets only): `"focus"`, `STEP-...`, or a StepPath (`s:0`, `s:0.s:1`).
+- `step="focus"` resolves the first open step of the target/focused task.
+- When `step` is provided, it is equivalent to requiring `tags_all` to include the canonical step tag `step:<lower(step_id)>`.
+- `step` is not supported with explicit `ref`/`graph_doc` overrides (use `target`/focus scope).
+
+Optional:
+
+- `context_budget` — alias for `max_chars` (use the smaller of the two when both are provided).
+- `agent_id` — when provided, results may be filtered to `lane:shared` + `lane:agent:<agent_id>` (legacy cards without a lane tag are treated as shared).
+- `all_lanes` — when `true`, disables lane filtering for this read view (shows `lane:shared` + all `lane:agent:*`). Intended for explicit multi-agent audit/sync.
 
 ### `think_pack`
 
 Bounded low-noise pack: a compact `think_context` + stats summary.
+
+Optional:
+
+- `view` — relevance view (`smart | explore | audit`), shaping candidate selection and archive temperature (see `think_context` for semantics and defaulting).
+- `context_budget` — alias for `max_chars` (use the smaller of the two when both are provided).
+- `agent_id` — when provided, candidates/frontier may be filtered to `lane:shared` + `lane:agent:<agent_id>` (legacy cards without a lane tag are treated as shared).
+- `all_lanes` — when `true`, disables lane filtering for this read view (shows `lane:shared` + all `lane:agent:*`). Intended for explicit multi-agent audit/sync.
+- `step` (TASK targets only): `"focus"`, `STEP-...`, or StepPath. When provided, candidates/frontier are filtered to step-scoped cards (via `tags_all=["step:<...>"]`). Not supported with explicit `ref`/`graph_doc` overrides.
+
+Output (optional):
+
+- When `all_lanes=true`, the response may include a small `lane_summary` derived from the returned slice (counts + top pinned/open per lane).
+- The response includes a small `capsule` HUD (`type="think_pack_capsule"`) with:
+  - **where**: workspace + branch/docs + lane + optional step focus,
+  - **why**: top engine signals (bounded),
+  - **next**: 1 primary + 1 backup action derived from the engine (bounded).
+- The response may include a derived `engine` block (signals + actions) computed over the returned cards slice (read-only, deterministic).
+- The response includes `trace_doc` to make suggested write calls unambiguous (even though `think_pack` itself does not return trace entries).
 
 ### `context_pack`
 
@@ -741,8 +808,8 @@ Bounded resumption pack that merges **notes**, **trace**, and **graph cards** in
 
 Input (one of):
 
-- `{ workspace, target, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars?, read_only? }`
-- `{ workspace, ref?, notes_doc?, trace_doc?, graph_doc?, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, max_chars?, read_only? }`
+- `{ workspace, target, view?, step?, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, context_budget?, max_chars?, agent_id?, all_lanes?, read_only? }`
+- `{ workspace, ref?, view?, notes_doc?, trace_doc?, graph_doc?, notes_limit?, trace_limit?, limit_cards?, decisions_limit?, evidence_limit?, blockers_limit?, context_budget?, max_chars?, agent_id?, all_lanes?, read_only? }`
 
 Defaults:
 
@@ -752,26 +819,192 @@ Defaults:
 - `notes_limit=20`, `trace_limit=50`, `limit_cards=30`.
 - `decisions_limit=5`, `evidence_limit=5`, `blockers_limit=5`.
 
+Optional:
+
+- `view` — relevance view (`smart | explore | audit`) for the graph-derived slice (`cards`). `audit` implies cross-lane reads (equivalent to `all_lanes=true` unless explicitly overridden by tool-specific rules).
+- `context_budget` — alias for `max_chars` (use the smaller of the two when both are provided).
+- `step` (TASK targets only): `"focus"`, `STEP-...`, or a StepPath (`s:0`, `s:0.s:1`).
+  - `step="focus"` resolves the first open step of the target/focused task.
+  - When `step` is provided, the response is step-scoped (room-first):
+    - Graph-derived slices (`cards`, `signals.*`) are filtered to step-scoped cards (via `tags_all=["step:<...>"]`).
+    - `trace.entries` keeps:
+      - note entries whose `meta.step` matches the focus step,
+      - event entries whose `{ task_id, path }` match the focus step path prefix.
+    - `notes.entries` keeps note entries whose `meta.step` matches the focus step.
+  - `step` is not supported with explicit `ref`/`notes_doc`/`trace_doc`/`graph_doc` overrides (use `target`/focus scope).
+- `agent_id` — when provided, graph-derived slices and note-like doc entries may be filtered to `lane:shared` + `lane:agent:<agent_id>` (legacy cards/notes without a lane stamp are treated as shared).
+- `all_lanes` — when `true`, disables lane filtering for graph-derived slices and note-like doc entries (`notes.entries`, trace note entries) (shows `lane:shared` + all `lane:agent:*`). Intended for explicit multi-agent audit/sync.
+- `notes_limit=0` disables `notes.entries` (returns an empty array).
+- `trace_limit=0` disables `trace.entries` (returns an empty array).
+
 Output:
 
-- `{ requested:{ target, ref }, branch, docs:{ notes, trace, graph }, notes:{...}, trace:{...}, cards:[...], signals:{ blockers, decisions, evidence, stats }, stats:{...}, bridge?, truncated }`
+- `{ requested:{ target, ref }, branch, docs:{ notes, trace, graph }, capsule?, engine?, lane_summary?, notes:{...}, trace:{ entries, sequential?, pagination }, cards:[...], signals:{ blockers, decisions, evidence, stats }, stats:{...}, bridge?, truncated }`
 
 Notes:
 
 - If `target` is provided but its scope is empty and the checkout branch has recent context,
   `bridge` is included with `{ checkout, docs, has }` and a `CONTEXT_EMPTY_FOR_TARGET` warning.
 - If `read_only=true`, the tool avoids creating missing reasoning refs and derives default docs from the target id.
+- The response includes a small `capsule` HUD (`type="context_pack_capsule"`) with stable `where/why/next` blocks.
+- `trace.sequential` may be included as a derived branching graph when sequential trace metadata is present (see “Sequential trace graph (derived)” below).
+- When `all_lanes=true`, the response may include a small `lane_summary` derived from the returned slice (counts + top pinned/open per lane).
+
+### `context_pack_export`
+
+Write a bounded `context_pack` **result** to a file for external tooling.
+
+This is intended for integrations where another system can only read from the project filesystem
+(e.g., a repo-scoped search/indexing tool).
+
+Input:
+
+- Same as `context_pack`, plus `out_file` (required).
+
+Output:
+
+- `{ out_file, bytes, truncated }`
+
+Recommended convention (for Context Finder integration):
+
+- Write to `.context-finder/branchmind/context_pack.json` under the project root.
+
+## Session transcripts (filesystem; read-only)
+
+BranchMind can act as an **explicit, bounded window** into Codex session transcripts stored on disk
+(e.g., `rollout-*.jsonl` files under `$CODEX_HOME/sessions/...`).
+
+This surface is intentionally:
+
+- **read-only** (no ingestion into the BranchMind store; no background indexing),
+- **explicit** (the caller may override `root_dir` and safety filters; defaults are conservative),
+- **bounded** (hard limits on files/bytes/returned chars),
+- **anti-drift by default** (optional `cwd_prefix` filter; defaults to the server project root).
+
+### `transcripts_search`
+
+Search across transcript files under a directory.
+
+Input:
+
+- `{ workspace, root_dir?, query, cwd_prefix?, role?, dedupe?, max_files?, max_bytes_total?, hits_limit?, context_chars?, max_chars? }`
+
+Semantics:
+
+- `root_dir` is a directory containing Codex transcript files (recursively).
+  - If omitted, defaults to `CODEX_HOME/sessions` when `CODEX_HOME` is set,
+    otherwise `~/.codex/sessions` (best-effort).
+- Only `*.jsonl` files are considered in v0 (future: opt-in support for `*.prompt-answer.md`).
+- `cwd_prefix` filters candidates by session project hints (must start with the prefix):
+  - `session_meta.payload.cwd`, plus best-effort path hints extracted from:
+    - `session_meta.payload.instructions`, and
+    - early `payload.type="message"` items (typically `role="user"` / `role="developer"`).
+    Hints are extracted via deterministic patterns such as embedded `<cwd>...</cwd>` blocks or
+    "AGENTS.md instructions for ..." lines.
+  - If omitted, the tool uses the **repo root derived from the server storage directory** as a default `cwd_prefix` (returned in `filters`).
+- `role` (optional) filters to message items with `payload.role` (e.g., `"user"`, `"assistant"`, `"system"`).
+- `dedupe=true` (default) de-duplicates repeated hits across files by `(project_id, role, msg_hash)` to reduce copy/paste noise.
+- The tool must enforce:
+  - `max_files` (cap on files opened),
+  - `max_bytes_total` (cap on total bytes read),
+  - `max_chars` (cap on response payload).
+- Matching is case-sensitive substring match on extracted message text (v0).
+
+Output:
+
+- `{ root_dir, filters:{ cwd_prefix, role?, dedupe }, scanned:{ files, bytes, truncated }, projects:[...], hits:[...], truncated }`
+
+Hit shape (v0):
+
+- `{ ref:{ path, line }, session:{ id?, ts? }, project:{ id, name, confidence }, message:{ role, ts?, snippet } }`
+
+Notes:
+
+- `ref.path` is relative to `root_dir` when possible.
+- `snippet` is bounded by `context_chars` and should be safe to display in tool output.
+- `projects` is a small summary derived from the scanned slice: `{ id, name, confidence, files, hits }`.
+- `scanned.truncated=true` means the scan hit `max_bytes_total` (search is best-effort under budgets).
+- Top-level `truncated=true` means the **response payload** was reduced to fit `max_chars`.
+
+### `transcripts_open`
+
+Open a single transcript record by file reference.
+
+Input:
+
+- `{ workspace, root_dir?, ref:{ path, line?, byte? }, before_lines?, after_lines?, max_chars? }`
+
+Output:
+
+- `{ root_dir, ref, session:{ id?, ts?, cwd? }, project:{ id, name, confidence }, entries:[...], truncated }`
+
+Notes:
+
+- The tool must reject path traversal: `ref.path` must resolve within `root_dir`.
+- Exactly one of `ref.line` or `ref.byte` must be provided.
+  - `ref.line` is a 1-based JSONL line number.
+  - `ref.byte` is the 0-based byte offset of the JSONL line start (preferred for huge files).
+- Entries are returned as extracted message blocks (best-effort); non-message lines may be omitted.
+- This tool is intended for `audit` workflows; it should not be pulled into default portals.
+- The response may include low-priority suggestions to capture the opened window into durable memory (`macro_branch_note`), optionally step-scoped when a focused task+step exists.
+
+### `transcripts_digest`
+
+Return a small, low-noise digest of recent transcript "summary" messages for the **current project**
+to support fast archaeology ("what happened before I arrived?").
+
+Input:
+
+- `{ workspace, root_dir?, cwd_prefix?, mode?, max_files?, max_bytes_total?, max_items?, max_chars? }`
+
+Defaults:
+
+- `root_dir` defaults to `CODEX_HOME/sessions` when `CODEX_HOME` is set, otherwise `~/.codex/sessions`.
+- `cwd_prefix` defaults to the server project root (derived from the server storage directory).
+  - Project matching is best-effort and uses the same hint sources as `transcripts_search`
+    (session meta + early message hint extraction).
+- `max_files=720`, `max_bytes_total=16MiB`, `max_items=6` (bounded low-noise defaults; callers can raise explicitly).
+- `mode="summary"`:
+  - selects assistant messages that look like a summary block (heuristic; deterministic).
+  - `mode="last"` selects the last assistant message per session file (bounded).
+
+Output:
+
+- `{ root_dir, filters:{ cwd_prefix, mode }, scanned:{ files, bytes, truncated }, digest:[...], truncated }`
+
+Digest item shape (v0):
+
+- `{ ref:{ path, line?, byte }, session:{ id?, ts? }, message:{ role:"assistant", ts?, text } }`
+
+Notes:
+
+- Digest is read-only and does not ingest transcript text into the store.
+- Intended as a "cold archive" view; use explicit note/evidence commits to publish durable anchors.
+- To maximize ROI under small `max_bytes_total`, the scan is **windowed** per file (bounded head for scope hints + bounded tail for candidate messages).
+  - `ref.byte` is always returned (stable for immutable JSONL).
+  - `ref.line` is best-effort and only included when the tail scan covers the full file (no full-file scans under the budget).
+- `scanned.truncated=true` means the scan hit `max_bytes_total` (digest is best-effort under budgets).
+- If `digest` is empty and `scanned.truncated=true`, the tool emits a warning and provides copy/paste-ready retry suggestions (raise scan budgets or switch mode).
+- Top-level `truncated=true` means the **response payload** was reduced to fit `max_chars`.
 
 ### `think_frontier` / `think_next`
 
 Return prioritized candidates for next actions (by recency + status).
 
-Input: `{ workspace, target?, ref?, graph_doc?, limit_*?, max_chars? }`
+Input: `{ workspace, target?, ref?, graph_doc?, step?, limit_*?, context_budget?, max_chars?, agent_id?, all_lanes? }`
+
+Step scoping:
+
+- Optional `step` (TASK targets only): `"focus"`, `STEP-...`, or StepPath. When provided, the frontier (and `think_next` candidate selection) is filtered to step-scoped cards (via `tags_all=["step:<...>"]`). Not supported with explicit `ref`/`graph_doc` overrides.
 
 Notes:
 
 - If `max_chars` is set, responses include `budget.used_chars` and may truncate lists with minimal summaries.
 - Under very small budgets, tools return a minimal frontier/candidate stub (or a `signal` fallback) instead of an empty payload.
+- `view` (optional): `smart | explore | audit` (relevance view).
+  - `audit` implies cross-lane reads (equivalent to `all_lanes=true` unless explicitly overridden by tool-specific rules).
+- If `agent_id` is provided, frontier/candidate selection may be filtered to `lane:shared` + `lane:agent:<agent_id>` (legacy cards without a lane tag are treated as shared).
+- If `all_lanes=true`, lane filtering is disabled for this read view (shows `lane:shared` + all `lane:agent:*`). If both `agent_id` and `all_lanes` are provided, `all_lanes` wins.
 
 ### `think_link` / `think_set_status`
 
@@ -781,6 +1014,23 @@ Graph edge creation and status updates for card nodes.
 
 Pin/unpin cards and list pins.
 
+### `think_publish` (lanes, v0.5)
+
+Promote a card into the shared lane to become a durable anchor.
+
+Input: `{ workspace, target?, ref?, graph_doc?, trace_doc?, card_id, pin?, agent_id? }`
+
+Semantics:
+
+- Reads the current card by `card_id` and writes/updates a deterministic published copy:
+  - `published_id = "CARD-PUB-" + <card_id>`.
+- The published copy:
+  - is tagged as `lane:shared` (lane convention),
+  - carries `meta.published_from={ card_id, lane?, agent_id? }` (best-effort),
+  - keeps step tags and other tags, excluding lane tags (rewritten).
+- Idempotent: repeated publish updates the same `published_id`.
+- `pin=true` may add the canonical pin tag to the published copy to make it visible in smart views.
+
 ### `think_nominal_merge`
 
 Deduplicate highly similar cards into a canonical one (idempotent by `card_id`).
@@ -788,6 +1038,25 @@ Deduplicate highly similar cards into a canonical one (idempotent by `card_id`).
 ### `think_playbook`
 
 Return a deterministic playbook skeleton by name.
+
+Input: `{ workspace, name, max_chars? }`
+
+Semantics:
+
+- Playbooks are **read-only** helpers; they do not write cards or mutate tasks.
+- Built-in names (v0.5, deterministic):
+  - `default` — generic “frame → hypothesis → test → evidence → decision”.
+  - `debug` — debugging skeleton (may recommend `bisect`).
+  - `bisect` — binary search pattern over an ordered search space (commits/flags/config).
+  - `criteria_matrix` — A vs B tradeoff matrix (criteria + weights + sensitivity).
+  - `experiment` — design a single decisive experiment to raise confidence.
+  - `contradiction` — resolve supports vs blocks by a decisive test.
+- Unknown names return a generic skeleton (deterministic fallback).
+
+Notes:
+
+- The Reasoning Signal Engine may suggest `think_playbook` calls as a **backup action**
+  when it detects classic situations (tradeoffs, contradictions, low-confidence anchors, stuck loops).
 
 ### `think_subgoal_open` / `think_subgoal_close`
 
@@ -801,12 +1070,46 @@ Defaults:
 
 - When `target` is provided, `ref`/`graph_doc`/`trace_doc` must be omitted and
   branch/docs are resolved from the target reasoning reference.
+- Read views may also include an optional `engine` block (signals + actions) derived from the returned slice (e.g. contradictions, weak evidence, low-confidence anchors).
+
+Optional:
+
+- `view` — relevance view (`smart | explore | audit`) for candidate selection and archive temperature (see `think_context` for semantics and defaulting).
+- `engine_signals_limit` / `engine_actions_limit` — bound the engine output per view (0 disables).
+- `context_budget` — alias for `max_chars` (use the smaller of the two when both are provided).
+- `agent_id` — when provided, read views may filter graph cards and note-like trace entries to `lane:shared` + `lane:agent:<agent_id>` (legacy cards/notes without a lane stamp are treated as shared).
+- `all_lanes` — when `true`, disables lane filtering for this read view (shows `lane:shared` + all `lane:agent:*`). Intended for explicit multi-agent audit/sync.
+- `step` (TASK targets only): `"focus"`, `STEP-...`, or StepPath.
+  - When provided, frontier/candidates are filtered to step-scoped cards (via `tags_all=["step:<...>"]`).
+  - `trace.entries` is also filtered to the focus step (note entries via `meta.step`; event entries via `{ task_id, path }`).
+  - Not supported with explicit `ref`/`graph_doc`/`trace_doc` overrides.
+- `trace_limit_steps=0` disables the trace slice (returns an empty array).
+
+HUD invariant:
+
+- `think_watch` includes a small, versioned `capsule` block (`type="watch_capsule"`) that stays useful even under aggressive `max_chars` trimming:
+  - **where**: workspace + branch/docs + lane + optional step focus
+  - **why**: top engine signals (bounded)
+  - **next**: 1 primary + 1 backup action derived from the engine (bounded)
+
+Output (optional):
+
+- When `all_lanes=true`, the response may include a small `lane_summary` derived from the returned slice (counts + top pinned/open per lane).
 
 ## Trace tools (v0.2)
 
 ### `trace_step`
 
 Append a structured trace step entry.
+
+Notes:
+
+- You may include sequential metadata in `meta` (e.g. `thoughtNumber`, `branchFromThought`, `branchId`).
+  When present, read views can derive a `sequential` graph from `trace_step` entries too.
+- When sequential metadata is present but incomplete (e.g. `branchFromThought` without `thoughtNumber`),
+  the tool may emit a warning (read-only lint; does not block writes).
+- This lint is intentionally low-noise; warnings may be capped to a small number.
+- For canonical sequential tracing (and validation via `trace_validate`), prefer `trace_sequential_step`.
 
 ### `trace_sequential_step`
 
@@ -820,11 +1123,106 @@ Return a bounded trace slice for fast resumption.
 
 Validate trace invariants (ordering, required fields).
 
+### Sequential trace graph (derived)
+
+When trace entries include sequential metadata (e.g. `thoughtNumber`, `branchFromThought`, `branchId`,
+`isRevision`, `revisesThought`), read views may include a derived `sequential` graph to make branching explicit.
+
+Supported entry formats:
+
+- `format="trace_sequential_step"` (canonical; validated by `trace_validate`)
+- `format="trace_step"` when `meta` includes the sequential keys (low-ceremony fallback)
+
+Shape (summary):
+
+- `sequential.nodes[]`: one node per `thoughtNumber` (includes `seq` for cross-reference).
+- `sequential.edges[]`: derived edges:
+  - `rel="branch"` from `branchFromThought` → `thoughtNumber`
+  - `rel="revision"` from `revisesThought` → `thoughtNumber` (when `isRevision=true`)
+- `sequential.missing`: references that were not present in the returned slice (common under pagination/budgets).
+
+Notes:
+
+- The graph is derived from the **returned entries slice** (so it may be partial when paginating).
+- Under aggressive budgets, entries may be reduced to summary stubs; the derived graph is filtered accordingly.
+
 Defaults:
 
 - Trace tools accept `target` (plan/task) or explicit `(ref, doc)` / `(doc)` inputs.
 - When `target` is provided, branch/doc are resolved from the target reasoning reference
   and overrides must be omitted.
+
+## Reasoning engine (derived, read-only) (v0.5 experimental)
+
+Some bounded views (e.g. `think_watch`, `tasks_resume_super`, `think_pack`, `context_pack`) may include an `engine` block.
+
+Principles:
+
+- **Read-only**: the engine never mutates store state.
+- **Deterministic**: identical inputs must produce identical signals/actions (stable ordering).
+- **Slice-based**: signals/actions are derived from the returned cards/edges/trace slice, so they can be partial under pagination/budgets.
+- **Low-noise**: it emits ranked next actions rather than verbose analysis.
+
+Shape (summary):
+
+- `engine.version` — schema/version marker (string).
+- `engine.mode` — optional engine mode marker (e.g. `"step_aware"`).
+- `engine.step_tag` — optional canonical step tag (e.g. `"step:step-123"`) when step-aware.
+- `engine.signals[]` — bounded list of signals: `{ code, severity, message, refs? }`.
+- `engine.actions[]` — bounded list of next actions: `{ kind, priority, title, why?, calls? }`.
+- `engine.signals_total` / `engine.actions_total` — totals before applying per-view limits.
+- `engine.truncated` — `true` when totals exceed the returned bounded lists.
+
+### Stable identifiers (v0.5)
+
+The engine uses stable, machine-readable identifiers so clients can build UI/automation without brittle string matching.
+New codes may be added; existing codes should remain stable.
+
+Signal codes (non-exhaustive baseline):
+
+- `BM1_CONTRADICTION_SUPPORTS_BLOCKS`
+- `BM2_EVIDENCE_WEAK`
+- `BM3_DECISION_LOW_CONFIDENCE`
+- `BM3_HYPOTHESIS_LOW_CONFIDENCE`
+- `BM4_HYPOTHESIS_NO_TEST`
+- `BM4_HYPOTHESIS_NO_EVIDENCE`
+- `BM5_RUNNABLE_TESTS_FRESH`
+- `BM6_ASSUMPTION_NOT_OPEN_BUT_USED`
+- `BM8_EVIDENCE_STALE`
+- `BM10_STUCK_NO_EVIDENCE`
+- `BM10_NO_COUNTER_EDGES`
+- `BM_LANE_DECISION_NOT_PUBLISHED`
+
+Action kinds (non-exhaustive baseline):
+
+- `run_test` — run a concrete test and capture evidence (server never executes).
+- `add_test_stub` — create the smallest runnable test stub for a hypothesis.
+- `resolve_contradiction` — disambiguate supports vs blocks (usually via a decisive test).
+- `use_playbook` — load a deterministic playbook skeleton (e.g. `experiment`, `criteria_matrix`, `debug`).
+- `publish_decision` — promote a lane decision into shared (`think_publish`).
+- `recheck_assumption` — cascade re-evaluation when assumptions change.
+- `add_counter_hypothesis` — steelman a counter-position to reduce confirmation bias.
+
+### Executable tests (BM5) — recommended card convention
+
+To make `test` cards actionable, agents may attach an explicit runnable command.
+
+Accepted conventions (best-effort):
+
+- `card.meta.run.cmd` (string) — preferred structured form.
+- `card.meta.cmd` (string) — shorthand form.
+- `card.text` containing a line that starts with `CMD:` — fallback form.
+
+The server never executes commands; it only uses them to rank and suggest “run → capture evidence” actions.
+
+### Lane hygiene (experimental)
+
+When lanes are enabled, agents may create draft cards in `lane:agent:<id>` to avoid cross-talk.
+
+To prevent “lost decisions” (private lane knowledge never reaching shared memory), the engine may emit:
+
+- `signal.code="BM_LANE_DECISION_NOT_PUBLISHED"` for a lane-scoped `decision` that has no published shared copy in the returned slice.
+- `action.kind="publish_decision"` suggesting a deterministic promotion via `think_publish` (usually pinned by default).
 
 ## Tool groups (future)
 

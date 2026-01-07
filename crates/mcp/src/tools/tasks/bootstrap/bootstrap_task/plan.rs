@@ -17,10 +17,29 @@ pub(super) fn resolve_or_create_parent_plan(
     plan_template: Option<String>,
     events: &mut Vec<Value>,
 ) -> Result<ResolvedPlan, Value> {
-    match (plan_id.or(parent_id), plan_title) {
+    let (plan_selector, plan_selector_field) = match (plan_id, parent_id) {
+        (Some(plan_id), None) => (Some(plan_id), "plan"),
+        (None, Some(parent_id)) => (Some(parent_id), "parent"),
+        (None, None) => (None, "plan"),
+        (Some(_), Some(_)) => {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                "provide plan or parent, not both",
+            ));
+        }
+    };
+
+    match (plan_selector, plan_title) {
         (Some(id), None) => {
             if !id.starts_with("PLAN-") {
-                return Err(ai_error("INVALID_INPUT", "plan must start with PLAN-"));
+                return Err(ai_error_with(
+                    "INVALID_INPUT",
+                    &format!("{plan_selector_field}: expected PLAN- id"),
+                    Some(
+                        "Use an existing plan id like plan=\"PLAN-001\", or omit plan/parent and use plan_title=\"Inbox\".",
+                    ),
+                    Vec::new(),
+                ));
             }
             match server.store.get_plan(workspace, &id) {
                 Ok(Some(_)) => Ok(ResolvedPlan { id, created: false }),
@@ -103,13 +122,46 @@ pub(super) fn resolve_or_create_parent_plan(
             }
             Ok(ResolvedPlan { id, created: true })
         }
-        (None, None) => Err(ai_error(
+        (None, None) => Err(ai_error_with(
             "INVALID_INPUT",
             "plan or plan_title is required to bootstrap a task",
+            Some("Provide plan=\"PLAN-001\" or plan_title=\"Inbox\"."),
+            Vec::new(),
         )),
-        (Some(_), Some(_)) => Err(ai_error(
-            "INVALID_INPUT",
-            "provide plan or plan_title, not both",
-        )),
+        (Some(id), Some(title)) => {
+            if !id.starts_with("PLAN-") {
+                return Err(ai_error_with(
+                    "INVALID_INPUT",
+                    &format!("{plan_selector_field}: expected PLAN- id"),
+                    Some(
+                        "If you meant to create/select a plan by title, omit plan/parent and keep plan_title=\"...\" (optionally with plan_template).",
+                    ),
+                    Vec::new(),
+                ));
+            }
+
+            let plan = match server.store.get_plan(workspace, &id) {
+                Ok(Some(v)) => v,
+                Ok(None) => return Err(ai_error("UNKNOWN_ID", "Unknown plan id")),
+                Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+            };
+
+            // Safety: allow passing both `plan` and `plan_title` only when they agree.
+            // This keeps daily macro calls forgiving while preventing silent mis-targeting.
+            if plan.title.trim() != title.trim() {
+                let recovery = format!(
+                    "Either omit plan_title, or set plan_title=\"{}\". To create a new plan, omit plan/parent and keep plan_title.",
+                    plan.title
+                );
+                return Err(ai_error_with(
+                    "INVALID_INPUT",
+                    "plan_title does not match plan id",
+                    Some(&recovery),
+                    Vec::new(),
+                ));
+            }
+
+            Ok(ResolvedPlan { id, created: false })
+        }
     }
 }

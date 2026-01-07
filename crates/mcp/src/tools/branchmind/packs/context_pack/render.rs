@@ -39,6 +39,7 @@ pub(super) fn render_context_pack(args: ContextPackRenderArgs<'_>) -> Value {
     } = args;
 
     let ContextPackDocs { notes, trace } = docs;
+    let sequential = derive_trace_sequential_graph(&trace.entries).unwrap_or(Value::Null);
     let ContextPackTotals {
         notes_count,
         trace_count,
@@ -79,6 +80,7 @@ pub(super) fn render_context_pack(args: ContextPackRenderArgs<'_>) -> Value {
         },
         "trace": {
             "entries": trace.entries,
+            "sequential": sequential,
             "pagination": {
                 "cursor": Value::Null,
                 "next_cursor": trace.next_cursor,

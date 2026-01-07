@@ -32,7 +32,8 @@ pub(crate) fn branches_definitions() -> Vec<Value> {
                     "goal": { "type": "string" },
                     "title": { "type": "string" },
                     "format": { "type": "string" },
-                    "meta": { "type": "object" }
+                    "meta": { "type": "object" },
+                    "agent_id": { "type": "string" }
                 },
                 "required": []
             }

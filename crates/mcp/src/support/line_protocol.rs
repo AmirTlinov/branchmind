@@ -449,7 +449,8 @@ fn render_tasks_resume_lines(
             if let Some(first_open) = first_open_step {
                 let missing = missing_checkpoints(first_open);
                 if !missing.is_empty() {
-                    hint.push_str(" checkpoints(");
+                    // UX: this is informational, not an argument list. Keep it non-copy/paste-shaped.
+                    hint.push_str(" needs(");
                     hint.push_str(&missing.join(" "));
                     hint.push(')');
                 }
@@ -521,14 +522,6 @@ fn render_tasks_resume_lines(
 fn missing_checkpoints(first_open: &Value) -> Vec<&'static str> {
     let mut missing = Vec::new();
 
-    let criteria_confirmed = first_open
-        .get("criteria_confirmed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let tests_confirmed = first_open
-        .get("tests_confirmed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let security_confirmed = first_open
         .get("security_confirmed")
         .and_then(|v| v.as_bool())
@@ -555,12 +548,6 @@ fn missing_checkpoints(first_open: &Value) -> Vec<&'static str> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    if !criteria_confirmed {
-        missing.push("criteria");
-    }
-    if !tests_confirmed {
-        missing.push("tests");
-    }
     if require_security && !security_confirmed {
         missing.push("security");
     }

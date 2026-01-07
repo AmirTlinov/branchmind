@@ -27,8 +27,9 @@ impl SqliteStore {
         let raw_rows = {
             let mut stmt = tx.prepare(
                 r#"
-                SELECT step_id, title, completed, criteria_confirmed, tests_confirmed,
-                       security_confirmed, perf_confirmed, docs_confirmed, blocked, block_reason
+                SELECT step_id, title, completed, created_at_ms, updated_at_ms, completed_at_ms,
+                       criteria_confirmed, tests_confirmed, security_confirmed, perf_confirmed,
+                       docs_confirmed, blocked, block_reason
                 FROM steps
                 WHERE workspace=?1 AND task_id=?2
                 "#,
@@ -40,11 +41,14 @@ impl SqliteStore {
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<i64>>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
-                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, Option<String>>(12)?,
                 ))
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
@@ -56,6 +60,9 @@ impl SqliteStore {
                 step_id,
                 title,
                 completed,
+                created_at_ms,
+                updated_at_ms,
+                completed_at_ms,
                 criteria,
                 tests,
                 security,
@@ -75,6 +82,9 @@ impl SqliteStore {
                 path,
                 title,
                 completed: completed != 0,
+                created_at_ms,
+                updated_at_ms,
+                completed_at_ms,
                 criteria_confirmed: criteria != 0,
                 tests_confirmed: tests != 0,
                 security_confirmed: security != 0,

@@ -59,6 +59,8 @@ pub(super) fn build_resume_super_result(args: ResumeSuperResultArgs<'_>) -> Valu
     let evidence_total = signals.evidence.len();
     let blockers_total = signals.blockers.len();
 
+    let trace_sequential = derive_trace_sequential_graph(&memory.trace.entries);
+
     let mut result = json!( {
         "workspace": workspace.as_str(),
         "requested": {
@@ -96,6 +98,7 @@ pub(super) fn build_resume_super_result(args: ResumeSuperResultArgs<'_>) -> Valu
             },
             "trace": {
                 "entries": memory.trace.entries,
+                "sequential": trace_sequential.unwrap_or(Value::Null),
                 "pagination": {
                     "cursor": opt_i64_to_json(trace_cursor),
                     "next_cursor": memory.trace.next_cursor,

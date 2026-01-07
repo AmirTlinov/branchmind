@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use super::json::parse_json_or_string;
-use bm_storage::GraphNode;
+use bm_storage::{GraphEdge, GraphNode};
 use serde_json::{Value, json};
 
 pub(crate) fn graph_nodes_to_cards(nodes: Vec<GraphNode>) -> Vec<Value> {
@@ -26,6 +26,32 @@ pub(crate) fn graph_nodes_to_cards(nodes: Vec<GraphNode>) -> Vec<Value> {
                 "deleted": n.deleted,
                 "last_seq": n.last_seq,
                 "last_ts_ms": n.last_ts_ms
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn graph_edges_to_json(edges: Vec<GraphEdge>) -> Vec<Value> {
+    let mut edges = edges;
+    edges.sort_by(|a, b| {
+        b.last_ts_ms
+            .cmp(&a.last_ts_ms)
+            .then_with(|| b.last_seq.cmp(&a.last_seq))
+            .then_with(|| a.from.cmp(&b.from))
+            .then_with(|| a.rel.cmp(&b.rel))
+            .then_with(|| a.to.cmp(&b.to))
+    });
+
+    edges.into_iter()
+        .map(|e| {
+            json!({
+                "from": e.from,
+                "rel": e.rel,
+                "to": e.to,
+                "meta": e.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
+                "deleted": e.deleted,
+                "last_seq": e.last_seq,
+                "last_ts_ms": e.last_ts_ms
             })
         })
         .collect()

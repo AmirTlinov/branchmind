@@ -36,8 +36,56 @@ impl McpServer {
                     "frame: reproduce and isolate the failure",
                     "hypothesis: enumerate causes by layer",
                     "test: shrink to a minimal repro",
+                    "pattern: if search space is ordered, prefer bisect",
                     "evidence: capture logs/traces",
                     "decision: fix + verify"
+                ]
+            }),
+            "bisect" => json!({
+                "steps": [
+                    "frame: define the failing signal (red) and success signal (green)",
+                    "scope: choose bisect axis (commit range / flags / config)",
+                    "setup: ensure each run is deterministic and cheap",
+                    "loop: pick midpoint → run → label good/bad",
+                    "evidence: capture the smallest proof for the pivot point",
+                    "decision: commit the fix and lock a regression test"
+                ]
+            }),
+            "criteria_matrix" => json!({
+                "steps": [
+                    "frame: state the decision as a one-line question",
+                    "options: list 2–5 options (A/B/...) with one-line descriptions",
+                    "criteria: define 5–9 criteria + weights (1–5); keep them measurable",
+                    "matrix: score each option per criterion (0–5) and write the reason",
+                    "sensitivity: change top weights and see if winner flips",
+                    "decision: pick winner + explicitly record tradeoffs",
+                    "next: define 1 primary executable step + 1 backup step"
+                ],
+                "matrix_template": {
+                    "options": ["A", "B"],
+                    "criteria": [
+                        { "name": "correctness", "weight": 5 },
+                        { "name": "complexity", "weight": 3 }
+                    ]
+                }
+            }),
+            "experiment" => json!({
+                "steps": [
+                    "frame: state what you want to learn (one sentence)",
+                    "hypothesis: what you believe and why",
+                    "experiment: design the smallest decisive test (runnable if possible)",
+                    "prediction: what results would support vs refute",
+                    "evidence: capture CMD + LINK receipts",
+                    "decision: update plan and pin the conclusion if durable"
+                ]
+            }),
+            "contradiction" => json!({
+                "steps": [
+                    "frame: name the contradiction as supports vs blocks",
+                    "evidence: list the strongest items on each side (with receipts if possible)",
+                    "disambiguate: define ONE decisive test that can break the tie",
+                    "run: execute outside BranchMind (CI/local) and capture receipts",
+                    "decision: resolve by pinning the winning claim and linking evidence"
                 ]
             }),
             _ => json!({

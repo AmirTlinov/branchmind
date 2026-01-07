@@ -12,6 +12,10 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let content = match require_string(args_obj, "content") {
             Ok(v) => v,
@@ -91,10 +95,14 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let meta_json = match optional_object_as_json_string(args_obj, "meta") {
+        let base_meta = match optional_meta_value(args_obj, "meta") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let meta_json = merge_meta_with_fields(
+            base_meta,
+            vec![("lane".to_string(), lane_meta_value(agent_id.as_deref()))],
+        );
 
         let entry = match self.store.doc_append_note(
             &workspace,

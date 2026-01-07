@@ -68,6 +68,29 @@ impl McpServer {
                 );
             }
 
+            // Keep HUD useful under aggressive budgets: drop optional heavy derived fields first.
+            if json_len_chars(result) > limit {
+                truncated |= drop_fields_at(result, &[], &["lane_summary"]);
+            }
+            if json_len_chars(result) > limit {
+                truncated |= drop_fields_at(result, &["trace"], &["sequential"]);
+            }
+            if json_len_chars(result) > limit {
+                truncated |= drop_fields_at(result, &["engine"], &["actions"]);
+            }
+            if json_len_chars(result) > limit {
+                truncated |= drop_fields_at(result, &["engine"], &["signals"]);
+            }
+            if json_len_chars(result) > limit {
+                truncated |= drop_fields_at(result, &[], &["engine"]);
+            }
+            if json_len_chars(result) > limit {
+                truncated |= drop_fields_at(result, &["capsule", "why"], &["signals"]);
+            }
+            if json_len_chars(result) > limit {
+                truncated |= drop_fields_at(result, &["capsule", "next"], &["backup"]);
+            }
+
             let before_cards = result
                 .get("cards")
                 .and_then(|v| v.as_array())
@@ -188,6 +211,15 @@ impl McpServer {
                     );
                 }
                 if json_len_chars(value) > limit {
+                    changed |= drop_fields_at(value, &[], &["lane_summary"]);
+                    changed |= drop_fields_at(value, &["trace"], &["sequential"]);
+                    changed |= drop_fields_at(value, &["engine"], &["actions"]);
+                    changed |= drop_fields_at(value, &["engine"], &["signals"]);
+                    changed |= drop_fields_at(value, &[], &["engine"]);
+                    changed |= drop_fields_at(value, &["capsule", "why"], &["signals"]);
+                    changed |= drop_fields_at(value, &["capsule", "next"], &["backup"]);
+                }
+                if json_len_chars(value) > limit {
                     changed |= minimalize_doc_entries_at(value, &["notes", "entries"]);
                     changed |= minimalize_doc_entries_at(value, &["trace", "entries"]);
                     changed |= minimalize_cards_at(value, &["cards"]);
@@ -278,6 +310,18 @@ impl McpServer {
                 }
                 if json_len_chars(value) > limit {
                     changed |= drop_fields_at(value, &[], &["signals"]);
+                }
+                if json_len_chars(value) > limit {
+                    let Some(obj) = value.as_object_mut() else {
+                        return changed;
+                    };
+                    let capsule = obj.remove("capsule");
+                    obj.clear();
+                    if let Some(capsule) = capsule {
+                        obj.insert("capsule".to_string(), capsule);
+                    }
+                    obj.insert("truncated".to_string(), Value::Bool(true));
+                    changed = true;
                 }
                 changed
             });

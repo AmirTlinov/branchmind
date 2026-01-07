@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use super::step_context::resolve_step_context_from_args;
 use super::{ThinkFrontier, ThinkFrontierLimits};
 use crate::*;
 use serde_json::{Value, json};
@@ -13,33 +14,93 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let max_chars = match optional_usize(args_obj, "max_chars") {
+        let context_budget = match optional_usize(args_obj, "context_budget") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let ThinkFrontier {
-            hypotheses,
-            questions,
-            subgoals,
-            tests,
-        } = match self.build_think_frontier(
-            &workspace,
-            &branch,
-            &graph_doc,
-            ThinkFrontierLimits {
-                hypotheses: 5,
-                questions: 5,
-                subgoals: 5,
-                tests: 5,
+        let view = match parse_relevance_view(
+            args_obj,
+            "view",
+            if context_budget.is_some() {
+                RelevanceView::Smart
+            } else {
+                RelevanceView::Explore
             },
         ) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let max_chars = match (context_budget, max_chars) {
+            (None, v) => v,
+            (Some(budget), None) => Some(budget),
+            (Some(budget), Some(explicit)) => Some(explicit.min(budget)),
+        };
+        let step = match optional_string(args_obj, "step") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let all_lanes = match optional_bool(args_obj, "all_lanes") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+        let all_lanes = all_lanes || view.implies_all_lanes();
+        let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let step_tag = if let Some(step_raw) = step {
+            let ctx = match resolve_step_context_from_args(self, &workspace, args_obj, &step_raw) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            Some(ctx.step_tag)
+        } else {
+            None
+        };
+
+        let lane_multiplier = if all_lanes {
+            1usize
+        } else if agent_id.is_some() {
+            2usize
+        } else {
+            1usize
+        };
+        let ThinkFrontier {
+            mut hypotheses,
+            mut questions,
+            mut subgoals,
+            mut tests,
+        } = match self.build_think_frontier(
+            &workspace,
+            &branch,
+            &graph_doc,
+            ThinkFrontierLimits {
+                hypotheses: 5usize.saturating_mul(lane_multiplier),
+                questions: 5usize.saturating_mul(lane_multiplier),
+                subgoals: 5usize.saturating_mul(lane_multiplier),
+                tests: 5usize.saturating_mul(lane_multiplier),
+            },
+            step_tag.as_deref(),
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let agent_id = agent_id.as_deref();
+        if !all_lanes {
+            hypotheses.retain(|card| lane_matches_card_value(card, agent_id));
+            questions.retain(|card| lane_matches_card_value(card, agent_id));
+            subgoals.retain(|card| lane_matches_card_value(card, agent_id));
+            tests.retain(|card| lane_matches_card_value(card, agent_id));
+        }
 
         let mut best: Option<Value> = None;
         let mut best_seq: i64 = -1;

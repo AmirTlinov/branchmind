@@ -81,6 +81,7 @@ Present:
 - think_playbook
 - think_subgoal_open / think_subgoal_close
 - trace_step / trace_sequential_step / trace_hydrate / trace_validate
+- transcripts_search / transcripts_open / transcripts_digest
 
 Planned:
 

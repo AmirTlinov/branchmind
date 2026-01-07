@@ -176,6 +176,119 @@ fn proof_weak_warning_is_soft_and_does_not_block_closing() {
 }
 
 #[test]
+fn proof_markdown_bullets_are_normalized_and_do_not_trigger_proof_weak() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_markdown_bullets_are_normalized_and_do_not_trigger_proof_weak",
+        &["--toolset", "daily", "--workspace", "ws_proof_md_bullets"],
+    );
+
+    let started = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof MD Bullets", "template": "principal-task" } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!( {
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    // Provide proof as a markdown list. This should normalize to CMD/LINK receipts and must not
+    // emit a PROOF_WEAK warning for a present LINK line.
+    let closed = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_close_step",
+            "arguments": {
+                "proof": "- cargo test\n- LINK: https://example.com/ci/run/123"
+            }
+        }
+    }));
+    let text = extract_tool_text_str(&closed);
+    assert_tag_light(&text);
+    assert!(
+        !text.starts_with("ERROR:"),
+        "closure with proof should succeed"
+    );
+    assert!(
+        !text.lines().any(|l| l.starts_with("WARNING: PROOF_WEAK")),
+        "markdown bullet proofs must not trigger PROOF_WEAK when LINK is present"
+    );
+}
+
+#[test]
+fn proof_url_attachment_satisfies_soft_link_receipt_lint() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_url_attachment_satisfies_soft_link_receipt_lint",
+        &[
+            "--toolset",
+            "daily",
+            "--workspace",
+            "ws_proof_attachment_link",
+        ],
+    );
+
+    let started = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Attachment Link", "template": "principal-task" } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!( {
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    // Provide CMD in checks and the CI link via attachments.
+    let closed = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_close_step",
+            "arguments": {
+                "proof": {
+                    "checks": ["cargo test"],
+                    "attachments": ["https://example.com/ci/run/456"]
+                }
+            }
+        }
+    }));
+    let text = extract_tool_text_str(&closed);
+    assert_tag_light(&text);
+    assert!(
+        !text.starts_with("ERROR:"),
+        "closure with proof should succeed"
+    );
+    assert!(
+        !text.lines().any(|l| l.starts_with("WARNING: PROOF_WEAK")),
+        "URL attachments should satisfy the LINK receipt for the soft lint"
+    );
+}
+
+#[test]
 fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
     let mut server = Server::start_initialized_with_args(
         "proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate",

@@ -48,7 +48,13 @@ fn is_daily_tool_name(name: &str) -> bool {
     }
 
     // Daily-driver rule: keep the advertised surface extremely small.
-    matches!(name, "macro_branch_note" | "tasks_macro_close_step")
+    matches!(
+        name,
+        "macro_branch_note"
+            | "tasks_macro_close_step"
+            | "transcripts_digest"
+            | "transcripts_open"
+    )
 }
 
 fn is_core_tool(tool: &Value) -> bool {

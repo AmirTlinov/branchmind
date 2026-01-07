@@ -114,12 +114,18 @@ impl McpServer {
 
         let entries = doc_entries_to_json(slice.entries);
         let entries_count = entries.len();
+        let sequential = if doc_kind == "trace" {
+            derive_trace_sequential_graph(&entries).unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
 
         let mut result = json!({
             "workspace": workspace.as_str(),
             "branch": branch,
             "doc": doc,
             "entries": entries,
+            "sequential": sequential,
             "pagination": {
                 "cursor": cursor,
                 "next_cursor": slice.next_cursor,
@@ -186,6 +192,9 @@ impl McpServer {
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["pagination"]);
                     }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["sequential"]);
+                    }
                     if json_len_chars(value) > limit
                         && ensure_minimal_list_at(value, &["entries"], entries_count, "entries")
                     {
@@ -197,6 +206,15 @@ impl McpServer {
 
             set_truncated_flag(&mut result, truncated);
             warnings = budget_warnings(truncated, minimal, clamped);
+        }
+
+        let entries_snapshot = result
+            .get("entries")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(sequential) = result.get_mut("sequential") {
+            filter_trace_sequential_graph_to_entries(sequential, &entries_snapshot);
         }
 
         if warnings.is_empty() {

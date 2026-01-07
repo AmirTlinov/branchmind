@@ -20,7 +20,7 @@ struct CheckpointsInput {
     docs: Option<bool>,
 }
 
-fn require_step_selector(
+pub(super) fn require_step_selector(
     args_obj: &serde_json::Map<String, Value>,
 ) -> Result<(Option<String>, Option<StepPath>), Value> {
     let step_id = optional_string(args_obj, "step_id")?;

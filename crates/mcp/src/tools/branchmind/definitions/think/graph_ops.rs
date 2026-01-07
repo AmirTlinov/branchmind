@@ -84,6 +84,24 @@ pub(super) fn definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "think_publish",
+            "description": "Promote a card into the shared lane (deterministic published copy).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "card_id": { "type": "string" },
+                    "pin": { "type": "boolean" },
+                    "agent_id": { "type": "string" },
+                    "target": { "type": "string" },
+                    "ref": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "trace_doc": { "type": "string" }
+                },
+                "required": ["workspace", "card_id"]
+            }
+        }),
+        json!({
             "name": "think_nominal_merge",
             "description": "Deduplicate similar cards into a canonical one.",
             "inputSchema": {

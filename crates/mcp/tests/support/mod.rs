@@ -12,6 +12,7 @@ pub(crate) struct Server {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     storage_dir: PathBuf,
+    cleanup_storage: bool,
 }
 
 impl Server {
@@ -21,6 +22,15 @@ impl Server {
 
     pub(crate) fn start_with_args(test_name: &str, extra_args: &[&str]) -> Self {
         let storage_dir = temp_dir(test_name);
+        Self::start_with_storage_dir(storage_dir, extra_args, true)
+    }
+
+    pub(crate) fn start_with_storage_dir(
+        storage_dir: PathBuf,
+        extra_args: &[&str],
+        cleanup_storage: bool,
+    ) -> Self {
+        std::fs::create_dir_all(&storage_dir).expect("create storage dir");
         let has_toolset = extra_args.iter().any(|arg| arg.trim() == "--toolset");
         let default_toolset: &[&str] = if has_toolset {
             &[]
@@ -45,6 +55,7 @@ impl Server {
             stdin,
             stdout,
             storage_dir,
+            cleanup_storage,
         }
     }
 
@@ -96,7 +107,9 @@ impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.storage_dir);
+        if self.cleanup_storage {
+            let _ = std::fs::remove_dir_all(&self.storage_dir);
+        }
     }
 }
 

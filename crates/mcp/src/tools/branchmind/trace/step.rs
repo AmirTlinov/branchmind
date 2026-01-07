@@ -48,6 +48,7 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let meta_warnings = trace_step_sequential_meta_warnings(meta_value.as_ref());
 
         let (branch, trace_doc) = match self.resolve_trace_scope(&workspace, args_obj) {
             Ok(v) => v,
@@ -110,14 +111,17 @@ impl McpServer {
             "content": entry.content
         });
 
-        ai_ok(
-            "trace_step",
-            json!({
-                "workspace": workspace.as_str(),
-                "branch": branch,
-                "doc": trace_doc,
-                "entry": entry_json
-            }),
-        )
+        let result = json!({
+            "workspace": workspace.as_str(),
+            "branch": branch,
+            "doc": trace_doc,
+            "entry": entry_json
+        });
+
+        if meta_warnings.is_empty() {
+            ai_ok("trace_step", result)
+        } else {
+            ai_ok_with_warnings("trace_step", result, meta_warnings, Vec::new())
+        }
     }
 }

@@ -10,6 +10,7 @@ mod notes_vcs;
 mod packs;
 mod think;
 mod trace;
+mod transcripts;
 
 pub(crate) fn branchmind_tool_definitions() -> Vec<Value> {
     let mut out = Vec::new();
@@ -21,5 +22,6 @@ pub(crate) fn branchmind_tool_definitions() -> Vec<Value> {
     out.extend(think::think_definitions());
     out.extend(trace::trace_definitions());
     out.extend(packs::packs_definitions());
+    out.extend(transcripts::transcripts_definitions());
     out
 }

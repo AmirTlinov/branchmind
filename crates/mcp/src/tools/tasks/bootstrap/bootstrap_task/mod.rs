@@ -19,6 +19,7 @@ impl McpServer {
 
         let args::TasksBootstrapArgs {
             workspace,
+            agent_id,
             plan_id,
             parent_id,
             plan_title,
@@ -58,6 +59,7 @@ impl McpServer {
             task_title,
             description,
             steps,
+            agent_id.clone(),
             &mut events,
         ) {
             Ok(v) => v,
@@ -65,12 +67,17 @@ impl McpServer {
         };
 
         let mut warnings = Vec::new();
-        let think_pipeline =
-            match think::maybe_run_think_pipeline(self, &workspace, &task_id, think, &mut warnings)
-            {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            };
+        let think_pipeline = match think::maybe_run_think_pipeline(
+            self,
+            &workspace,
+            &task_id,
+            agent_id.as_deref(),
+            think,
+            &mut warnings,
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let result = render::render_tasks_bootstrap_result(render::TasksBootstrapRenderArgs {
             workspace: &workspace,

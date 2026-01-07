@@ -237,6 +237,7 @@ impl McpServer {
                         bm_storage::StepDefineRequest {
                             task_id: task_id.clone(),
                             expected_revision: Some(revision),
+                            agent_id: None,
                             selector: bm_storage::StepSelector {
                                 step_id: Some(step_ref.step_id.clone()),
                                 path: None,

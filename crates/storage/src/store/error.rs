@@ -5,6 +5,10 @@ pub enum StoreError {
     Io(std::io::Error),
     Sql(rusqlite::Error),
     InvalidInput(&'static str),
+    ProjectGuardMismatch {
+        expected: String,
+        stored: String,
+    },
     RevisionMismatch {
         expected: i64,
         actual: i64,
@@ -31,6 +35,16 @@ pub enum StoreError {
         perf: bool,
         docs: bool,
     },
+    StepLeaseHeld {
+        step_id: String,
+        holder_agent_id: String,
+        now_seq: i64,
+        expires_seq: i64,
+    },
+    StepLeaseNotHeld {
+        step_id: String,
+        holder_agent_id: Option<String>,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -39,6 +53,10 @@ impl std::fmt::Display for StoreError {
             Self::Io(err) => write!(f, "io: {err}"),
             Self::Sql(err) => write!(f, "sqlite: {err}"),
             Self::InvalidInput(message) => write!(f, "invalid input: {message}"),
+            Self::ProjectGuardMismatch { expected, stored } => write!(
+                f,
+                "project guard mismatch (expected={expected}, stored={stored})"
+            ),
             Self::RevisionMismatch { expected, actual } => {
                 write!(
                     f,
@@ -73,6 +91,28 @@ impl std::fmt::Display for StoreError {
                 f,
                 "proof missing (tests={tests}, security={security}, perf={perf}, docs={docs})"
             ),
+            Self::StepLeaseHeld {
+                step_id,
+                holder_agent_id,
+                now_seq,
+                expires_seq,
+            } => write!(
+                f,
+                "step lease held (step_id={step_id}, holder={holder_agent_id}, now_seq={now_seq}, expires_seq={expires_seq})"
+            ),
+            Self::StepLeaseNotHeld {
+                step_id,
+                holder_agent_id,
+            } => match holder_agent_id {
+                Some(holder) => write!(
+                    f,
+                    "step lease not held (step_id={step_id}, holder={holder})"
+                ),
+                None => write!(
+                    f,
+                    "step lease not held (step_id={step_id}, no active lease)"
+                ),
+            },
         }
     }
 }

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use super::super::graph::ThinkCardCommitInternalArgs;
+use super::lane_context::apply_lane_context_to_card;
+use super::step_context::apply_step_context_to_card;
 use crate::*;
 use serde_json::{Value, json};
 
@@ -11,6 +13,10 @@ impl McpServer {
         };
         let workspace = match require_workspace(args_obj) {
             Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
             Err(resp) => return resp,
         };
         let target = args_obj
@@ -137,6 +143,12 @@ impl McpServer {
             if let Some(status) = status_map.get(stage) {
                 parsed.status = status.clone();
             }
+            if let Err(resp) = apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
+                return resp;
+            }
+            if let Err(resp) = apply_lane_context_to_card(args_obj, &mut parsed) {
+                return resp;
+            }
             let supports = prev_card_id.clone().into_iter().collect::<Vec<_>>();
             let (card_id, commit) =
                 match self.commit_think_card_internal(ThinkCardCommitInternalArgs {
@@ -182,12 +194,37 @@ impl McpServer {
         if note_decision
             && let (Some(card_id), Some(summary)) = (decision_card_id.clone(), decision_summary)
         {
-            let meta = json!({
-                "source": "think_pipeline",
-                "card_id": card_id,
-                "stage": "decision"
-            })
-            .to_string();
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "source".to_string(),
+                Value::String("think_pipeline".to_string()),
+            );
+            meta.insert("card_id".to_string(), Value::String(card_id.clone()));
+            meta.insert("stage".to_string(), Value::String("decision".to_string()));
+            meta.insert("lane".to_string(), lane_meta_value(agent_id.as_deref()));
+
+            let step_raw = match optional_string(args_obj, "step") {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            if let Some(step_raw) = step_raw {
+                let step_ctx = match super::step_context::resolve_step_context_from_args(
+                    self, &workspace, args_obj, &step_raw,
+                ) {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
+                meta.insert(
+                    "step".to_string(),
+                    json!({
+                        "task_id": step_ctx.task_id,
+                        "step_id": step_ctx.step.step_id,
+                        "path": step_ctx.step.path
+                    }),
+                );
+            }
+
+            let meta = Value::Object(meta).to_string();
             let content = format!("Decision ({card_id}): {summary}");
             let entry = match self.store.doc_append_note(
                 &workspace,

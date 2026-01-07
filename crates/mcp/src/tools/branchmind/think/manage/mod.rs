@@ -5,6 +5,7 @@ mod link;
 mod nominal_merge;
 mod pins;
 mod playbook;
+mod publish;
 mod status;
 mod subgoals;
 mod watch;

@@ -17,7 +17,8 @@ pub(crate) fn notes_vcs_definitions() -> Vec<Value> {
                     "content": { "type": "string" },
                     "title": { "type": "string" },
                     "format": { "type": "string" },
-                    "meta": { "type": "object" }
+                    "meta": { "type": "object" },
+                    "agent_id": { "type": "string" }
                 },
                 "required": ["workspace", "content"]
             }

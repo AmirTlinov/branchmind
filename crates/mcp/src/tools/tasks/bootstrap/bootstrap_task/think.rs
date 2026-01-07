@@ -7,6 +7,7 @@ pub(super) fn maybe_run_think_pipeline(
     server: &mut McpServer,
     workspace: &WorkspaceId,
     task_id: &str,
+    agent_id: Option<&str>,
     think: Option<Value>,
     warnings: &mut Vec<Value>,
 ) -> Result<Option<Value>, Value> {
@@ -32,6 +33,13 @@ pub(super) fn maybe_run_think_pipeline(
         Value::String(workspace.as_str().to_string()),
     );
     pipeline_args.insert("target".to_string(), Value::String(task_id.to_string()));
+    if let Some(agent_id) = think_obj.get("agent_id") {
+        pipeline_args.insert("agent_id".to_string(), agent_id.clone());
+    } else if let Some(agent_id) = agent_id {
+        pipeline_args.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+    } else if let Some(agent_id) = server.default_agent_id.as_deref() {
+        pipeline_args.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+    }
     for key in [
         "frame",
         "hypothesis",

@@ -27,13 +27,32 @@ pub(crate) struct McpServer {
     store: SqliteStore,
     toolset: Toolset,
     default_workspace: Option<String>,
+    workspace_lock: bool,
+    project_guard: Option<String>,
+    default_agent_id: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage_dir = parse_storage_dir();
     let toolset = parse_toolset();
     let default_workspace = parse_default_workspace();
-    let store = SqliteStore::open(storage_dir)?;
-    let mut server = McpServer::new(store, toolset, default_workspace);
+    let workspace_lock = parse_workspace_lock();
+    let project_guard = parse_project_guard();
+    let default_agent_id_config = parse_default_agent_id_config();
+    let mut store = SqliteStore::open(storage_dir)?;
+
+    let default_agent_id = match default_agent_id_config {
+        Some(DefaultAgentIdConfig::Explicit(id)) => Some(id),
+        Some(DefaultAgentIdConfig::Auto) => Some(store.default_agent_id_auto_get_or_create()?),
+        None => None,
+    };
+    let mut server = McpServer::new(
+        store,
+        toolset,
+        default_workspace,
+        workspace_lock,
+        project_guard,
+        default_agent_id,
+    );
     entry::run_stdio(&mut server)
 }

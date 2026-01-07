@@ -100,7 +100,13 @@ impl McpServer {
         let notes_doc = reasoning.notes_doc.clone();
         let trace_doc = reasoning.trace_doc.clone();
 
-        let notes_slice =
+        let notes_slice = if notes_limit == 0 {
+            bm_storage::DocSlice {
+                entries: Vec::new(),
+                next_cursor: None,
+                has_more: false,
+            }
+        } else {
             match self
                 .store
                 .doc_show_tail(&workspace, &branch, &notes_doc, None, notes_limit)
@@ -108,8 +114,15 @@ impl McpServer {
                 Ok(v) => v,
                 Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
                 Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-            };
-        let trace_slice =
+            }
+        };
+        let trace_slice = if trace_limit == 0 {
+            bm_storage::DocSlice {
+                entries: Vec::new(),
+                next_cursor: None,
+                has_more: false,
+            }
+        } else {
             match self
                 .store
                 .doc_show_tail(&workspace, &branch, &trace_doc, None, trace_limit)
@@ -117,10 +130,12 @@ impl McpServer {
                 Ok(v) => v,
                 Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
                 Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
-            };
+            }
+        };
 
         let notes_entries = doc_entries_to_json(notes_slice.entries);
         let trace_entries = doc_entries_to_json(trace_slice.entries);
+        let sequential = derive_trace_sequential_graph(&trace_entries).unwrap_or(Value::Null);
 
         let notes_count = notes_entries.len();
         let trace_count = trace_entries.len();
@@ -152,6 +167,7 @@ impl McpServer {
                 "branch": trace_branch,
                 "doc": trace_doc,
                 "entries": trace_entries,
+                "sequential": sequential,
                 "pagination": {
                     "cursor": Value::Null,
                     "next_cursor": trace_slice.next_cursor,
@@ -258,6 +274,9 @@ impl McpServer {
                         changed |= drop_fields_at(value, &["reasoning_ref"], &["graph_doc"]);
                     }
                     if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &["trace"], &["sequential"]);
+                    }
+                    if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["trace"]);
                     }
                     if json_len_chars(value) > limit {
@@ -268,6 +287,20 @@ impl McpServer {
 
             set_truncated_flag(&mut result, truncated);
             warnings = budget_warnings(truncated, minimal, clamped);
+        }
+
+        let entries_snapshot = result
+            .get("trace")
+            .and_then(|v| v.get("entries"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(sequential) = result
+            .get_mut("trace")
+            .and_then(|v| v.as_object_mut())
+            .and_then(|trace| trace.get_mut("sequential"))
+        {
+            filter_trace_sequential_graph_to_entries(sequential, &entries_snapshot);
         }
 
         if warnings.is_empty() {

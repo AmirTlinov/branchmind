@@ -99,6 +99,36 @@ DX note (default workspace):
 - Portal tools may allow omitting `workspace` when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
 - Explicit `workspace` always wins (no silent re-targeting).
 
+DX note (workspace lock, optional):
+
+- The server may be configured to **lock** the default workspace (`--workspace-lock` / `BRANCHMIND_WORKSPACE_LOCK`).
+- When workspace lock is enabled and a default workspace is set:
+  - passing a different `workspace` becomes a typed error,
+  - omitting `workspace` continues to work (defaults remain the golden path).
+
+### AgentId (multi-agent lanes, v0.5)
+
+A short stable identifier for an agent instance when multiple agents work in the same workspace.
+
+```json
+{
+  "type": "string",
+  "minLength": 1,
+  "maxLength": 64,
+  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+}
+```
+
+Lane convention (tags + meta):
+
+- `lane:shared` — shared lane (canonical anchors).
+- `lane:agent:<agent_id>` — agent-private lane (drafts).
+
+DX note (default agent_id, optional):
+
+- The server may be configured with a default agent id (`--agent-id` / `BRANCHMIND_AGENT_ID`).
+- When configured, tool calls that support `agent_id` may treat omitted `agent_id` as the default.
+
 ### PlanId / TaskId
 
 Human-readable identifiers.
@@ -265,6 +295,8 @@ Recommended `error.code` values:
 
 - `NOT_INITIALIZED`
 - `UNKNOWN_WORKSPACE`
+- `WORKSPACE_LOCKED`
+- `PROJECT_GUARD_MISMATCH`
 - `UNKNOWN_ID`
 - `INVALID_NAME`
 - `INVALID_INPUT`
@@ -272,6 +304,8 @@ Recommended `error.code` values:
 - `EXPECTED_TARGET_MISMATCH`
 - `STRICT_TARGETING_REQUIRES_EXPECTED_TARGET_ID`
 - `CHECKPOINTS_NOT_CONFIRMED`
+- `STEP_LEASE_HELD`
+- `STEP_LEASE_NOT_HELD`
 - `CONFLICT`
 - `BUDGET_EXCEEDED`
 
@@ -280,3 +314,18 @@ Every error should include:
 - `message` (human-readable)
 - `recovery` (machine-oriented hint), when possible
 - `suggestions[]` (executable), when possible
+- `hints[]` (machine-readable), when helpful (best-effort; currently used primarily for `INVALID_INPUT`)
+
+### `INVALID_INPUT` hints (best-effort)
+
+When `error.code="INVALID_INPUT"`, the server may attach `error.hints[]` to help agents auto-repair
+argument payloads with minimal retries.
+
+Each hint is an object with a stable `kind` plus kind-specific fields.
+Current kinds (v0.3):
+
+- `type`: `{ kind:"type", field, expected, items? }`
+- `missing_required`: `{ kind:"missing_required", field }`
+- `non_empty`: `{ kind:"non_empty", field }`
+- `prefix`: `{ kind:"prefix", field, allowed:[...] }`
+- `choose_one`: `{ kind:"choose_one", fields:[...], options:[{keep:[...], drop:[...]}...] }`

@@ -12,6 +12,10 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
         let name = match optional_string(args_obj, "name") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -71,10 +75,14 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let meta_json = match optional_object_as_json_string(args_obj, "meta") {
+        let base_meta = match optional_meta_value(args_obj, "meta") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let meta_json = merge_meta_with_fields(
+            base_meta,
+            vec![("lane".to_string(), lane_meta_value(agent_id.as_deref()))],
+        );
 
         let omit_workspace = self.default_workspace.as_deref() == Some(workspace.as_str());
         let status_suggestion_params = {
@@ -96,6 +104,9 @@ impl McpServer {
             );
         }
         retry_note_params.insert("content".to_string(), Value::String(content.clone()));
+        if let Some(agent_id) = agent_id.as_deref() {
+            retry_note_params.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+        }
         if args_obj.contains_key("doc") {
             retry_note_params.insert("doc".to_string(), Value::String(doc.clone()));
         }

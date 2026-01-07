@@ -59,6 +59,7 @@ pub(crate) fn dispatch_branchmind_tool(
         "think_set_status" => server.tool_branchmind_think_set_status(args),
         "think_pin" => server.tool_branchmind_think_pin(args),
         "think_pins" => server.tool_branchmind_think_pins(args),
+        "think_publish" => server.tool_branchmind_think_publish(args),
         "think_nominal_merge" => server.tool_branchmind_think_nominal_merge(args),
         "think_playbook" => server.tool_branchmind_think_playbook(args),
         "think_subgoal_open" => server.tool_branchmind_think_subgoal_open(args),
@@ -70,7 +71,11 @@ pub(crate) fn dispatch_branchmind_tool(
         "trace_hydrate" => server.tool_branchmind_trace_hydrate(args),
         "trace_validate" => server.tool_branchmind_trace_validate(args),
         "context_pack" => server.tool_branchmind_context_pack(args),
+        "context_pack_export" => server.tool_branchmind_context_pack_export(args),
         "export" => server.tool_branchmind_export(args),
+        "transcripts_search" => server.tool_branchmind_transcripts_search(args),
+        "transcripts_open" => server.tool_branchmind_transcripts_open(args),
+        "transcripts_digest" => server.tool_branchmind_transcripts_digest(args),
         _ => return None,
     };
     Some(resp)

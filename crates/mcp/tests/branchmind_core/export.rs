@@ -157,3 +157,96 @@ fn branchmind_export_smoke() {
         .unwrap_or(9999);
     assert!(used <= 400, "budget.used_chars must not exceed max_chars");
 }
+
+#[test]
+fn branchmind_context_pack_export_writes_file() {
+    let mut server = Server::start_initialized("branchmind_context_pack_export_writes_file");
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let created_task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+    }));
+    let created_task_text = extract_tool_text(&created_task);
+    let task_id = created_task_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let note_content = "export-to-file note";
+    let notes_commit = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": note_content } }
+    }));
+    let notes_commit_text = extract_tool_text(&notes_commit);
+    assert_eq!(
+        notes_commit_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let pid = std::process::id();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let out_dir = std::env::temp_dir().join(format!("bm_context_pack_export_{pid}_{nonce}"));
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    let out_file = out_dir.join("context_pack.json");
+
+    let export = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "context_pack_export",
+            "arguments": {
+                "workspace": "ws1",
+                "target": task_id,
+                "notes_limit": 10,
+                "trace_limit": 50,
+                "limit_cards": 5,
+                "out_file": out_file.to_string_lossy()
+            }
+        }
+    }));
+    let export_text = extract_tool_text(&export);
+    assert_eq!(
+        export_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let raw = std::fs::read_to_string(&out_file).expect("read exported file");
+    let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse exported json");
+    let notes_entries = parsed
+        .get("notes")
+        .and_then(|v| v.get("entries"))
+        .and_then(|v| v.as_array())
+        .expect("notes.entries");
+    assert!(
+        notes_entries
+            .iter()
+            .any(|e| e.get("content").and_then(|v| v.as_str()) == Some(note_content)),
+        "exported context_pack must include the committed note"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}

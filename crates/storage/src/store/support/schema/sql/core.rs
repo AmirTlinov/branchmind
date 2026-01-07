@@ -9,7 +9,8 @@ pub(super) const SQL: &str = r#"
 
         CREATE TABLE IF NOT EXISTS workspaces (
           workspace TEXT PRIMARY KEY,
-          created_at_ms INTEGER NOT NULL
+          created_at_ms INTEGER NOT NULL,
+          project_guard TEXT
         );
 
         CREATE TABLE IF NOT EXISTS counters (

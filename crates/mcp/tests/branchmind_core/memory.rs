@@ -139,3 +139,97 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         .unwrap_or(9999);
     assert!(used <= 400, "budget.used_chars must not exceed max_chars");
 }
+
+#[test]
+fn branchmind_show_trace_includes_derived_sequential_graph() {
+    let mut server = Server::start_initialized("branchmind_show_trace_includes_sequential");
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let created_task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } }
+    }));
+    let created_task_text = extract_tool_text(&created_task);
+    let task_id = created_task_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    let _t1 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "trace_sequential_step",
+            "arguments": {
+                "workspace": "ws1",
+                "target": task_id.clone(),
+                "thought": "Thought 1",
+                "thoughtNumber": 1,
+                "totalThoughts": 2,
+                "nextThoughtNeeded": true
+            }
+        }
+    }));
+    let _t2 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "trace_sequential_step",
+            "arguments": {
+                "workspace": "ws1",
+                "target": task_id.clone(),
+                "thought": "Thought 2 (branch)",
+                "thoughtNumber": 2,
+                "totalThoughts": 2,
+                "nextThoughtNeeded": false,
+                "branchFromThought": 1,
+                "branchId": "alt-1"
+            }
+        }
+    }));
+
+    let show_trace = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "show", "arguments": { "workspace": "ws1", "target": task_id, "doc_kind": "trace", "limit": 50 } }
+    }));
+    let trace_text = extract_tool_text(&show_trace);
+
+    let sequential = trace_text
+        .get("result")
+        .and_then(|v| v.get("sequential"))
+        .expect("sequential");
+    let edges = sequential
+        .get("edges")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        edges.iter().any(|e| {
+            e.get("rel").and_then(|v| v.as_str()) == Some("branch")
+                && e.get("from").and_then(|v| v.as_i64()) == Some(1)
+                && e.get("to").and_then(|v| v.as_i64()) == Some(2)
+        }),
+        "show(trace) must include derived sequential branch edge (1 -> 2)"
+    );
+}

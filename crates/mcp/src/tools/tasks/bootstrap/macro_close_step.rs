@@ -12,6 +12,14 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let view = match optional_string(args_obj, "view") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
         let note = match optional_string(args_obj, "note") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -177,6 +185,13 @@ impl McpServer {
                     Value::String(workspace.as_str().to_string()),
                 );
                 resume_args.insert("task".to_string(), Value::String(task_id.clone()));
+                if let Some(agent_id) = agent_id.as_deref() {
+                    resume_args.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+                }
+                resume_args.insert(
+                    "view".to_string(),
+                    Value::String(view.clone().unwrap_or_else(|| "smart".to_string())),
+                );
                 if let Some(max_chars) = resume_max_chars {
                     resume_args.insert(
                         "max_chars".to_string(),
@@ -371,12 +386,31 @@ impl McpServer {
                 }
             };
             let lint = lint_proof_checks(&proof_checks);
-            if lint.any_tagged && (!lint.cmd_receipt || !lint.link_receipt) {
+            // If the agent provided a URL attachment, treat it as a LINK receipt for the soft lint.
+            // This avoids false warnings when the link is provided via attachments rather than checks.
+            let mut link_receipt = lint.link_receipt;
+            if !link_receipt && let Some(Value::Array(arr)) = evidence_args.get("attachments") {
+                for item in arr {
+                    let Some(s) = item.as_str() else {
+                        continue;
+                    };
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() || trimmed.contains("<fill") {
+                        continue;
+                    }
+                    if looks_like_bare_url(trimmed) {
+                        link_receipt = true;
+                        break;
+                    }
+                }
+            }
+
+            if lint.any_tagged && (!lint.cmd_receipt || !link_receipt) {
                 let mut missing = Vec::new();
                 if !lint.cmd_receipt {
                     missing.push("CMD");
                 }
-                if !lint.link_receipt {
+                if !link_receipt {
                     missing.push("LINK");
                 }
                 warnings.push(warning(
@@ -482,6 +516,13 @@ impl McpServer {
                     );
                 }
             }
+        }
+
+        // DX: default checkpoints to "gate" when closing a step (criteria+tests).
+        // Contract: docs/contracts/TASKS.md specifies this default for the macro tool.
+        let closing_step = close_args_obj.contains_key("step_id") || close_args_obj.contains_key("path");
+        if closing_step && !close_args_obj.contains_key("checkpoints") {
+            close_args_obj.insert("checkpoints".to_string(), Value::String("gate".to_string()));
         }
 
         let close = self.tool_tasks_close_step(Value::Object(close_args_obj));
@@ -621,6 +662,13 @@ impl McpServer {
             Value::String(workspace.as_str().to_string()),
         );
         resume_args.insert("task".to_string(), Value::String(task_id.clone()));
+        if let Some(agent_id) = agent_id.as_deref() {
+            resume_args.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+        }
+        resume_args.insert(
+            "view".to_string(),
+            Value::String(view.unwrap_or_else(|| "smart".to_string())),
+        );
         if let Some(max_chars) = resume_max_chars {
             resume_args.insert(
                 "max_chars".to_string(),

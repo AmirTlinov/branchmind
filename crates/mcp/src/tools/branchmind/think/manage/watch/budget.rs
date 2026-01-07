@@ -37,6 +37,20 @@ pub(super) fn enforce(result: &mut Value, max_chars: usize, totals: WatchTotals)
         }
         truncated |= compact_doc_entries_at(result, &["trace", "entries"], 256, true, false, true);
     }
+
+    if json_len_chars(result) > limit {
+        truncated |= drop_fields_at(result, &[], &["lane_summary"]);
+    }
+
+    if json_len_chars(result) > limit {
+        truncated |= drop_fields_at(result, &["engine"], &["actions"]);
+    }
+    if json_len_chars(result) > limit {
+        truncated |= drop_fields_at(result, &["engine"], &["signals"]);
+    }
+    if json_len_chars(result) > limit {
+        truncated |= drop_fields_at(result, &[], &["engine"]);
+    }
     truncated |= trim_array_to_budget(result, &["candidates"], limit, false);
 
     let candidates_empty = result
@@ -193,7 +207,22 @@ pub(super) fn enforce(result: &mut Value, max_chars: usize, totals: WatchTotals)
             changed |= drop_fields_at(value, &["trace"], &["pagination"]);
         }
         if json_len_chars(value) > limit {
+            changed |= drop_fields_at(value, &["engine"], &["actions", "signals"]);
+        }
+        if json_len_chars(value) > limit {
+            changed |= drop_fields_at(value, &[], &["engine"]);
+        }
+        if json_len_chars(value) > limit {
             changed |= drop_fields_at(value, &[], &["trace"]);
+        }
+        if json_len_chars(value) > limit {
+            changed |= drop_fields_at(value, &[], &["frontier"]);
+        }
+        if json_len_chars(value) > limit {
+            changed |= drop_fields_at(value, &[], &["candidates"]);
+        }
+        if json_len_chars(value) > limit {
+            changed |= drop_fields_at(value, &[], &["branch", "graph_doc", "trace_doc"]);
         }
         changed
     });

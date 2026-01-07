@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 use super::super::graph::ThinkCardCommitInternalArgs;
+use super::lane_context::apply_lane_context_to_card;
+use super::step_context::apply_step_context_to_card;
 use crate::*;
 use serde_json::{Value, json};
 
@@ -91,12 +93,6 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let (branch, trace_doc, graph_doc) =
-            match self.resolve_think_commit_scope(&workspace, args_obj) {
-                Ok(v) => v,
-                Err(resp) => return resp,
-            };
-
         let supports = match optional_string_array(args_obj, "supports") {
             Ok(v) => v.unwrap_or_default(),
             Err(resp) => return resp,
@@ -107,10 +103,22 @@ impl McpServer {
         };
 
         let card_value = args_obj.get("card").cloned().unwrap_or(Value::Null);
-        let parsed = match parse_think_card(&workspace, card_value) {
+        let mut parsed = match parse_think_card(&workspace, card_value) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        if let Err(resp) = apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
+            return resp;
+        }
+        if let Err(resp) = apply_lane_context_to_card(args_obj, &mut parsed) {
+            return resp;
+        }
+
+        let (branch, trace_doc, graph_doc) =
+            match self.resolve_think_commit_scope(&workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
         let (card_id, result) = match self.commit_think_card_internal(ThinkCardCommitInternalArgs {
             workspace: &workspace,
             branch: &branch,

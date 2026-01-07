@@ -177,6 +177,9 @@ pub(crate) fn views_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "plan": { "type": "string" },
+                    "view": { "type": "string" },
+                    "context_budget": { "type": "integer" },
+                    "agent_id": { "type": "string" },
                     "events_limit": { "type": "integer" },
                     "decisions_limit": { "type": "integer" },
                     "evidence_limit": { "type": "integer" },
@@ -190,6 +193,8 @@ pub(crate) fn views_definitions() -> Vec<Value> {
                     "graph_diff": { "type": "boolean" },
                     "graph_diff_cursor": { "type": "integer" },
                     "graph_diff_limit": { "type": "integer" },
+                    "engine_signals_limit": { "type": "integer" },
+                    "engine_actions_limit": { "type": "integer" },
                     "max_chars": { "type": "integer" },
                     "read_only": { "type": "boolean" }
                 },
@@ -198,13 +203,16 @@ pub(crate) fn views_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "tasks_snapshot",
-            "description": "Unified snapshot: tasks + reasoning + graph diff summary.",
+            "description": "Portal snapshot (BM-L1): focus + next action (backed by resume_super + graph diff).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "plan": { "type": "string" },
+                    "view": { "type": "string" },
+                    "context_budget": { "type": "integer" },
+                    "agent_id": { "type": "string" },
                     "events_limit": { "type": "integer" },
                     "decisions_limit": { "type": "integer" },
                     "evidence_limit": { "type": "integer" },
@@ -217,6 +225,8 @@ pub(crate) fn views_definitions() -> Vec<Value> {
                     "cards_cursor": { "type": "integer" },
                     "graph_diff_cursor": { "type": "integer" },
                     "graph_diff_limit": { "type": "integer" },
+                    "engine_signals_limit": { "type": "integer" },
+                    "engine_actions_limit": { "type": "integer" },
                     "max_chars": { "type": "integer" },
                     "read_only": { "type": "boolean" }
                 },

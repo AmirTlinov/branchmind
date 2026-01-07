@@ -16,6 +16,7 @@ pub(super) struct BootstrapStepInput {
 
 pub(super) struct TasksBootstrapArgs {
     pub workspace: WorkspaceId,
+    pub agent_id: Option<String>,
     pub plan_id: Option<String>,
     pub parent_id: Option<String>,
     pub plan_title: Option<String>,
@@ -31,6 +32,7 @@ pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapAr
         return Err(ai_error("INVALID_INPUT", "arguments must be an object"));
     };
     let workspace = require_workspace(args_obj)?;
+    let agent_id = optional_agent_id(args_obj, "agent_id")?;
 
     let plan_id = args_obj
         .get("plan")
@@ -126,6 +128,7 @@ pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapAr
 
     Ok(TasksBootstrapArgs {
         workspace,
+        agent_id,
         plan_id,
         parent_id,
         plan_title,

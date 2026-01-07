@@ -7,6 +7,7 @@ This is not a human UI project. The MCP surface *is* the UX.
 - Provide compact, stable snapshots by default.
 - Require explicit flags for large expansions.
 - Every unified resume/snapshot must include a **small, versioned handoff capsule** (`capsule`) that stays useful even under aggressive `max_chars` trimming.
+- The numeric anti-noise guardrails are fixed in `docs/architecture/NOISE_CONTRACT.md`.
 
 ## 1.1) Semantic de-duplication: tagged line protocol
 
@@ -145,3 +146,59 @@ All potentially large responses must be bounded and must expose truncation expli
 - Pain: ambiguous scope inputs (`target` + overrides) → Invariant: strict mutual exclusivity.
 - Pain: multi-call resumption → Invariant: provide a single bounded context pack.
 - Pain: inconsistent errors → Invariant: typed errors + one recovery suggestion.
+
+## 8) “Memory physics” (native-feeling, anti-svalka)
+
+This project treats memory as a deterministic coordinate system plus a stable “HUD”.
+The goal is for agents to never spend tokens figuring out “where am I” or “what next”.
+
+### 8.1 Coordinates (always know the address)
+
+- **workspace** = the world / project boundary (hard wall).
+- **task focus** = the current mission inside a workspace.
+- **step focus (“room”)** = the default working set (usually the first open step of the focused task).
+- **lane** = parallel work isolation (`shared` + per-agent lanes).
+
+### 8.2 Lifecycle (prevent the dump)
+
+Every artifact must end up in exactly one lifecycle bucket:
+
+- **frontier**: open questions/hypotheses/tests/blockers (active thinking),
+- **anchors**: pinned or published decisions/invariants (stable reference points),
+- **cold archive**: closed/unpinned/unscoped history (opt-in retrieval only).
+
+Default “smart” views must bias toward frontier + anchors and keep archive cold.
+
+### 8.3 HUD invariant (one screen → one truth)
+
+Every portal-style response that is meant to be read by an agent (snapshot/resume/watch)
+must keep a small stable block that never disappears under budgets:
+
+- **where**: workspace + target + step focus + lane
+- **now**: what we’re trying to achieve right now (1–2 lines)
+- **why**: top signals (bounded)
+- **next**: exactly 1 primary action + 1 backup action (bounded)
+- **budget**: what was trimmed and why (explicit)
+
+This is the critical trick: agents learn to “think after reading where/now/next”.
+
+## 9) Multi-agent concurrency (lanes + publish)
+
+Parallel agents should not flood each other with drafts.
+
+Rules:
+
+- Writes may be stamped into an agent lane by default (noise isolation).
+- Default reads for smart portals should include: `shared` + “my lane”.
+- Prefer a server-level stable default lane identity (`--agent-id <id>` or `BRANCHMIND_AGENT_ID=<id>`). For single-agent usage, `--agent-id auto` eliminates “forgot agent_id” drift across restarts.
+- **Publish** is explicit: an agent promotes a card/note from its lane into `shared` when it becomes a durable anchor.
+- “Shared anchors” are expected to be pinned/published and discoverable across lanes.
+
+## 10) Anti-drift (don’t cross projects)
+
+The server supports running in a “single-tenant workspace” mode to prevent accidental cross-project access:
+
+- A configured default workspace may be optionally locked (mismatched workspace becomes a typed error).
+- A configured project guard may be enforced to detect opening a store belonging to a different project.
+
+This is intentionally boring and strict: it is how we keep long-lived memory trustworthy.

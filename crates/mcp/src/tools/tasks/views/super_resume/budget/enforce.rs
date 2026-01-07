@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub(super) struct ResumeSuperBudgetState<'a> {
     pub(super) limit: usize,
@@ -74,6 +74,14 @@ pub(super) fn apply(result: &mut Value, state: &mut ResumeSuperBudgetState<'_>) 
         if dropped {
             state.truncated = true;
             state.mark_trimmed("target");
+        }
+    }
+
+    if json_len_chars(result) > limit {
+        let dropped = drop_fields_at(result, &[], &["lane_summary"]);
+        if dropped {
+            state.truncated = true;
+            state.mark_trimmed("lane_summary");
         }
     }
 
@@ -194,10 +202,44 @@ pub(super) fn apply(result: &mut Value, state: &mut ResumeSuperBudgetState<'_>) 
         }
     }
     if json_len_chars(result) > limit {
-        let dropped = drop_fields_at(result, &[], &["graph_diff"]);
-        if dropped {
+        let replaced = if let Some(obj) = result.as_object_mut() {
+            if obj.contains_key("graph_diff") {
+                obj.insert(
+                    "graph_diff".to_string(),
+                    json!({ "available": false, "reason": "budget" }),
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if replaced {
             state.truncated = true;
             state.mark_trimmed("graph_diff");
+        }
+    }
+
+    if json_len_chars(result) > limit {
+        let dropped = drop_fields_at(result, &["engine"], &["actions"]);
+        if dropped {
+            state.truncated = true;
+            state.mark_trimmed("engine.actions");
+        }
+    }
+    if json_len_chars(result) > limit {
+        let dropped = drop_fields_at(result, &["engine"], &["signals"]);
+        if dropped {
+            state.truncated = true;
+            state.mark_trimmed("engine.signals");
+        }
+    }
+    if json_len_chars(result) > limit {
+        let dropped = drop_fields_at(result, &[], &["engine"]);
+        if dropped {
+            state.truncated = true;
+            state.mark_trimmed("engine");
         }
     }
 

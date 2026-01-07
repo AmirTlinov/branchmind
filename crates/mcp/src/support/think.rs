@@ -244,3 +244,9 @@ pub(crate) fn build_think_card_payload(
         .unwrap_or_default();
     (payload_json, meta_json, content)
 }
+
+pub(crate) const STEP_TAG_PREFIX: &str = "step:";
+
+pub(crate) fn step_tag_for(step_id: &str) -> String {
+    format!("{STEP_TAG_PREFIX}{}", step_id.trim().to_ascii_lowercase())
+}

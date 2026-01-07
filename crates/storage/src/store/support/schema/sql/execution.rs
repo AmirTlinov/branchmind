@@ -31,6 +31,20 @@ pub(super) const SQL: &str = r#"
           PRIMARY KEY (workspace, step_id)
         );
 
+        CREATE TABLE IF NOT EXISTS step_leases (
+          workspace TEXT NOT NULL,
+          step_id TEXT NOT NULL,
+          holder_agent_id TEXT NOT NULL,
+          acquired_seq INTEGER NOT NULL,
+          expires_seq INTEGER NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (workspace, step_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS step_leases_by_holder
+          ON step_leases(workspace, holder_agent_id);
+
         CREATE TABLE IF NOT EXISTS step_criteria (
           workspace TEXT NOT NULL,
           step_id TEXT NOT NULL,

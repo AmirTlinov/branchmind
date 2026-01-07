@@ -14,6 +14,7 @@ impl SqliteStore {
         let StepDefineRequest {
             task_id,
             expected_revision,
+            agent_id,
             selector,
             patch,
         } = request;
@@ -51,6 +52,12 @@ impl SqliteStore {
             &task_id,
             selector.step_id.as_deref(),
             selector.path.as_ref(),
+        )?;
+        super::lease::enforce_step_lease_tx(
+            &tx,
+            workspace.as_str(),
+            &step_id,
+            agent_id.as_deref(),
         )?;
 
         let mut fields = Vec::new();

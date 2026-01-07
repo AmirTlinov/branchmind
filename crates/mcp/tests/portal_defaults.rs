@@ -89,6 +89,10 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "daily portal must provide a low-noise next action command"
     );
     assert!(
+        start_result.contains("checkpoints=gate"),
+        "portal next action must be copy/paste-safe (default checkpoints=gate)"
+    );
+    assert!(
         !start_result.contains("workspace="),
         "daily portal must not leak workspace into action command args when default workspace is configured"
     );
@@ -127,6 +131,10 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
     assert!(
         snapshot_result.contains("tasks_macro_close_step"),
         "daily snapshot must provide a low-noise next action command"
+    );
+    assert!(
+        snapshot_result.contains("checkpoints=gate"),
+        "snapshot next action must be copy/paste-safe (default checkpoints=gate)"
     );
     assert!(
         !snapshot_result.contains("workspace="),

@@ -11,6 +11,10 @@ pub(super) fn handle_step_patch(
     expected_revision: Option<i64>,
     ops: &[Value],
 ) -> Value {
+    let agent_id = match optional_agent_id(args_obj, "agent_id") {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
     let step_id = match optional_string(args_obj, "step_id") {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -117,6 +121,7 @@ pub(super) fn handle_step_patch(
         bm_storage::StepPatchRequest {
             task_id: task_id.clone(),
             expected_revision,
+            agent_id: agent_id.clone(),
             selector: bm_storage::StepSelector {
                 step_id: Some(detail.step_id.clone()),
                 path: None,
@@ -156,6 +161,25 @@ pub(super) fn handle_step_patch(
                 "high",
                 json!({ "workspace": workspace.as_str() }),
             )],
+        ),
+        Err(StoreError::StepLeaseHeld {
+            step_id: leased_step_id,
+            holder_agent_id,
+            now_seq,
+            expires_seq,
+        }) => ai_error_with(
+            "STEP_LEASE_HELD",
+            &format!(
+                "step is leased by {holder_agent_id} (step_id={leased_step_id}, now_seq={now_seq}, expires_seq={expires_seq})"
+            ),
+            Some("Ask the holder to release, wait for expiry, or take over explicitly."),
+            super::super::lease::lease_error_suggestions(
+                workspace,
+                &task_id,
+                Some(detail.step_id.as_str()),
+                None,
+                agent_id.as_deref(),
+            ),
         ),
         Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),
         Err(StoreError::InvalidInput(msg)) => ai_error("INVALID_INPUT", msg),

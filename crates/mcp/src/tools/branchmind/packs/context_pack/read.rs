@@ -43,12 +43,94 @@ pub(super) struct ContextPackRead {
 pub(super) struct ContextPackReadArgs<'a> {
     pub workspace: &'a WorkspaceId,
     pub scope: &'a ReasoningScope,
+    pub agent_id: Option<&'a str>,
+    pub all_lanes: bool,
+    pub warm_archive: bool,
     pub notes_limit: usize,
     pub trace_limit: usize,
     pub limit_cards: usize,
     pub decisions_limit: usize,
     pub evidence_limit: usize,
     pub blockers_limit: usize,
+    pub focus_step_tag: Option<&'a str>,
+    pub focus_task_id: Option<&'a str>,
+    pub focus_step_path: Option<&'a str>,
+    pub read_only: bool,
+}
+
+fn doc_show_tail_or_error(
+    server: &mut McpServer,
+    workspace: &WorkspaceId,
+    branch: &str,
+    doc: &str,
+    cursor: Option<i64>,
+    limit: usize,
+) -> Result<bm_storage::DocSlice, Value> {
+    match server
+        .store
+        .doc_show_tail(workspace, branch, doc, cursor, limit)
+    {
+        Ok(v) => Ok(v),
+        Err(StoreError::InvalidInput(msg)) => Err(ai_error("INVALID_INPUT", msg)),
+        Err(err) => Err(ai_error("STORE_ERROR", &format_store_error(err))),
+    }
+}
+
+fn scan_step_scoped_doc_tail(
+    server: &mut McpServer,
+    workspace: &WorkspaceId,
+    branch: &str,
+    doc: &str,
+    want_limit: usize,
+    max_pages: usize,
+    mut keep: impl FnMut(&Value) -> bool,
+) -> Result<(Vec<Value>, Option<i64>, bool), Value> {
+    if want_limit == 0 {
+        return Ok((Vec::new(), None, false));
+    }
+    let want_limit = want_limit.min(200);
+
+    let mut cursor: Option<i64> = None;
+    let mut out_desc = Vec::<Value>::new();
+    let mut last_next_cursor = None;
+    let mut last_has_more = false;
+
+    // Deterministic, bounded scan: walk backwards in fixed pages and keep only matching entries.
+    // Storage clamps `limit` to 200, so we ask for the max page size to minimize round-trips.
+    for _ in 0..max_pages.max(1) {
+        let slice = doc_show_tail_or_error(server, workspace, branch, doc, cursor, 200)?;
+        last_next_cursor = slice.next_cursor;
+        last_has_more = slice.has_more;
+
+        let entries = doc_entries_to_json(slice.entries);
+        for entry in entries.iter().rev() {
+            if keep(entry) {
+                out_desc.push(entry.clone());
+                if out_desc.len() >= want_limit {
+                    break;
+                }
+            }
+        }
+
+        if out_desc.len() >= want_limit {
+            break;
+        }
+        if !last_has_more {
+            break;
+        }
+        cursor = last_next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    let mut has_more = last_has_more;
+    if out_desc.len() >= want_limit {
+        has_more = true;
+    }
+    out_desc.truncate(want_limit);
+    out_desc.reverse();
+    Ok((out_desc, last_next_cursor, has_more))
 }
 
 pub(super) fn read_context_pack(
@@ -58,157 +140,245 @@ pub(super) fn read_context_pack(
     let ContextPackReadArgs {
         workspace,
         scope,
+        agent_id,
+        all_lanes,
+        warm_archive,
         notes_limit,
         trace_limit,
         limit_cards,
         decisions_limit,
         evidence_limit,
         blockers_limit,
+        focus_step_tag,
+        focus_task_id,
+        focus_step_path,
+        read_only,
     } = args;
 
-    let notes_slice = match server.store.doc_show_tail(
-        workspace,
-        &scope.branch,
-        &scope.notes_doc,
-        None,
-        notes_limit,
-    ) {
-        Ok(v) => v,
-        Err(StoreError::InvalidInput(msg)) => return Err(ai_error("INVALID_INPUT", msg)),
-        Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-    };
-    let trace_slice = match server.store.doc_show_tail(
-        workspace,
-        &scope.branch,
-        &scope.trace_doc,
-        None,
-        trace_limit,
-    ) {
-        Ok(v) => v,
-        Err(StoreError::InvalidInput(msg)) => return Err(ai_error("INVALID_INPUT", msg)),
-        Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-    };
+    let tags_all = focus_step_tag
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| vec![s.to_string()]);
 
-    let bm_storage::DocSlice {
-        entries: notes_entries_rows,
-        next_cursor: notes_next_cursor,
-        has_more: notes_has_more,
-    } = notes_slice;
-    let bm_storage::DocSlice {
-        entries: trace_entries_rows,
-        next_cursor: trace_next_cursor,
-        has_more: trace_has_more,
-    } = trace_slice;
-
-    let notes_entries = doc_entries_to_json(notes_entries_rows);
-    let trace_entries = doc_entries_to_json(trace_entries_rows);
-
-    let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
-    let types = supported.iter().map(|v| v.to_string()).collect::<Vec<_>>();
-    let slice = match server.store.graph_query(
-        workspace,
-        &scope.branch,
-        &scope.graph_doc,
-        bm_storage::GraphQueryRequest {
-            ids: None,
-            types: Some(types),
-            status: None,
-            tags_any: None,
-            tags_all: None,
-            text: None,
-            cursor: None,
-            limit: limit_cards,
-            include_edges: false,
-            edges_limit: 0,
-        },
-    ) {
-        Ok(v) => v,
-        Err(StoreError::UnknownBranch) => return Err(unknown_branch_error(workspace)),
-        Err(StoreError::InvalidInput(msg)) => return Err(ai_error("INVALID_INPUT", msg)),
-        Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+    let (notes_entries, notes_next_cursor, notes_has_more) = if notes_limit == 0 {
+        (Vec::new(), None, false)
+    } else if let (Some(focus_task_id), Some(focus_step_path)) = (focus_task_id, focus_step_path) {
+        let (entries, next_cursor, has_more) = scan_step_scoped_doc_tail(
+            server,
+            workspace,
+            scope.branch.as_str(),
+            scope.notes_doc.as_str(),
+            notes_limit,
+            3,
+            |entry| {
+                if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
+                    return false;
+                }
+                let meta = entry.get("meta").unwrap_or(&Value::Null);
+                if !step_meta_matches(meta, focus_task_id, focus_step_path) {
+                    return false;
+                }
+                if all_lanes {
+                    return true;
+                }
+                lane_matches_meta(meta, agent_id)
+            },
+        )?;
+        (entries, next_cursor, has_more)
+    } else {
+        let slice = doc_show_tail_or_error(
+            server,
+            workspace,
+            &scope.branch,
+            &scope.notes_doc,
+            None,
+            notes_limit,
+        )?;
+        let mut entries = doc_entries_to_json(slice.entries);
+        if !all_lanes {
+            entries.retain(|entry| {
+                if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
+                    return true;
+                }
+                let meta = entry.get("meta").unwrap_or(&Value::Null);
+                lane_matches_meta(meta, agent_id)
+            });
+        }
+        (entries, slice.next_cursor, slice.has_more)
     };
 
-    let cards = graph_nodes_to_cards(slice.nodes);
+    let (trace_entries, trace_next_cursor, trace_has_more) = if trace_limit == 0 {
+        (Vec::new(), None, false)
+    } else if let (Some(focus_task_id), Some(focus_step_path)) = (focus_task_id, focus_step_path) {
+        let (entries, next_cursor, has_more) = scan_step_scoped_doc_tail(
+            server,
+            workspace,
+            scope.branch.as_str(),
+            scope.trace_doc.as_str(),
+            trace_limit,
+            3,
+            |entry| {
+                let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                match kind {
+                    "event" => {
+                        let task_id = entry.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+                        if task_id != focus_task_id {
+                            return false;
+                        }
+                        let Some(path) = entry.get("path").and_then(|v| v.as_str()) else {
+                            return false;
+                        };
+                        step_path_matches(focus_step_path, path)
+                    }
+                    "note" => {
+                        let meta = entry.get("meta").unwrap_or(&Value::Null);
+                        if !step_meta_matches(meta, focus_task_id, focus_step_path) {
+                            return false;
+                        }
+                        if all_lanes {
+                            true
+                        } else {
+                            lane_matches_meta(meta, agent_id)
+                        }
+                    }
+                    _ => false,
+                }
+            },
+        )?;
+        (entries, next_cursor, has_more)
+    } else {
+        let slice = doc_show_tail_or_error(
+            server,
+            workspace,
+            &scope.branch,
+            &scope.trace_doc,
+            None,
+            trace_limit,
+        )?;
+        let mut entries = doc_entries_to_json(slice.entries);
+        if !all_lanes {
+            entries.retain(|entry| {
+                if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
+                    return true;
+                }
+                let meta = entry.get("meta").unwrap_or(&Value::Null);
+                lane_matches_meta(meta, agent_id)
+            });
+        }
+        (entries, slice.next_cursor, slice.has_more)
+    };
+
+    let lane_multiplier = if all_lanes {
+        1usize
+    } else if agent_id.is_some() {
+        2usize
+    } else {
+        1usize
+    };
+    let cards = match fetch_relevance_first_cards(
+        server,
+        workspace,
+        scope.branch.as_str(),
+        scope.graph_doc.as_str(),
+        limit_cards,
+        focus_step_tag,
+        agent_id,
+        warm_archive,
+        all_lanes,
+        read_only,
+    ) {
+        Ok(v) => v.cards,
+        Err(resp) => return Err(resp),
+    };
+
+    let mut graph_query_or_empty =
+        |request: bm_storage::GraphQueryRequest| -> Result<bm_storage::GraphQuerySlice, Value> {
+            match server
+                .store
+                .graph_query(workspace, &scope.branch, &scope.graph_doc, request)
+            {
+                Ok(v) => Ok(v),
+                Err(StoreError::UnknownBranch) => {
+                    if read_only {
+                        Ok(bm_storage::GraphQuerySlice {
+                            nodes: Vec::new(),
+                            edges: Vec::new(),
+                            next_cursor: None,
+                            has_more: false,
+                        })
+                    } else {
+                        Err(unknown_branch_error(workspace))
+                    }
+                }
+                Err(StoreError::InvalidInput(msg)) => Err(ai_error("INVALID_INPUT", msg)),
+                Err(err) => Err(ai_error("STORE_ERROR", &format_store_error(err))),
+            }
+        };
 
     let mut decisions = Vec::new();
     if decisions_limit > 0 {
-        let slice = match server.store.graph_query(
-            workspace,
-            &scope.branch,
-            &scope.graph_doc,
-            bm_storage::GraphQueryRequest {
-                ids: None,
-                types: Some(vec!["decision".to_string()]),
-                status: None,
-                tags_any: None,
-                tags_all: None,
-                text: None,
-                cursor: None,
-                limit: decisions_limit,
-                include_edges: false,
-                edges_limit: 0,
-            },
-        ) {
-            Ok(v) => v,
-            Err(StoreError::UnknownBranch) => return Err(unknown_branch_error(workspace)),
-            Err(StoreError::InvalidInput(msg)) => return Err(ai_error("INVALID_INPUT", msg)),
-            Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-        };
+        let limit = decisions_limit.saturating_mul(lane_multiplier);
+        let slice = graph_query_or_empty(bm_storage::GraphQueryRequest {
+            ids: None,
+            types: Some(vec!["decision".to_string()]),
+            status: None,
+            tags_any: None,
+            tags_all: tags_all.clone(),
+            text: None,
+            cursor: None,
+            limit,
+            include_edges: false,
+            edges_limit: 0,
+        })?;
         decisions = graph_nodes_to_signal_cards(slice.nodes);
+        if !all_lanes {
+            decisions.retain(|card| lane_matches_card_value(card, agent_id));
+        }
+        decisions.truncate(decisions_limit);
     }
 
     let mut evidence = Vec::new();
     if evidence_limit > 0 {
-        let slice = match server.store.graph_query(
-            workspace,
-            &scope.branch,
-            &scope.graph_doc,
-            bm_storage::GraphQueryRequest {
-                ids: None,
-                types: Some(vec!["evidence".to_string()]),
-                status: None,
-                tags_any: None,
-                tags_all: None,
-                text: None,
-                cursor: None,
-                limit: evidence_limit,
-                include_edges: false,
-                edges_limit: 0,
-            },
-        ) {
-            Ok(v) => v,
-            Err(StoreError::UnknownBranch) => return Err(unknown_branch_error(workspace)),
-            Err(StoreError::InvalidInput(msg)) => return Err(ai_error("INVALID_INPUT", msg)),
-            Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-        };
+        let limit = evidence_limit.saturating_mul(lane_multiplier);
+        let slice = graph_query_or_empty(bm_storage::GraphQueryRequest {
+            ids: None,
+            types: Some(vec!["evidence".to_string()]),
+            status: None,
+            tags_any: None,
+            tags_all: tags_all.clone(),
+            text: None,
+            cursor: None,
+            limit,
+            include_edges: false,
+            edges_limit: 0,
+        })?;
         evidence = graph_nodes_to_signal_cards(slice.nodes);
+        if !all_lanes {
+            evidence.retain(|card| lane_matches_card_value(card, agent_id));
+        }
+        evidence.truncate(evidence_limit);
     }
 
     let mut blockers = Vec::new();
     if blockers_limit > 0 {
-        let slice = match server.store.graph_query(
-            workspace,
-            &scope.branch,
-            &scope.graph_doc,
-            bm_storage::GraphQueryRequest {
-                ids: None,
-                types: None,
-                status: None,
-                tags_any: Some(vec!["blocker".to_string()]),
-                tags_all: None,
-                text: None,
-                cursor: None,
-                limit: blockers_limit,
-                include_edges: false,
-                edges_limit: 0,
-            },
-        ) {
-            Ok(v) => v,
-            Err(StoreError::UnknownBranch) => return Err(unknown_branch_error(workspace)),
-            Err(StoreError::InvalidInput(msg)) => return Err(ai_error("INVALID_INPUT", msg)),
-            Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
-        };
+        let limit = blockers_limit.saturating_mul(lane_multiplier);
+        let slice = graph_query_or_empty(bm_storage::GraphQueryRequest {
+            ids: None,
+            types: None,
+            status: None,
+            tags_any: Some(vec!["blocker".to_string()]),
+            tags_all,
+            text: None,
+            cursor: None,
+            limit,
+            include_edges: false,
+            edges_limit: 0,
+        })?;
         blockers = graph_nodes_to_signal_cards(slice.nodes);
+        if !all_lanes {
+            blockers.retain(|card| lane_matches_card_value(card, agent_id));
+        }
+        blockers.truncate(blockers_limit);
     }
 
     let notes_count = notes_entries.len();

@@ -18,6 +18,7 @@ pub(super) fn create_task_with_steps(
     task_title: String,
     description: Option<String>,
     steps: Vec<BootstrapStepInput>,
+    agent_id: Option<String>,
     events: &mut Vec<Value>,
 ) -> Result<CreatedTask, Value> {
     let payload = json!({
@@ -68,6 +69,7 @@ pub(super) fn create_task_with_steps(
             bm_storage::StepDefineRequest {
                 task_id: task_id.clone(),
                 expected_revision: None,
+                agent_id: agent_id.clone(),
                 selector: bm_storage::StepSelector {
                     step_id: Some(step_ref.step_id.clone()),
                     path: None,

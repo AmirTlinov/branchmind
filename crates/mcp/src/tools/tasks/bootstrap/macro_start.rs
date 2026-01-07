@@ -21,6 +21,14 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let view = match optional_string(args_obj, "view") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let has_plan = patched_args.get("plan").and_then(|v| v.as_str()).is_some();
         let has_parent = patched_args
@@ -159,6 +167,13 @@ impl McpServer {
             Value::String(workspace.as_str().to_string()),
         );
         resume_args.insert("task".to_string(), Value::String(task_id.clone()));
+        if let Some(agent_id) = agent_id.as_deref() {
+            resume_args.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+        }
+        resume_args.insert(
+            "view".to_string(),
+            Value::String(view.unwrap_or_else(|| "smart".to_string())),
+        );
         if let Some(max_chars) = resume_max_chars {
             resume_args.insert(
                 "max_chars".to_string(),

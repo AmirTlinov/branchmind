@@ -78,8 +78,65 @@ pub(crate) fn proof_checkpoint_value_for_missing(
     }
 }
 
+fn strip_markdown_prefixes(line: &str) -> &str {
+    // Agents often paste proofs as markdown lists/quotes. Keep parsing deterministic and forgiving:
+    // strip common bullet prefixes without touching valid CLI flags like "-Z" (no space).
+    let mut s = line.trim_start();
+
+    // Blockquote marker.
+    if let Some(rest) = s.strip_prefix('>') {
+        s = rest.trim_start();
+    }
+
+    for prefix in ["- ", "* ", "+ ", "• "] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            return rest;
+        }
+    }
+
+    // Numbered lists: "1. " or "1) ".
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0
+        && i + 1 < bytes.len()
+        && (bytes[i] == b'.' || bytes[i] == b')')
+        && bytes[i + 1] == b' '
+    {
+        return &s[(i + 2)..];
+    }
+
+    s
+}
+
+fn strip_wrapping_angle_brackets(s: &str) -> &str {
+    let trimmed = s.trim();
+    if trimmed.len() >= 2
+        && trimmed.as_bytes()[0] == b'<'
+        && trimmed.as_bytes()[trimmed.len() - 1] == b'>'
+    {
+        return trimmed[1..trimmed.len() - 1].trim();
+    }
+    trimmed
+}
+
+pub(crate) fn looks_like_bare_url(raw: &str) -> bool {
+    let trimmed = strip_wrapping_angle_brackets(raw);
+    trimmed
+        .get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
+        || trimmed
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+        || trimmed
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("file://"))
+}
+
 fn parse_receipt_line(line: &str, prefix: &str) -> Option<(bool, bool)> {
-    let trimmed = line.trim();
+    let trimmed = strip_markdown_prefixes(line).trim();
     if trimmed.is_empty() {
         return None;
     }
@@ -101,26 +158,57 @@ fn parse_receipt_line(line: &str, prefix: &str) -> Option<(bool, bool)> {
 }
 
 pub(crate) fn coerce_proof_check_line(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
+    let trimmed = strip_markdown_prefixes(raw).trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    if trimmed
+    let cmd_tagged = trimmed
         .get(..4)
         .is_some_and(|p| p.eq_ignore_ascii_case("CMD:"))
-    {
-        let rest = trimmed.get(4..).unwrap_or_default().trim();
+        || (trimmed
+            .get(..3)
+            .is_some_and(|p| p.eq_ignore_ascii_case("CMD"))
+            && trimmed
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| b.is_ascii_whitespace()));
+    if cmd_tagged {
+        let rest = if trimmed
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("CMD:"))
+        {
+            trimmed.get(4..).unwrap_or_default()
+        } else {
+            trimmed.get(3..).unwrap_or_default()
+        };
+        let rest = rest.trim();
         if rest.is_empty() {
             return Some("CMD:".to_string());
         }
         return Some(format!("CMD: {rest}"));
     }
-    if trimmed
+
+    let link_tagged = trimmed
         .get(..5)
         .is_some_and(|p| p.eq_ignore_ascii_case("LINK:"))
-    {
-        let rest = trimmed.get(5..).unwrap_or_default().trim();
+        || (trimmed
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LINK"))
+            && trimmed
+                .as_bytes()
+                .get(4)
+                .is_some_and(|b| b.is_ascii_whitespace()));
+    if link_tagged {
+        let rest = if trimmed
+            .get(..5)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LINK:"))
+        {
+            trimmed.get(5..).unwrap_or_default()
+        } else {
+            trimmed.get(4..).unwrap_or_default()
+        };
+        let rest = rest.trim();
         if rest.is_empty() {
             return Some("LINK:".to_string());
         }
@@ -129,17 +217,9 @@ pub(crate) fn coerce_proof_check_line(raw: &str) -> Option<String> {
 
     // Heuristic: if a line is a bare URL, treat it as a LINK receipt; otherwise treat it as a CMD.
     // Keep the rule intentionally simple and deterministic.
-    let is_bare_url = trimmed
-        .get(..8)
-        .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
-        || trimmed
-            .get(..7)
-            .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
-        || trimmed
-            .get(..7)
-            .is_some_and(|p| p.eq_ignore_ascii_case("file://"));
-    if is_bare_url {
-        Some(format!("LINK: {trimmed}"))
+    let url_candidate = strip_wrapping_angle_brackets(trimmed);
+    if looks_like_bare_url(url_candidate) {
+        Some(format!("LINK: {url_candidate}"))
     } else {
         Some(format!("CMD: {trimmed}"))
     }

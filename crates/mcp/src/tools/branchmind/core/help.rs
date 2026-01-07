@@ -46,6 +46,8 @@ fn render_help_text(max_chars: Option<usize>) -> String {
         &[
             "Golden path (core): status → tasks_macro_start → tasks_snapshot.",
             "Daily add-ons: tasks_macro_close_step, macro_branch_note.",
+            "Finishing: tasks_macro_close_step auto-finishes when no open steps; explicit tasks_macro_finish exists in the full toolset.",
+            "Views: tasks_snapshot defaults to view=smart; tasks_resume_super supports view=smart|explore|audit for cold/warm archive and cross-lane reads.",
             "Progressive disclosure: tools/list toolset=daily|full reveals more tools when needed.",
         ],
     );
@@ -57,6 +59,8 @@ fn render_help_text(max_chars: Option<usize>) -> String {
             "Preferred receipts: CMD: ... (what you ran) + LINK: ... (CI/artifact/log).",
             "Proof shortcut: pass proof as string/array/object to tasks_macro_close_step.",
             "Auto-normalization: URL lines become LINK; other lines become CMD.",
+            "Markdown bullets are accepted in proof lines (e.g. '- LINK: ...').",
+            "URL-like attachments count as LINK for the soft PROOF_WEAK lint.",
             "Soft lint: missing CMD or LINK emits WARNING: PROOF_WEAK (does not block).",
             "Hard gate: proof-required steps fail with ERROR: PROOF_REQUIRED (retry with proof).",
         ],

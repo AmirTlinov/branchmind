@@ -14,6 +14,7 @@ impl SqliteStore {
         let StepVerifyRequest {
             task_id,
             expected_revision,
+            agent_id,
             selector,
             criteria_confirmed,
             tests_confirmed,
@@ -42,6 +43,12 @@ impl SqliteStore {
             &task_id,
             selector.step_id.as_deref(),
             selector.path.as_ref(),
+        )?;
+        super::super::lease::enforce_step_lease_tx(
+            &tx,
+            workspace.as_str(),
+            &step_id,
+            agent_id.as_deref(),
         )?;
         if let Some(v) = criteria_confirmed {
             tx.execute(

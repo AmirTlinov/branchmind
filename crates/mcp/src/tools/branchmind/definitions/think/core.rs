@@ -28,6 +28,8 @@ pub(super) fn definitions() -> Vec<Value> {
                     "branch": { "type": "string" },
                     "trace_doc": { "type": "string" },
                     "graph_doc": { "type": "string" },
+                    "step": { "type": "string" },
+                    "agent_id": { "type": "string" },
                     "card": {
                         "anyOf": [
                             { "type": "object" },
@@ -52,6 +54,8 @@ pub(super) fn definitions() -> Vec<Value> {
                     "trace_doc": { "type": "string" },
                     "graph_doc": { "type": "string" },
                     "notes_doc": { "type": "string" },
+                    "step": { "type": "string" },
+                    "agent_id": { "type": "string" },
                     "frame": {
                         "anyOf": [
                             { "type": "object" },

@@ -21,6 +21,7 @@ pub struct EvidenceArtifactInput {
 pub struct EvidenceCaptureRequest {
     pub task_id: String,
     pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub artifacts: Vec<EvidenceArtifactInput>,
     pub checks: Vec<String>,

@@ -9,6 +9,9 @@ pub(crate) fn format_store_error(err: StoreError) -> String {
         StoreError::Io(e) => format!("IO: {e}"),
         StoreError::Sql(e) => format!("SQL: {e}"),
         StoreError::InvalidInput(msg) => format!("Invalid input: {msg}"),
+        StoreError::ProjectGuardMismatch { expected, stored } => {
+            format!("Project guard mismatch: expected={expected} stored={stored}")
+        }
         StoreError::RevisionMismatch { expected, actual } => {
             format!("Revision mismatch: expected={expected} actual={actual}")
         }
@@ -36,6 +39,21 @@ pub(crate) fn format_store_error(err: StoreError) -> String {
             perf,
             docs,
         } => format!("Proof missing: tests={tests} security={security} perf={perf} docs={docs}"),
+        StoreError::StepLeaseHeld {
+            step_id,
+            holder_agent_id,
+            now_seq,
+            expires_seq,
+        } => format!(
+            "Step lease held: step_id={step_id} holder={holder_agent_id} now_seq={now_seq} expires_seq={expires_seq}"
+        ),
+        StoreError::StepLeaseNotHeld {
+            step_id,
+            holder_agent_id,
+        } => match holder_agent_id {
+            None => format!("Step lease not held: step_id={step_id} (no active lease)"),
+            Some(holder) => format!("Step lease not held: step_id={step_id} holder={holder}"),
+        },
     }
 }
 
@@ -143,18 +161,33 @@ pub(crate) fn ai_error_with(
     recovery: Option<&str>,
     suggestions: Vec<Value>,
 ) -> Value {
+    let raw_message = message.trim();
+    let hints = if code == "INVALID_INPUT" {
+        invalid_input_hints(raw_message)
+    } else {
+        Vec::new()
+    };
+
     // UX invariant: keep `message` and `recovery` semantically separated.
     // If we already provide a dedicated recovery string, avoid embedding another `fix:` hint
     // into the message, otherwise line-protocol renders a noisy double-fix.
     let message = if code == "INVALID_INPUT" && recovery.is_none() {
-        enrich_invalid_input_message(message)
+        enrich_invalid_input_message(raw_message)
     } else {
-        message.to_string()
+        raw_message.to_string()
     };
-    let error = match recovery {
-        None => json!({ "code": code, "message": message }),
-        Some(recovery) => json!({ "code": code, "message": message, "recovery": recovery }),
-    };
+
+    let mut error_obj = serde_json::Map::new();
+    error_obj.insert("code".to_string(), Value::String(code.to_string()));
+    error_obj.insert("message".to_string(), Value::String(message));
+    if let Some(recovery) = recovery {
+        error_obj.insert("recovery".to_string(), Value::String(recovery.to_string()));
+    }
+    if code == "INVALID_INPUT" && !hints.is_empty() {
+        error_obj.insert("hints".to_string(), Value::Array(hints));
+    }
+    let error = Value::Object(error_obj);
+
     json!({
         "success": false,
         "intent": "error",
@@ -235,12 +268,179 @@ fn enrich_invalid_input_message(message: &str) -> String {
         return format!("{field}: expected PLAN- or TASK- id; fix: {field}=\"TASK-001\"");
     }
 
-    if trimmed.contains("provide") && trimmed.contains("not both") {
-        return format!("{trimmed}; fix: choose one option (e.g., task=\"TASK-001\")");
+    if let Some((a, b)) = parse_mutually_exclusive_fields(trimmed) {
+        return format!("{trimmed}; fix: omit {a} OR omit {b}");
     }
 
     // Default: do not add generic wrapper noise — surface the real message.
     // Tool implementations and the schema layer already provide concrete "fix" hints for
     // common input mistakes.
     trimmed.to_string()
+}
+
+fn parse_mutually_exclusive_fields(message: &str) -> Option<(String, String)> {
+    let trimmed = message.trim();
+    if !trimmed.starts_with("provide ") || !trimmed.ends_with(", not both") {
+        return None;
+    }
+    let fields_part = trimmed
+        .strip_prefix("provide ")
+        .and_then(|s| s.strip_suffix(", not both"))?
+        .trim();
+
+    let mut parts = fields_part.split(" or ");
+    let a = parts.next()?.trim();
+    let b = parts.next()?.trim();
+    if parts.next().is_some() || a.is_empty() || b.is_empty() {
+        return None;
+    }
+    Some((a.to_string(), b.to_string()))
+}
+
+fn invalid_input_hints(message: &str) -> Vec<Value> {
+    let trimmed = message.trim();
+    let mut hints = Vec::new();
+
+    if trimmed == "arguments must be an object" {
+        hints.push(json!({
+            "kind": "type",
+            "field": "arguments",
+            "expected": "object"
+        }));
+        return hints;
+    }
+
+    if let Some((a, b)) = parse_mutually_exclusive_fields(trimmed) {
+        hints.push(json!({
+            "kind": "choose_one",
+            "fields": [a.clone(), b.clone()],
+            "options": [
+                { "keep": [a.clone()], "drop": [b.clone()] },
+                { "keep": [b], "drop": [a] }
+            ]
+        }));
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" is required") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "missing_required",
+                "field": field
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must not be empty") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "non_empty",
+                "field": field
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an object") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "type",
+                "field": field,
+                "expected": "object"
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an array") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "type",
+                "field": field,
+                "expected": "array"
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an array of strings") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "type",
+                "field": field,
+                "expected": "array",
+                "items": "string"
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be a string") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "type",
+                "field": field,
+                "expected": "string"
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be an integer") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "type",
+                "field": field,
+                "expected": "integer"
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be a positive integer") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "type",
+                "field": field,
+                "expected": "positive_integer"
+            }));
+        }
+    }
+
+    if let Some(field) = trimmed.strip_suffix(" must be a boolean") {
+        let field = field.trim();
+        if !field.is_empty() {
+            hints.push(json!({
+                "kind": "type",
+                "field": field,
+                "expected": "boolean"
+            }));
+        }
+    }
+
+    if trimmed.contains("must start with PLAN- or TASK-") {
+        let field = trimmed.split_whitespace().next().unwrap_or("target");
+        hints.push(json!({
+            "kind": "prefix",
+            "field": field,
+            "allowed": ["PLAN-", "TASK-"]
+        }));
+    } else if trimmed.contains("must start with PLAN-") {
+        let field = trimmed.split_whitespace().next().unwrap_or("plan");
+        hints.push(json!({
+            "kind": "prefix",
+            "field": field,
+            "allowed": ["PLAN-"]
+        }));
+    } else if trimmed.contains("must start with TASK-") {
+        let field = trimmed.split_whitespace().next().unwrap_or("task");
+        hints.push(json!({
+            "kind": "prefix",
+            "field": field,
+            "allowed": ["TASK-"]
+        }));
+    }
+
+    hints
 }

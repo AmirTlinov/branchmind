@@ -9,9 +9,30 @@ impl McpServer {
             return ai_error("INVALID_INPUT", "arguments must be an object");
         };
         let mut patched = args_obj.clone();
-        patched
-            .entry("graph_diff".to_string())
-            .or_insert_with(|| Value::Bool(true));
+
+        // Portal UX: tasks_snapshot is a read-mostly view; default to the relevance-first
+        // smart view so the capsule/HUD can safely surface step_focus and multi-agent signals
+        // (leases/lanes) without requiring manual view selection.
+        if !patched.contains_key("view") {
+            patched.insert("view".to_string(), Value::String("smart".to_string()));
+        }
+
+        let relevance_view = patched
+            .get("view")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| {
+                let v = v.trim();
+                v.eq_ignore_ascii_case("focus_only")
+                    || v.eq_ignore_ascii_case("smart")
+                    || v.eq_ignore_ascii_case("explore")
+                    || v.eq_ignore_ascii_case("audit")
+            })
+            || args_obj.contains_key("context_budget");
+        if !relevance_view {
+            patched
+                .entry("graph_diff".to_string())
+                .or_insert_with(|| Value::Bool(true));
+        }
 
         let mut response = self.tool_tasks_resume_super(Value::Object(patched));
         if let Some(obj) = response.as_object_mut() {

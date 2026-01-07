@@ -13,6 +13,10 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
+        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let title = match require_string(args_obj, "title") {
             Ok(v) => v,
@@ -180,6 +184,7 @@ impl McpServer {
                         bm_storage::StepDefineRequest {
                             task_id: id.clone(),
                             expected_revision: Some(current_revision),
+                            agent_id: agent_id.clone(),
                             selector: bm_storage::StepSelector {
                                 step_id: Some(step_ref.step_id.clone()),
                                 path: None,

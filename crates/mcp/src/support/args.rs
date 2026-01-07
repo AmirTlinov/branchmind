@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agent;
 mod bools;
 mod checkout;
 mod lists;
@@ -9,6 +10,7 @@ mod paths;
 mod strings;
 mod workspace;
 
+pub(crate) use agent::*;
 pub(crate) use bools::*;
 pub(crate) use checkout::*;
 pub(crate) use lists::*;

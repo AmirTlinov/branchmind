@@ -8,3 +8,4 @@ mod macro_flow_smoke;
 mod macro_start_with_think_pipeline;
 mod note_is_mirrored_into_reasoning_notes;
 mod principal_templates_smoke;
+mod step_lease;

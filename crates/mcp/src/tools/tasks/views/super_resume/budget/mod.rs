@@ -69,5 +69,32 @@ impl McpServer {
         {
             obj.insert("signals".to_string(), json!(degradation_signals));
         }
+
+        // Keep derived sequential-trace graph consistent with the (possibly trimmed) entries slice.
+        // This runs after all budget passes so it reflects the final output shape.
+        let entries_snapshot = result
+            .get("memory")
+            .and_then(|v| v.get("trace"))
+            .and_then(|v| v.get("entries"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(sequential) = result
+            .get_mut("memory")
+            .and_then(|v| v.get_mut("trace"))
+            .and_then(|v| v.get_mut("sequential"))
+        {
+            filter_trace_sequential_graph_to_entries(sequential, &entries_snapshot);
+        }
+
+        let cards_snapshot = result
+            .get("memory")
+            .and_then(|v| v.get("cards"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(engine) = result.get_mut("engine") {
+            filter_engine_to_cards(engine, &cards_snapshot);
+        }
     }
 }

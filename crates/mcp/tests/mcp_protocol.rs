@@ -57,6 +57,7 @@ fn mcp_requires_notifications_initialized() {
             "checkout",
             "commit",
             "context_pack",
+            "context_pack_export",
             "diagnostics",
             "diff",
             "docs_list",
@@ -121,6 +122,10 @@ fn mcp_requires_notifications_initialized() {
             "tasks_resume_super",
             "tasks_scaffold",
             "tasks_snapshot",
+            "tasks_step_lease_claim",
+            "tasks_step_lease_get",
+            "tasks_step_lease_release",
+            "tasks_step_lease_renew",
             "tasks_storage",
             "tasks_task_add",
             "tasks_task_define",
@@ -148,6 +153,7 @@ fn mcp_requires_notifications_initialized() {
             "think_pins",
             "think_pipeline",
             "think_playbook",
+            "think_publish",
             "think_query",
             "think_set_status",
             "think_subgoal_close",
@@ -158,6 +164,9 @@ fn mcp_requires_notifications_initialized() {
             "trace_sequential_step",
             "trace_step",
             "trace_validate",
+            "transcripts_digest",
+            "transcripts_open",
+            "transcripts_search",
         ]
     );
 }
@@ -401,14 +410,38 @@ fn tools_list_daily_toolset_is_curated() {
         "daily toolset must include tasks_macro_close_step (progress portal)"
     );
 
+    let has_transcripts_digest = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_digest"));
+    assert!(
+        has_transcripts_digest,
+        "daily toolset should include transcripts_digest (quiet archaeology)"
+    );
+
+    let has_transcripts_open = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_open"));
+    assert!(
+        has_transcripts_open,
+        "daily toolset should include transcripts_open (bounded follow-up)"
+    );
+
+    let has_transcripts_search = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_search"));
+    assert!(
+        !has_transcripts_search,
+        "daily toolset should hide transcripts_search (full only, to keep noise down)"
+    );
+
     let has_tag_delete = tools
         .iter()
         .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tag_delete"));
     assert!(!has_tag_delete, "daily toolset must hide tag_delete");
 
     assert!(
-        tools.len() <= 5,
-        "daily toolset must stay extremely small (<= 5 tools)"
+        tools.len() <= 7,
+        "daily toolset must stay extremely small (<= 7 tools)"
     );
 }
 
@@ -427,8 +460,8 @@ fn tools_list_params_can_override_toolset() {
         .and_then(|v| v.as_array())
         .expect("daily result.tools");
     assert!(
-        daily_tools.len() <= 5,
-        "server daily toolset should advertise <= 5 tools"
+        daily_tools.len() <= 7,
+        "server daily toolset should advertise <= 7 tools"
     );
 
     let full_list = server.request(json!({
@@ -876,6 +909,127 @@ fn tasks_macro_start_accepts_template_without_steps() {
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     assert_eq!(steps_count, 3, "basic-task template should create 3 steps");
+}
+
+#[test]
+fn tasks_macro_start_accepts_plan_id_with_matching_plan_title() {
+    let mut server =
+        Server::start_initialized("tasks_macro_start_accepts_plan_id_with_matching_plan_title");
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_match", "kind": "plan", "title": "Plan Match" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let started = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_start",
+            "arguments": {
+                "workspace": "ws_match",
+                "plan": plan_id,
+                "plan_title": "Plan Match",
+                "task_title": "Task under plan",
+                "template": "basic-task",
+                "resume_max_chars": 4000
+            }
+        }
+    }));
+    assert!(
+        !extract_tool_text_str(&started).starts_with("ERROR:"),
+        "macro_start must accept matching plan+plan_title"
+    );
+}
+
+#[test]
+fn tasks_macro_start_rejects_plan_id_with_mismatching_plan_title() {
+    let mut server =
+        Server::start_initialized("tasks_macro_start_rejects_plan_id_with_mismatching_plan_title");
+
+    let created_plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_mismatch", "kind": "plan", "title": "Plan Actual" } }
+    }));
+    let created_plan_text = extract_tool_text(&created_plan);
+    let plan_id = created_plan_text
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let started = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_start",
+            "arguments": {
+                "workspace": "ws_mismatch",
+                "plan": plan_id,
+                "plan_title": "Plan Different",
+                "task_title": "Task under plan",
+                "template": "basic-task",
+                "resume_max_chars": 4000
+            }
+        }
+    }));
+    let text = extract_tool_text_str(&started);
+    assert!(
+        text.starts_with("ERROR: INVALID_INPUT"),
+        "macro_start must reject mismatching plan_title"
+    );
+    assert!(
+        text.contains("plan_title"),
+        "error should mention plan_title mismatch"
+    );
+}
+
+#[test]
+fn invalid_input_errors_include_hints_in_json_payloads() {
+    let mut server =
+        Server::start_initialized("invalid_input_errors_include_hints_in_json_payloads");
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_context", "arguments": "nope" }
+    }));
+    let text = extract_tool_text(&resp);
+    let err = text
+        .get("error")
+        .and_then(|v| v.as_object())
+        .expect("error object");
+    assert_eq!(
+        err.get("code").and_then(|v| v.as_str()),
+        Some("INVALID_INPUT")
+    );
+    let hints = err
+        .get("hints")
+        .and_then(|v| v.as_array())
+        .expect("hints[]");
+    assert!(
+        hints.iter().any(|h| {
+            h.get("kind").and_then(|v| v.as_str()) == Some("type")
+                && h.get("field").and_then(|v| v.as_str()) == Some("arguments")
+                && h.get("expected").and_then(|v| v.as_str()) == Some("object")
+        }),
+        "hints must include type expectation for arguments"
+    );
 }
 
 #[test]

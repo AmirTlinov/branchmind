@@ -2,6 +2,8 @@
 
 use super::enforce::ResumeSuperBudgetState;
 use crate::*;
+use serde_json::Value;
+use serde_json::json;
 
 pub(super) fn ensure_limit(
     result: &mut serde_json::Value,
@@ -85,6 +87,9 @@ pub(super) fn ensure_limit(
                 );
             }
             if json_len_chars(value) > limit {
+                changed |= drop_fields_at(value, &[], &["lane_summary"]);
+            }
+            if json_len_chars(value) > limit {
                 changed |= drop_fields_at(value, &[], &["steps"]);
             }
             if json_len_chars(value) > limit {
@@ -92,10 +97,24 @@ pub(super) fn ensure_limit(
                     drop_fields_at(value, &["radar"], &["verify", "next", "blockers", "why"]);
             }
             if json_len_chars(value) > limit {
-                changed |= drop_fields_at(value, &[], &["graph_diff"]);
+                if let Some(obj) = value.as_object_mut()
+                    && obj.contains_key("graph_diff")
+                {
+                    obj.insert(
+                        "graph_diff".to_string(),
+                        json!({ "available": false, "reason": "budget" }),
+                    );
+                    changed = true;
+                }
             }
             if json_len_chars(value) > limit {
                 changed |= drop_fields_at(value, &["timeline"], &["events"]);
+            }
+            if json_len_chars(value) > limit {
+                changed |= drop_fields_at(value, &["engine"], &["actions", "signals"]);
+            }
+            if json_len_chars(value) > limit {
+                changed |= drop_fields_at(value, &[], &["engine"]);
             }
             if json_len_chars(value) > limit {
                 changed |= drop_fields_at(
@@ -110,6 +129,25 @@ pub(super) fn ensure_limit(
             }
             if json_len_chars(value) > limit {
                 changed |= drop_fields_at(value, &[], &["memory", "signals", "timeline"]);
+            }
+            if json_len_chars(value) > limit {
+                let Some(obj) = value.as_object_mut() else {
+                    return changed;
+                };
+
+                // Last-resort fallback: keep the HUD capsule so the agent still has coordinates
+                // and a next action even under aggressive budgets.
+                let capsule = obj.remove("capsule");
+                let degradation = obj.remove("degradation");
+                obj.clear();
+                if let Some(capsule) = capsule {
+                    obj.insert("capsule".to_string(), capsule);
+                }
+                if let Some(degradation) = degradation {
+                    obj.insert("degradation".to_string(), degradation);
+                }
+                obj.insert("truncated".to_string(), Value::Bool(true));
+                changed = true;
             }
             changed
         },

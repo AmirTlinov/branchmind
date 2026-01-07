@@ -75,3 +75,90 @@ pub(crate) fn parse_default_workspace() -> Option<String> {
 
     cli.or_else(|| std::env::var("BRANCHMIND_WORKSPACE").ok())
 }
+
+pub(crate) fn parse_workspace_lock() -> bool {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg.as_str() == "--workspace-lock" {
+            return true;
+        }
+    }
+
+    parse_bool_env("BRANCHMIND_WORKSPACE_LOCK")
+}
+
+pub(crate) fn parse_project_guard() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    let mut cli: Option<String> = None;
+    while let Some(arg) = args.next() {
+        if arg.as_str() == "--project-guard"
+            && let Some(value) = args.next()
+        {
+            cli = Some(value);
+            break;
+        }
+    }
+
+    cli.or_else(|| std::env::var("BRANCHMIND_PROJECT_GUARD").ok())
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum DefaultAgentIdConfig {
+    Auto,
+    Explicit(String),
+}
+
+pub(crate) fn parse_default_agent_id_config() -> Option<DefaultAgentIdConfig> {
+    let mut args = std::env::args().skip(1);
+    let mut cli: Option<String> = None;
+    while let Some(arg) = args.next() {
+        if arg.as_str() == "--agent-id"
+            && let Some(value) = args.next()
+        {
+            cli = Some(value);
+            break;
+        }
+    }
+
+    let raw = cli.or_else(|| std::env::var("BRANCHMIND_AGENT_ID").ok())?;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.eq_ignore_ascii_case("auto") {
+        return Some(DefaultAgentIdConfig::Auto);
+    }
+    normalize_agent_id(raw).map(DefaultAgentIdConfig::Explicit)
+}
+
+fn parse_bool_env(key: &str) -> bool {
+    let Ok(value) = std::env::var(key) else {
+        return false;
+    };
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn normalize_agent_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() > 64 {
+        return None;
+    }
+    let mut chars = trimmed.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_alphanumeric() {
+        return None;
+    }
+    for ch in chars {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            continue;
+        }
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
