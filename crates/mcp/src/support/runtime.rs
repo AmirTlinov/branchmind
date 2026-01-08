@@ -57,6 +57,18 @@ fn default_workspace_from_root(root: &Path) -> String {
     }
 }
 
+fn default_project_guard_from_root(root: &Path) -> String {
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canonical_str = canonical.to_string_lossy();
+    let bytes = canonical_str.as_bytes();
+    let mut hash: u64 = 14695981039346656037;
+    for b in bytes {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    format!("repo:{hash:016x}")
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Toolset {
     Full,
@@ -171,7 +183,12 @@ pub(crate) fn parse_project_guard() -> Option<String> {
         }
     }
 
-    cli.or_else(|| std::env::var("BRANCHMIND_PROJECT_GUARD").ok())
+    let value = cli.or_else(|| std::env::var("BRANCHMIND_PROJECT_GUARD").ok());
+    if value.is_none() && auto_mode_enabled() {
+        let root = default_repo_root();
+        return Some(default_project_guard_from_root(&root));
+    }
+    value
 }
 
 #[derive(Clone, Debug)]
@@ -210,7 +227,7 @@ pub(crate) fn parse_default_agent_id_config() -> Option<DefaultAgentIdConfig> {
 
 pub(crate) fn parse_shared_mode() -> bool {
     if auto_mode_enabled() {
-        return false;
+        return true;
     }
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
