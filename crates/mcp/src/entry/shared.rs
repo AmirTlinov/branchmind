@@ -3,7 +3,9 @@
 use crate::entry::framing::{
     TransportMode, detect_mode_from_first_line, read_content_length_frame, request_expects_response,
 };
+use crate::json_rpc_error;
 use crate::{DefaultAgentIdConfig, Toolset};
+use serde_json::Value;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -23,9 +25,7 @@ pub(crate) struct SharedProxyConfig {
 
 pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn std::error::Error>>
 {
-    let stream = connect_or_spawn(&config)?;
-    let mut daemon_reader = BufReader::new(stream.try_clone()?);
-    let mut daemon_writer = BufWriter::new(stream);
+    let mut daemon = DaemonPipe::connect(&config).ok();
 
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
@@ -59,8 +59,8 @@ pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn 
                         handle_client_body(
                             raw.as_bytes().to_vec(),
                             detected,
-                            &mut daemon_reader,
-                            &mut daemon_writer,
+                            &mut daemon,
+                            &config,
                             &mut stdout,
                         )?;
                         continue;
@@ -73,8 +73,8 @@ pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn 
                         handle_client_body(
                             body,
                             detected,
-                            &mut daemon_reader,
-                            &mut daemon_writer,
+                            &mut daemon,
+                            &config,
                             &mut stdout,
                         )?;
                         continue;
@@ -97,8 +97,8 @@ pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn 
                 handle_client_body(
                     raw.as_bytes().to_vec(),
                     effective_mode,
-                    &mut daemon_reader,
-                    &mut daemon_writer,
+                    &mut daemon,
+                    &config,
                     &mut stdout,
                 )?;
             }
@@ -118,8 +118,8 @@ pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn 
                 handle_client_body(
                     body,
                     effective_mode,
-                    &mut daemon_reader,
-                    &mut daemon_writer,
+                    &mut daemon,
+                    &config,
                     &mut stdout,
                 )?;
             }
@@ -132,31 +132,112 @@ pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn 
 fn handle_client_body(
     body: Vec<u8>,
     mode: TransportMode,
-    daemon_reader: &mut BufReader<UnixStream>,
-    daemon_writer: &mut BufWriter<UnixStream>,
+    daemon: &mut Option<DaemonPipe>,
+    config: &SharedProxyConfig,
     stdout: &mut std::io::StdoutLock<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let expects_response = request_expects_response(&body);
-    write_content_length_raw(daemon_writer, &body)?;
-
-    if !expects_response {
-        return Ok(());
-    }
-
-    let Some(resp_body) = read_content_length_frame(daemon_reader, None)? else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "daemon connection closed",
-        )
-        .into());
+    let resp_body = match forward_body_with_reconnect(daemon, config, &body, expects_response) {
+        Ok(Some(resp_body)) => Some(resp_body),
+        Ok(None) => None,
+        Err(err) => {
+            if expects_response {
+                Some(build_transport_error_response(&body, err.to_string().as_str()))
+            } else {
+                None
+            }
+        }
     };
 
-    match mode {
-        TransportMode::NewlineJson => write_newline_raw(stdout, &resp_body)?,
-        TransportMode::ContentLength => write_content_length_raw(stdout, &resp_body)?,
+    if let Some(resp_body) = resp_body {
+        match mode {
+            TransportMode::NewlineJson => write_newline_raw(stdout, &resp_body)?,
+            TransportMode::ContentLength => write_content_length_raw(stdout, &resp_body)?,
+        }
     }
 
     Ok(())
+}
+
+struct DaemonPipe {
+    reader: BufReader<UnixStream>,
+    writer: BufWriter<UnixStream>,
+}
+
+impl DaemonPipe {
+    fn connect(config: &SharedProxyConfig) -> Result<Self, Box<dyn std::error::Error>> {
+        let stream = connect_or_spawn(config)?;
+        Ok(Self {
+            reader: BufReader::new(stream.try_clone()?),
+            writer: BufWriter::new(stream),
+        })
+    }
+
+    fn send(
+        &mut self,
+        body: &[u8],
+        expects_response: bool,
+    ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        write_content_length_raw(&mut self.writer, body)?;
+        if !expects_response {
+            return Ok(None);
+        }
+        let Some(resp_body) = read_content_length_frame(&mut self.reader, None)? else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "daemon connection closed",
+            )
+            .into());
+        };
+        Ok(Some(resp_body))
+    }
+}
+
+fn forward_body_with_reconnect(
+    daemon: &mut Option<DaemonPipe>,
+    config: &SharedProxyConfig,
+    body: &[u8],
+    expects_response: bool,
+) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+    const MAX_ATTEMPTS: usize = 2;
+    for _ in 0..MAX_ATTEMPTS {
+        if daemon.is_none() {
+            match DaemonPipe::connect(config) {
+                Ok(pipe) => {
+                    *daemon = Some(pipe);
+                }
+                Err(err) => {
+                    return Err(err);
+                }
+            }
+        }
+
+        if let Some(pipe) = daemon.as_mut() {
+            match pipe.send(body, expects_response) {
+                Ok(resp) => return Ok(resp),
+                Err(_) => {
+                    *daemon = None;
+                    continue;
+                }
+            }
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "daemon connection unavailable",
+    )
+    .into())
+}
+
+fn build_transport_error_response(body: &[u8], message: &str) -> Vec<u8> {
+    let id = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("id").cloned());
+    let payload = json_rpc_error(id, -32000, message);
+    serde_json::to_vec(&payload).unwrap_or_else(|_| {
+        b"{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"daemon unavailable\"}}".to_vec()
+    })
 }
 
 fn write_newline_raw<W: Write>(writer: &mut W, body: &[u8]) -> std::io::Result<()> {
@@ -183,7 +264,7 @@ fn connect_or_spawn(config: &SharedProxyConfig) -> Result<UnixStream, Box<dyn st
     spawn_daemon(config)?;
 
     let start = Instant::now();
-    let deadline = Duration::from_secs(2);
+    let deadline = Duration::from_secs(5);
     loop {
         if let Ok(stream) = UnixStream::connect(&config.socket_path) {
             return Ok(stream);
