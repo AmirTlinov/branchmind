@@ -170,6 +170,35 @@ fn mcp_requires_notifications_initialized() {
         ]
     );
 }
+
+#[test]
+fn mcp_resources_list_is_supported_and_empty() {
+    let mut server = Server::start("resources_list_supported");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let resources = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "resources/list",
+        "params": {}
+    }));
+    let listed = resources
+        .get("result")
+        .and_then(|v| v.get("resources"))
+        .and_then(|v| v.as_array())
+        .expect("result.resources must be present");
+    assert!(
+        listed.is_empty(),
+        "server should advertise an empty resources set by default"
+    );
+}
 #[test]
 fn tools_schema_has_steps_items() {
     let mut server = Server::start("tools_schema_steps_items");

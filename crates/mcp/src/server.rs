@@ -55,6 +55,21 @@ impl McpServer {
             return Some(crate::json_rpc_response(request.id, json!({})));
         }
 
+        // MCP polish: some clients probe optional resources methods by default. We keep the
+        // surface deterministic and minimal by advertising an empty resource set.
+        if method == "resources/list" {
+            return Some(crate::json_rpc_response(
+                request.id,
+                json!({ "resources": [] }),
+            ));
+        }
+        if method == "resources/read" {
+            return Some(crate::json_rpc_response(
+                request.id,
+                json!({ "contents": [] }),
+            ));
+        }
+
         if method == "tools/list" {
             let toolset = match request
                 .params
@@ -325,12 +340,14 @@ impl McpServer {
         let fmt = args.get("fmt").and_then(|v| v.as_str());
         let wants_lines = crate::is_lines_fmt(fmt);
 
-        if self.toolset == crate::Toolset::Full && !wants_lines {
-            return;
-        }
         let Some(resp_obj) = response.as_object_mut() else {
             return;
         };
+
+        if !wants_lines && self.toolset == crate::Toolset::Full {
+            inject_smart_navigation_suggestions(tool, args, resp_obj);
+            return;
+        }
 
         if self.toolset != crate::Toolset::Full {
             let error_code = resp_obj
@@ -661,6 +678,128 @@ fn apply_read_tool_default_budgets(name: &str, args_obj: &mut serde_json::Map<St
             Value::Number(serde_json::Number::from(default_context_budget as u64)),
         );
     }
+}
+
+fn inject_smart_navigation_suggestions(
+    tool: &str,
+    args: &Value,
+    resp_obj: &mut serde_json::Map<String, Value>,
+) {
+    if is_portal_tool(tool) {
+        return;
+    }
+    if resp_obj
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        != true
+    {
+        return;
+    }
+
+    let budget_warning = auto_budget_escalation_allowlist(tool)
+        && response_obj_has_budget_truncation_warning(resp_obj);
+    let budget_snapshot = if budget_warning {
+        extract_budget_snapshot_from_obj(resp_obj)
+    } else {
+        None
+    };
+    let next_cursor = extract_result_next_cursor(resp_obj);
+
+    let Some(suggestions) = resp_obj
+        .get_mut("suggestions")
+        .and_then(|v| v.as_array_mut())
+    else {
+        return;
+    };
+    if !suggestions.is_empty() {
+        return;
+    }
+
+    // 1) Budget friction: if the response was truncated, give a single "show more" action
+    // that replays the same call with a larger budget. This keeps agents out of manual
+    // max_chars guessing while preserving determinism (suggestion only; no auto-writes).
+    if let Some((current_max_chars, used_chars)) = budget_snapshot
+        && let Some(args_obj) = args.as_object()
+    {
+        let cap = auto_budget_escalation_cap_chars(tool);
+        if current_max_chars < cap {
+            let used = used_chars.unwrap_or(current_max_chars);
+            let mut next_max_chars = current_max_chars
+                .saturating_mul(2)
+                .max(used.saturating_mul(2))
+                .max(current_max_chars.saturating_add(1));
+            if next_max_chars > cap {
+                next_max_chars = cap;
+            }
+
+            if next_max_chars > current_max_chars {
+                let mut params = args_obj.clone();
+                apply_auto_escalated_budget(&mut params, next_max_chars);
+                suggestions.push(crate::suggest_call(
+                    tool,
+                    "Show more (increase output budget).",
+                    "high",
+                    Value::Object(params),
+                ));
+                return;
+            }
+        }
+    }
+
+    // 2) "Button-like" navigation: if a result has a next_cursor, offer a single "show more"
+    // pagination action (no extra parameters beyond cursor).
+    if let Some(next_cursor) = next_cursor
+        && let Some(args_obj) = args.as_object()
+    {
+        let mut params = args_obj.clone();
+        params.insert(
+            "cursor".to_string(),
+            Value::Number(serde_json::Number::from(next_cursor)),
+        );
+        suggestions.push(crate::suggest_call(
+            tool,
+            "Show more (next page).",
+            "medium",
+            Value::Object(params),
+        ));
+    }
+}
+
+fn response_obj_has_budget_truncation_warning(resp_obj: &serde_json::Map<String, Value>) -> bool {
+    let Some(warnings) = resp_obj.get("warnings").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    warnings.iter().any(|w| {
+        matches!(
+            w.get("code").and_then(|v| v.as_str()),
+            Some("BUDGET_TRUNCATED") | Some("BUDGET_MINIMAL")
+        )
+    })
+}
+
+fn extract_budget_snapshot_from_obj(
+    resp_obj: &serde_json::Map<String, Value>,
+) -> Option<(usize, Option<usize>)> {
+    let budget = resp_obj.get("result")?.get("budget")?;
+    let max_chars = budget.get("max_chars")?.as_u64()? as usize;
+    let used_chars = budget
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    Some((max_chars, used_chars))
+}
+
+fn extract_result_next_cursor(resp_obj: &serde_json::Map<String, Value>) -> Option<i64> {
+    let pagination = resp_obj.get("result")?.get("pagination")?;
+    let has_more = pagination
+        .get("has_more")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !has_more {
+        return None;
+    }
+    pagination.get("next_cursor")?.as_i64()
 }
 
 fn read_tool_accepts_budget(name: &str) -> bool {
