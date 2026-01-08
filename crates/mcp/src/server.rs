@@ -133,6 +133,7 @@ impl McpServer {
 
     pub(crate) fn call_tool(&mut self, name: &str, args: Value) -> Value {
         let mut args = args;
+        let original_args = args.clone();
         if let Some(mut resp) = self.preprocess_args(name, &mut args) {
             // Even when we short-circuit during preprocessing (e.g. target normalization errors),
             // we still want the same portal-first recovery UX and the same output formatting.
@@ -144,8 +145,82 @@ impl McpServer {
             self.postprocess_response(name, &args, &mut resp);
             return resp;
         };
+        if let Some((escalated_args, mut escalated_resp)) =
+            self.auto_escalate_budget_if_needed(name, &original_args, &args, &resp)
+        {
+            self.postprocess_response(name, &escalated_args, &mut escalated_resp);
+            return escalated_resp;
+        }
         self.postprocess_response(name, &args, &mut resp);
         resp
+    }
+
+    fn auto_escalate_budget_if_needed(
+        &mut self,
+        name: &str,
+        original_args: &Value,
+        args: &Value,
+        resp: &Value,
+    ) -> Option<(Value, Value)> {
+        // Safety: never rerun portal tools (fmt=lines + portal UX) and never override explicit budgets.
+        if is_portal_tool(name) {
+            return None;
+        }
+
+        let Some(original_obj) = original_args.as_object() else {
+            return None;
+        };
+        if original_obj.contains_key("max_chars") || original_obj.contains_key("context_budget") {
+            return None;
+        }
+
+        if resp.get("success").and_then(|v| v.as_bool()) != Some(true) {
+            return None;
+        }
+        if !response_has_budget_truncation_warning(resp) {
+            return None;
+        }
+
+        // Only retry tools that are read-ish and safe to rerun. Even if some of these perform
+        // internal idempotent "ensure" writes (workspace/doc/ref), they must not append history.
+        if !auto_budget_escalation_allowlist(name) {
+            return None;
+        }
+
+        let Some((current_max_chars, used_chars)) = extract_budget_snapshot(resp) else {
+            return None;
+        };
+        let cap = auto_budget_escalation_cap_chars(name);
+        if current_max_chars >= cap {
+            return None;
+        }
+        let used_chars = used_chars.unwrap_or(current_max_chars);
+        let mut next_max_chars = current_max_chars
+            .saturating_mul(2)
+            .max(used_chars.saturating_mul(2))
+            .max(current_max_chars.saturating_add(1));
+        if next_max_chars > cap {
+            next_max_chars = cap;
+        }
+        if next_max_chars <= current_max_chars {
+            return None;
+        }
+
+        let mut escalated_args = args.clone();
+        let Some(args_obj) = escalated_args.as_object_mut() else {
+            return None;
+        };
+        if crate::is_lines_fmt(args_obj.get("fmt").and_then(|v| v.as_str())) {
+            return None;
+        }
+        apply_auto_escalated_budget(args_obj, next_max_chars);
+
+        let escalated_resp = crate::tools::dispatch_tool(self, name, escalated_args.clone())?;
+        if escalated_resp.get("success").and_then(|v| v.as_bool()) != Some(true) {
+            return None;
+        }
+
+        Some((escalated_args, escalated_resp))
     }
 
     fn preprocess_args(&mut self, name: &str, args: &mut Value) -> Option<Value> {
@@ -215,6 +290,13 @@ impl McpServer {
         // JSON payload entirely, so budgets are opt-in there.)
         if self.toolset != crate::Toolset::Full && is_portal_tool(name) {
             apply_portal_default_budgets(self.toolset, name, args_obj);
+        }
+
+        // Full toolset DX: for heavy read tools, apply deterministic default budgets when the
+        // caller didn't opt into explicit max_chars/context_budget. This prevents accidental
+        // context blowups while keeping callers fully in control once they specify budgets.
+        if !is_portal_tool(name) {
+            apply_read_tool_default_budgets(name, args_obj);
         }
         if self.default_workspace.is_none()
             && is_portal_tool(name)
@@ -509,6 +591,214 @@ fn apply_portal_default_budgets(
             }
         }
         _ => {}
+    }
+}
+
+fn apply_read_tool_default_budgets(name: &str, args_obj: &mut serde_json::Map<String, Value>) {
+    // Keep budgets opt-in for BM-L1 line outputs (they render warnings as extra lines).
+    let fmt = args_obj.get("fmt").and_then(|v| v.as_str());
+    if crate::is_lines_fmt(fmt) {
+        return;
+    }
+    if args_obj.contains_key("max_chars") || args_obj.contains_key("context_budget") {
+        return;
+    }
+
+    if !read_tool_accepts_budget(name) {
+        return;
+    }
+
+    // Default budgets are intentionally generous but bounded. The goal is to remove
+    // "limit juggling" for the common case, while still keeping the output deterministic.
+    let default_context_budget = match name {
+        // "Pack" tools are likely to be pasted directly into an agent context window.
+        "tasks_resume_super" | "context_pack" | "think_pack" | "think_watch" => 20_000usize,
+
+        // Read views that can become large quickly in active projects.
+        "tasks_context"
+        | "tasks_resume_pack"
+        | "tasks_context_pack"
+        | "tasks_radar"
+        | "tasks_handoff"
+        | "think_context"
+        | "think_frontier"
+        | "think_query"
+        | "think_next"
+        | "show"
+        | "diff"
+        | "log"
+        | "docs_list"
+        | "tag_list"
+        | "reflog"
+        | "branch_list"
+        | "graph_query"
+        | "graph_validate"
+        | "graph_diff"
+        | "graph_conflicts"
+        | "graph_conflict_show"
+        | "trace_hydrate"
+        | "trace_validate"
+        | "transcripts_open"
+        | "transcripts_digest"
+        | "transcripts_search"
+        | "help"
+        | "diagnostics" => 16_000usize,
+
+        // Safe default for other read-ish tools that accept max_chars.
+        _ => 12_000usize,
+    };
+
+    // Prefer context_budget when available (it behaves as a max_chars alias and can
+    // deterministically shift default views toward smart retrieval).
+    if read_tool_supports_context_budget(name) {
+        args_obj.insert(
+            "context_budget".to_string(),
+            Value::Number(serde_json::Number::from(default_context_budget as u64)),
+        );
+    } else {
+        args_obj.insert(
+            "max_chars".to_string(),
+            Value::Number(serde_json::Number::from(default_context_budget as u64)),
+        );
+    }
+}
+
+fn read_tool_accepts_budget(name: &str) -> bool {
+    matches!(
+        name,
+        // Tasks reads
+        "tasks_context"
+            | "tasks_delta"
+            | "tasks_radar"
+            | "tasks_handoff"
+            | "tasks_context_pack"
+            | "tasks_resume_pack"
+            | "tasks_resume_super"
+            // Core reasoning reads / packs
+            | "help"
+            | "diagnostics"
+            | "context_pack"
+            // Reasoning packs & reads
+            | "think_pack"
+            | "think_context"
+            | "think_frontier"
+            | "think_query"
+            | "think_next"
+            | "think_watch"
+            | "show"
+            | "diff"
+            | "log"
+            | "docs_list"
+            | "tag_list"
+            | "reflog"
+            | "graph_query"
+            | "graph_validate"
+            | "graph_diff"
+            | "graph_conflicts"
+            | "graph_conflict_show"
+            | "branch_list"
+            | "trace_hydrate"
+            | "trace_validate"
+            | "transcripts_open"
+            | "transcripts_digest"
+            | "transcripts_search"
+    )
+}
+
+fn read_tool_supports_context_budget(name: &str) -> bool {
+    matches!(
+        name,
+        "tasks_resume_super"
+            | "tasks_snapshot"
+            | "think_pack"
+            | "think_context"
+            | "think_frontier"
+            | "think_query"
+            | "think_next"
+            | "think_watch"
+            | "context_pack"
+    )
+}
+
+fn response_has_budget_truncation_warning(resp: &Value) -> bool {
+    let Some(warnings) = resp.get("warnings").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    warnings.iter().any(|w| {
+        matches!(
+            w.get("code").and_then(|v| v.as_str()),
+            Some("BUDGET_TRUNCATED") | Some("BUDGET_MINIMAL")
+        )
+    })
+}
+
+fn extract_budget_snapshot(resp: &Value) -> Option<(usize, Option<usize>)> {
+    let budget = resp.get("result")?.get("budget")?;
+    let max_chars = budget.get("max_chars")?.as_u64()? as usize;
+    let used_chars = budget
+        .get("used_chars")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    Some((max_chars, used_chars))
+}
+
+fn auto_budget_escalation_allowlist(name: &str) -> bool {
+    matches!(
+        name,
+        "tasks_context"
+            | "tasks_resume_pack"
+            | "tasks_resume_super"
+            | "tasks_context_pack"
+            | "tasks_delta"
+            | "tasks_radar"
+            | "tasks_handoff"
+            | "help"
+            | "diagnostics"
+            | "context_pack"
+            | "think_pack"
+            | "think_context"
+            | "think_frontier"
+            | "think_query"
+            | "think_next"
+            | "think_watch"
+            | "show"
+            | "diff"
+            | "log"
+            | "docs_list"
+            | "tag_list"
+            | "reflog"
+            | "graph_query"
+            | "graph_validate"
+            | "graph_diff"
+            | "graph_conflicts"
+            | "graph_conflict_show"
+            | "branch_list"
+            | "trace_hydrate"
+            | "trace_validate"
+            | "transcripts_open"
+            | "transcripts_digest"
+            | "transcripts_search"
+    )
+}
+
+fn auto_budget_escalation_cap_chars(_name: &str) -> usize {
+    // Hard cap to prevent runaway responses even under repeated retries.
+    60_000
+}
+
+fn apply_auto_escalated_budget(args_obj: &mut serde_json::Map<String, Value>, max_chars: usize) {
+    let next = Value::Number(serde_json::Number::from(max_chars as u64));
+    let mut applied = false;
+    if args_obj.contains_key("context_budget") {
+        args_obj.insert("context_budget".to_string(), next.clone());
+        applied = true;
+    }
+    if args_obj.contains_key("max_chars") {
+        args_obj.insert("max_chars".to_string(), next.clone());
+        applied = true;
+    }
+    if !applied {
+        args_obj.insert("max_chars".to_string(), next);
     }
 }
 

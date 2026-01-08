@@ -264,6 +264,7 @@ Every mutable entity carries a monotonic integer `revision`.
 Every potentially large output must accept at least one budget knob:
 
 - `max_chars` (UTF-8 bytes, hard cap)
+- `context_budget` (tool-specific alias for `max_chars`, when supported)
 - `max_bytes` (binary/text bytes)
 - `max_lines` (diff/log)
 - `limit`/`offset` (pagination)
@@ -276,6 +277,18 @@ Budget invariants:
 - `used_chars` counts the serialized payload **excluding** the `budget` field.
 - If `max_chars` is too small to fit a minimal payload, the server clamps to a minimal safe value and emits `BUDGET_MIN_CLAMPED`.
 - If the payload is reduced to a minimal signal, the server emits `BUDGET_MINIMAL`.
+
+DX note (default budgets, optional):
+
+- For selected **read-ish** tools, the server may apply a deterministic default `max_chars` / `context_budget`
+  when the caller omits both. This prevents accidental “context blowups” in day-to-day usage while keeping
+  callers fully in control once they specify budgets explicitly.
+
+DX note (auto-escalation on truncation, optional):
+
+- For selected read tools, when the caller omits budgets and the response emits `BUDGET_TRUNCATED` / `BUDGET_MINIMAL`,
+  the server may retry the call **once** with a larger budget (still deterministic, still bounded by a hard cap).
+  Explicit `max_chars` / `context_budget` always disables auto-escalation.
 
 ## Redaction (best-effort, safe-by-default)
 
