@@ -2,6 +2,61 @@
 
 use std::path::{Path, PathBuf};
 
+fn auto_mode_enabled() -> bool {
+    if std::env::args().len() > 1 {
+        return false;
+    }
+    let keys = [
+        "BRANCHMIND_MCP_SHARED",
+        "BRANCHMIND_MCP_DAEMON",
+        "BRANCHMIND_MCP_SOCKET",
+        "BRANCHMIND_WORKSPACE",
+        "BRANCHMIND_TOOLSET",
+        "BRANCHMIND_AGENT_ID",
+        "BRANCHMIND_WORKSPACE_LOCK",
+        "BRANCHMIND_PROJECT_GUARD",
+    ];
+    keys.iter().all(|key| std::env::var_os(key).is_none())
+}
+
+fn default_repo_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut current = cwd.clone();
+    loop {
+        let git = current.join(".git");
+        if git.exists() {
+            return current;
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    cwd
+}
+
+fn default_workspace_from_root(root: &Path) -> String {
+    let raw = root
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("workspace");
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "workspace".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Toolset {
     Full,
@@ -42,7 +97,14 @@ pub(crate) fn parse_storage_dir() -> PathBuf {
             storage_dir = Some(PathBuf::from(value));
         }
     }
-    storage_dir.unwrap_or_else(|| PathBuf::from(".branchmind_rust"))
+    if let Some(dir) = storage_dir {
+        return dir;
+    }
+    if auto_mode_enabled() {
+        let root = default_repo_root();
+        return root.join(".branchmind_rust");
+    }
+    PathBuf::from(".branchmind_rust")
 }
 
 pub(crate) fn parse_toolset() -> Toolset {
@@ -58,6 +120,9 @@ pub(crate) fn parse_toolset() -> Toolset {
     }
 
     let value = cli.or_else(|| std::env::var("BRANCHMIND_TOOLSET").ok());
+    if value.is_none() && auto_mode_enabled() {
+        return Toolset::Daily;
+    }
     Toolset::parse(value.as_deref())
 }
 
@@ -73,7 +138,12 @@ pub(crate) fn parse_default_workspace() -> Option<String> {
         }
     }
 
-    cli.or_else(|| std::env::var("BRANCHMIND_WORKSPACE").ok())
+    let value = cli.or_else(|| std::env::var("BRANCHMIND_WORKSPACE").ok());
+    if value.is_none() && auto_mode_enabled() {
+        let root = default_repo_root();
+        return Some(default_workspace_from_root(&root));
+    }
+    value
 }
 
 pub(crate) fn parse_workspace_lock() -> bool {
@@ -83,7 +153,9 @@ pub(crate) fn parse_workspace_lock() -> bool {
             return true;
         }
     }
-
+    if auto_mode_enabled() {
+        return true;
+    }
     parse_bool_env("BRANCHMIND_WORKSPACE_LOCK")
 }
 
@@ -120,6 +192,11 @@ pub(crate) fn parse_default_agent_id_config() -> Option<DefaultAgentIdConfig> {
         }
     }
 
+    if cli.is_none() && std::env::var("BRANCHMIND_AGENT_ID").ok().is_none() && auto_mode_enabled()
+    {
+        return Some(DefaultAgentIdConfig::Auto);
+    }
+
     let raw = cli.or_else(|| std::env::var("BRANCHMIND_AGENT_ID").ok())?;
     let raw = raw.trim();
     if raw.is_empty() {
@@ -132,6 +209,9 @@ pub(crate) fn parse_default_agent_id_config() -> Option<DefaultAgentIdConfig> {
 }
 
 pub(crate) fn parse_shared_mode() -> bool {
+    if auto_mode_enabled() {
+        return false;
+    }
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg.as_str() == "--shared" {
