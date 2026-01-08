@@ -114,6 +114,9 @@ pub(crate) fn request_expects_response(body: &[u8]) -> bool {
     let Some(obj) = value.as_object() else {
         return true;
     };
+    if !obj.contains_key("method") {
+        return true;
+    }
     match obj.get("id") {
         Some(Value::Null) | None => false,
         _ => true,
