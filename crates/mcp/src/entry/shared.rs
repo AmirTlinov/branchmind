@@ -25,7 +25,7 @@ pub(crate) struct SharedProxyConfig {
 
 pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn std::error::Error>>
 {
-    let mut daemon = DaemonPipe::connect(&config).ok();
+    let mut daemon: Option<DaemonPipe> = None;
 
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
@@ -137,7 +137,15 @@ fn handle_client_body(
     stdout: &mut std::io::StdoutLock<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let expects_response = request_expects_response(&body);
-    let resp_body = match forward_body_with_reconnect(daemon, config, &body, expects_response) {
+    let method = extract_request_method(&body);
+    let timeout = response_timeout_for_method(method.as_deref(), expects_response);
+    let resp_body = match forward_body_with_reconnect(
+        daemon,
+        config,
+        &body,
+        expects_response,
+        timeout,
+    ) {
         Ok(Some(resp_body)) => Some(resp_body),
         Ok(None) => None,
         Err(err) => {
@@ -177,7 +185,15 @@ impl DaemonPipe {
         &mut self,
         body: &[u8],
         expects_response: bool,
+        timeout: Option<Duration>,
     ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        if let Some(timeout) = timeout {
+            let _ = self.reader.get_ref().set_read_timeout(Some(timeout));
+            let _ = self.writer.get_ref().set_write_timeout(Some(timeout));
+        } else {
+            let _ = self.reader.get_ref().set_read_timeout(None);
+            let _ = self.writer.get_ref().set_write_timeout(None);
+        }
         write_content_length_raw(&mut self.writer, body)?;
         if !expects_response {
             return Ok(None);
@@ -198,6 +214,7 @@ fn forward_body_with_reconnect(
     config: &SharedProxyConfig,
     body: &[u8],
     expects_response: bool,
+    timeout: Option<Duration>,
 ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
     const MAX_ATTEMPTS: usize = 2;
     for _ in 0..MAX_ATTEMPTS {
@@ -213,7 +230,7 @@ fn forward_body_with_reconnect(
         }
 
         if let Some(pipe) = daemon.as_mut() {
-            match pipe.send(body, expects_response) {
+            match pipe.send(body, expects_response, timeout) {
                 Ok(resp) => return Ok(resp),
                 Err(_) => {
                     *daemon = None;
@@ -238,6 +255,27 @@ fn build_transport_error_response(body: &[u8], message: &str) -> Vec<u8> {
     serde_json::to_vec(&payload).unwrap_or_else(|_| {
         b"{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"daemon unavailable\"}}".to_vec()
     })
+}
+
+fn extract_request_method(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    value
+        .get("method")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn response_timeout_for_method(
+    method: Option<&str>,
+    expects_response: bool,
+) -> Option<Duration> {
+    if !expects_response {
+        return None;
+    }
+    match method {
+        Some("initialize") | Some("ping") => Some(Duration::from_secs(5)),
+        _ => Some(Duration::from_secs(30)),
+    }
 }
 
 fn write_newline_raw<W: Write>(writer: &mut W, body: &[u8]) -> std::io::Result<()> {
