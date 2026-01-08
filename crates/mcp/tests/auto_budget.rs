@@ -39,8 +39,8 @@ fn default_budgets_apply_to_branchmind_show_when_omitted() {
 }
 
 #[test]
-fn auto_budget_escalates_once_when_default_budget_truncates() {
-    let mut server = Server::start_initialized("auto_budget_escalates_once_when_truncated");
+fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
+    let mut server = Server::start_initialized("auto_budget_escalates_multiple_times_when_truncated");
 
     server.request(json!({
         "jsonrpc": "2.0",
@@ -49,7 +49,7 @@ fn auto_budget_escalates_once_when_default_budget_truncates() {
         "params": { "name": "init", "arguments": { "workspace": "ws_auto_budget_escalate" } }
     }));
 
-    let huge = "x".repeat(50_000);
+    let huge = "x".repeat(300_000);
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
@@ -58,7 +58,7 @@ fn auto_budget_escalates_once_when_default_budget_truncates() {
     }));
 
     // Call without max_chars/context_budget. Server injects default max_chars, sees budget truncation,
-    // and retries once with a larger budget (still bounded).
+    // and retries a small, bounded number of times (still capped).
     let show = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
@@ -76,8 +76,8 @@ fn auto_budget_escalates_once_when_default_budget_truncates() {
         .expect("budget.max_chars");
 
     assert_eq!(
-        max, 32_000,
-        "auto-escalation should retry once (16k -> 32k) when default budgets truncate"
+        max, 128_000,
+        "auto-escalation should retry multiple times (16k -> 32k -> 64k -> 128k) when default budgets truncate"
     );
 
     let warnings = show_text

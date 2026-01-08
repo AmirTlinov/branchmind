@@ -287,7 +287,8 @@ DX note (default budgets, optional):
 DX note (auto-escalation on truncation, optional):
 
 - For selected read tools, when the caller omits budgets and the response emits `BUDGET_TRUNCATED` / `BUDGET_MINIMAL`,
-  the server may retry the call **once** with a larger budget (still deterministic, still bounded by a hard cap).
+  the server may retry the call a small, fixed number of times with a larger budget (still deterministic, still bounded by a hard cap),
+  stopping early once truncation disappears.
   Explicit `max_chars` / `context_budget` always disables auto-escalation.
 
 ## Redaction (best-effort, safe-by-default)

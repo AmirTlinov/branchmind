@@ -202,40 +202,69 @@ impl McpServer {
             return None;
         }
 
-        let Some((current_max_chars, used_chars)) = extract_budget_snapshot(resp) else {
-            return None;
-        };
+        // Goal: remove "limit juggling" friction while keeping outputs bounded and deterministic.
+        // We retry a small, fixed number of times and stop early once truncation disappears.
+        //
+        // Important: this must remain safe for tools that are internally "read-ish" but may
+        // perform idempotent ensure-writes (e.g. workspace/doc refs). They must never append
+        // user-visible history on reads.
+        const MAX_RETRIES: usize = 3;
         let cap = auto_budget_escalation_cap_chars(name);
-        if current_max_chars >= cap {
-            return None;
-        }
-        let used_chars = used_chars.unwrap_or(current_max_chars);
-        let mut next_max_chars = current_max_chars
-            .saturating_mul(2)
-            .max(used_chars.saturating_mul(2))
-            .max(current_max_chars.saturating_add(1));
-        if next_max_chars > cap {
-            next_max_chars = cap;
-        }
-        if next_max_chars <= current_max_chars {
-            return None;
+
+        let mut current_args = args.clone();
+        let mut current_resp = resp.clone();
+        let mut did_escalate = false;
+
+        for _ in 0..MAX_RETRIES {
+            if !response_has_budget_truncation_warning(&current_resp) {
+                break;
+            }
+            let Some((current_max_chars, used_chars)) = extract_budget_snapshot(&current_resp)
+            else {
+                break;
+            };
+            if current_max_chars >= cap {
+                break;
+            }
+
+            let used_chars = used_chars.unwrap_or(current_max_chars);
+            let mut next_max_chars = current_max_chars
+                .saturating_mul(2)
+                .max(used_chars.saturating_mul(2))
+                .max(current_max_chars.saturating_add(1));
+            if next_max_chars > cap {
+                next_max_chars = cap;
+            }
+            if next_max_chars <= current_max_chars {
+                break;
+            }
+
+            let mut next_args = current_args.clone();
+            let Some(args_obj) = next_args.as_object_mut() else {
+                break;
+            };
+            if crate::is_lines_fmt(args_obj.get("fmt").and_then(|v| v.as_str())) {
+                break;
+            }
+            apply_auto_escalated_budget(args_obj, next_max_chars);
+
+            let Some(next_resp) = crate::tools::dispatch_tool(self, name, next_args.clone()) else {
+                break;
+            };
+            if next_resp.get("success").and_then(|v| v.as_bool()) != Some(true) {
+                break;
+            }
+
+            current_args = next_args;
+            current_resp = next_resp;
+            did_escalate = true;
         }
 
-        let mut escalated_args = args.clone();
-        let Some(args_obj) = escalated_args.as_object_mut() else {
-            return None;
-        };
-        if crate::is_lines_fmt(args_obj.get("fmt").and_then(|v| v.as_str())) {
-            return None;
+        if did_escalate {
+            Some((current_args, current_resp))
+        } else {
+            None
         }
-        apply_auto_escalated_budget(args_obj, next_max_chars);
-
-        let escalated_resp = crate::tools::dispatch_tool(self, name, escalated_args.clone())?;
-        if escalated_resp.get("success").and_then(|v| v.as_bool()) != Some(true) {
-            return None;
-        }
-
-        Some((escalated_args, escalated_resp))
     }
 
     fn preprocess_args(&mut self, name: &str, args: &mut Value) -> Option<Value> {
@@ -922,7 +951,7 @@ fn auto_budget_escalation_allowlist(name: &str) -> bool {
 
 fn auto_budget_escalation_cap_chars(_name: &str) -> usize {
     // Hard cap to prevent runaway responses even under repeated retries.
-    60_000
+    200_000
 }
 
 fn apply_auto_escalated_budget(args_obj: &mut serde_json::Map<String, Value>, max_chars: usize) {
