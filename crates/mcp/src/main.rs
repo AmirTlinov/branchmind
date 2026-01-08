@@ -39,6 +39,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workspace_lock = parse_workspace_lock();
     let project_guard = parse_project_guard();
     let default_agent_id_config = parse_default_agent_id_config();
+    let socket_path = parse_socket_path(&storage_dir);
+
+    if parse_daemon_mode() {
+        #[cfg(unix)]
+        {
+            let config = entry::DaemonConfig {
+                storage_dir,
+                toolset,
+                default_workspace,
+                workspace_lock,
+                project_guard,
+                default_agent_id_config,
+                socket_path,
+            };
+            return entry::run_socket_daemon(config);
+        }
+
+        #[cfg(not(unix))]
+        {
+            return Err("daemon mode is only supported on unix targets".into());
+        }
+    }
+
+    if parse_shared_mode() {
+        #[cfg(unix)]
+        {
+            let config = entry::SharedProxyConfig {
+                storage_dir,
+                toolset,
+                default_workspace,
+                workspace_lock,
+                project_guard,
+                default_agent_id_config,
+                socket_path,
+            };
+            return entry::run_shared_proxy(config);
+        }
+
+        #[cfg(not(unix))]
+        {
+            return Err("shared mode is only supported on unix targets".into());
+        }
+    }
+
     let mut store = SqliteStore::open(storage_dir)?;
 
     let default_agent_id = match default_agent_id_config {

@@ -29,6 +29,15 @@ Runtime flags:
   - `full` (default): full parity surface (best for power users and compatibility).
   - `daily` (DX-first): **5-tool “portal” set** for everyday agent work (progressive disclosure).
   - `core` (ultra-minimal): **3-tool “golden path”** for the smallest possible tool surface.
+- `--shared` — run a stdio proxy that connects to a shared local daemon (deduplicates processes across sessions).
+- `--daemon` — run the shared local daemon on a Unix socket (no stdio).
+- `--socket <path>` — override the Unix socket path (default: `<storage-dir>/branchmind_mcp.sock`).
+
+Environment overrides:
+
+- `BRANCHMIND_MCP_SHARED=1` — same as `--shared`.
+- `BRANCHMIND_MCP_DAEMON=1` — same as `--daemon`.
+- `BRANCHMIND_MCP_SOCKET=/path/to.sock` — same as `--socket`.
 - `--project-guard <value>` — enforce a workspace-bound guard value stored in the DB (mismatch becomes a typed error; prevents opening a store belonging to a different project).
 
 `tools/list` also supports optional params `{ "toolset": "full|daily|core" }` to override the default for a single call.
