@@ -38,17 +38,26 @@ impl McpServer {
             ));
         }
 
-        if !self.initialized && method != "notifications/initialized" {
-            return Some(crate::json_rpc_error(
-                request.id,
-                -32002,
-                "Server not initialized",
-            ));
-        }
-
         if method == "notifications/initialized" {
             self.initialized = true;
             return None;
+        }
+
+        if !self.initialized {
+            // Out-of-box DX: allow auto-initialization on first real request. This avoids
+            // client startup races that would otherwise yield "Server not initialized".
+            if matches!(
+                method,
+                "tools/call" | "tools/list" | "resources/list" | "resources/read" | "ping"
+            ) {
+                self.initialized = true;
+            } else {
+                return Some(crate::json_rpc_error(
+                    request.id,
+                    -32002,
+                    "Server not initialized",
+                ));
+            }
         }
 
         if method == "ping" {

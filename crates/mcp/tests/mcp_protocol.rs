@@ -6,8 +6,8 @@ use support::*;
 use serde_json::json;
 
 #[test]
-fn mcp_requires_notifications_initialized() {
-    let mut server = Server::start("requires_initialized");
+fn mcp_auto_init_allows_tools_list_without_notifications() {
+    let mut server = Server::start("auto_init_allows_tools_list");
 
     let init = server.request(json!({
         "jsonrpc": "2.0",
@@ -20,18 +20,9 @@ fn mcp_requires_notifications_initialized() {
         "initialize must return result"
     );
 
-    let tools_list_before = server.request(json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {}
-    }));
-    assert_json_rpc_error(&tools_list_before, -32002);
-
-    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
-
+    // Auto-init path: tools/list should succeed even before notifications/initialized.
     let tools_list =
-        server.request(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {} }));
+        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
     let tools = tools_list
         .get("result")
         .and_then(|v| v.get("tools"))
@@ -169,6 +160,9 @@ fn mcp_requires_notifications_initialized() {
             "transcripts_search",
         ]
     );
+
+    // Late notifications/initialized should be accepted.
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 }
 
 #[test]
