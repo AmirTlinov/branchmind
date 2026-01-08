@@ -140,7 +140,7 @@ fn handle_client_body(
     let method = extract_request_method(&body);
     let reset_on_error = matches!(method.as_deref(), Some("initialize") | Some("ping"));
     let timeout = response_timeout_for_method(method.as_deref(), expects_response);
-    let resp_body = match forward_body_with_reconnect(
+    let mut resp_body = match forward_body_with_reconnect(
         daemon,
         config,
         &body,
@@ -158,6 +158,29 @@ fn handle_client_body(
             }
         }
     };
+
+    if expects_response
+        && resp_body
+            .as_ref()
+            .and_then(|body| parse_error_code(body))
+            == Some(-32002)
+        && matches!(method.as_deref(), Some("tools/call"))
+    {
+        *daemon = None;
+        let _ = std::fs::remove_file(&config.socket_path);
+        resp_body = match forward_body_with_reconnect(
+            daemon,
+            config,
+            &body,
+            expects_response,
+            timeout,
+            true,
+        ) {
+            Ok(Some(resp_body)) => Some(resp_body),
+            Ok(None) => None,
+            Err(err) => Some(build_transport_error_response(&body, err.to_string().as_str())),
+        };
+    }
 
     if let Some(resp_body) = resp_body {
         match mode {
@@ -263,6 +286,14 @@ fn build_transport_error_response(body: &[u8], message: &str) -> Vec<u8> {
     serde_json::to_vec(&payload).unwrap_or_else(|_| {
         b"{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"daemon unavailable\"}}".to_vec()
     })
+}
+
+fn parse_error_code(body: &[u8]) -> Option<i64> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    value
+        .get("error")
+        .and_then(|v| v.get("code"))
+        .and_then(|v| v.as_i64())
 }
 
 fn extract_request_method(body: &[u8]) -> Option<String> {
