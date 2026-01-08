@@ -138,6 +138,7 @@ fn handle_client_body(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let expects_response = request_expects_response(&body);
     let method = extract_request_method(&body);
+    let reset_on_error = matches!(method.as_deref(), Some("initialize") | Some("ping"));
     let timeout = response_timeout_for_method(method.as_deref(), expects_response);
     let resp_body = match forward_body_with_reconnect(
         daemon,
@@ -145,6 +146,7 @@ fn handle_client_body(
         &body,
         expects_response,
         timeout,
+        reset_on_error,
     ) {
         Ok(Some(resp_body)) => Some(resp_body),
         Ok(None) => None,
@@ -215,8 +217,10 @@ fn forward_body_with_reconnect(
     body: &[u8],
     expects_response: bool,
     timeout: Option<Duration>,
+    reset_on_error: bool,
 ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
     const MAX_ATTEMPTS: usize = 2;
+    let mut forced_reset = false;
     for _ in 0..MAX_ATTEMPTS {
         if daemon.is_none() {
             match DaemonPipe::connect(config) {
@@ -234,6 +238,10 @@ fn forward_body_with_reconnect(
                 Ok(resp) => return Ok(resp),
                 Err(_) => {
                     *daemon = None;
+                    if reset_on_error && !forced_reset {
+                        forced_reset = true;
+                        let _ = std::fs::remove_file(&config.socket_path);
+                    }
                     continue;
                 }
             }
@@ -273,7 +281,7 @@ fn response_timeout_for_method(
         return None;
     }
     match method {
-        Some("initialize") | Some("ping") => Some(Duration::from_secs(5)),
+        Some("initialize") | Some("ping") => Some(Duration::from_secs(2)),
         _ => Some(Duration::from_secs(30)),
     }
 }
@@ -302,7 +310,7 @@ fn connect_or_spawn(config: &SharedProxyConfig) -> Result<UnixStream, Box<dyn st
     spawn_daemon(config)?;
 
     let start = Instant::now();
-    let deadline = Duration::from_secs(5);
+    let deadline = Duration::from_secs(2);
     loop {
         if let Ok(stream) = UnixStream::connect(&config.socket_path) {
             return Ok(stream);
