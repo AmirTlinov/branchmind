@@ -18,10 +18,12 @@ No GUI/TUI. MCP-only. Rust-first. Deterministic.
 - `GOALS.md` — explicit goals and non-goals
 - `PHILOSOPHY.md` — philosophy (no implementation hardcoding)
 - `docs/GLOSSARY.md` — shared terminology (execution + reasoning)
+- `docs/QUICK_START.md` — local developer golden path (run/test/lint)
 - `docs/contracts/OVERVIEW.md` — contract entrypoint
 - `docs/architecture/ARCHITECTURE.md` — boundaries and dependency direction
 - `docs/architecture/PLAN.md` — staged implementation milestones
 - `docs/architecture/LEGACY_PITFALLS.md` — what not to repeat from prior implementations
+- `REPO_RULES.md` — repository rules and quality gates
 
 ## Rules (non-negotiable)
 
@@ -132,8 +134,12 @@ If we ever change one of these, it must be an explicit decision with contract + 
 
 ## Practical development workflow (moved)
 
-Local “how to run” workflow rules (format/lints/tests/release build + session restart) are kept in the Codex
-`config.toml` so agents don’t need to re-learn them per repo.
+For humans and CI, use the repo-local golden path commands:
+
+- `make check`
+- `make run-mcp`
+
+Codex-specific workflow defaults may also exist in a local `config.toml`.
 
 ## Aliases (quick navigation)
 

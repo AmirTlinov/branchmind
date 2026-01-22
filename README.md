@@ -14,6 +14,11 @@ The goal is to give AI agents a durable, low-noise “working memory” and an e
 - `AGENTS.md` — map + development rules for AI agents
 - `docs/contracts/OVERVIEW.md` — contract entrypoint (MCP tools + semantics)
 
+Developer:
+
+- Quick start: `docs/QUICK_START.md`
+- Runbooks: `docs/runbooks/OVERVIEW.md`
+
 ## Running (stdio MCP server)
 
 The server is a stdio JSON-RPC MCP backend (no GUI/TUI).
@@ -73,3 +78,12 @@ Multi-agent lanes (DX):
 - Reasoning writes (`think_*`, `notes_commit`, `macro_branch_note`) accept optional `agent_id` to stamp artifacts into an agent lane.
 - Relevance-first views (`tasks_resume_super` smart/focus_only, `think_watch`) filter out other agents’ lanes by default (shared + “my lane”).
 - `think_publish` promotes a card into the shared lane as a durable anchor (optionally pinned for smart views).
+
+## Development
+
+Golden path:
+
+```bash
+make check
+make run-mcp
+```
