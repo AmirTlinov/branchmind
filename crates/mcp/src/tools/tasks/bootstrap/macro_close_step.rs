@@ -520,7 +520,8 @@ impl McpServer {
 
         // DX: default checkpoints to "gate" when closing a step (criteria+tests).
         // Contract: docs/contracts/TASKS.md specifies this default for the macro tool.
-        let closing_step = close_args_obj.contains_key("step_id") || close_args_obj.contains_key("path");
+        let closing_step =
+            close_args_obj.contains_key("step_id") || close_args_obj.contains_key("path");
         if closing_step && !close_args_obj.contains_key("checkpoints") {
             close_args_obj.insert("checkpoints".to_string(), Value::String("gate".to_string()));
         }

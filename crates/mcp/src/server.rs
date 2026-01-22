@@ -191,9 +191,7 @@ impl McpServer {
             return None;
         }
 
-        let Some(original_obj) = original_args.as_object() else {
-            return None;
-        };
+        let original_obj = original_args.as_object()?;
         if original_obj.contains_key("max_chars") || original_obj.contains_key("context_budget") {
             return None;
         }
@@ -543,9 +541,7 @@ impl McpServer {
     }
 
     fn enforce_project_guard(&mut self, workspace: &crate::WorkspaceId) -> Option<Value> {
-        let Some(expected) = self.project_guard.as_deref() else {
-            return None;
-        };
+        let expected = self.project_guard.as_deref()?;
         match self
             .store
             .workspace_project_guard_ensure(workspace, expected)
@@ -726,11 +722,10 @@ fn inject_smart_navigation_suggestions(
     if is_portal_tool(tool) {
         return;
     }
-    if resp_obj
+    if !resp_obj
         .get("success")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
-        != true
     {
         return;
     }

@@ -23,8 +23,9 @@ pub(crate) struct SharedProxyConfig {
     pub(crate) socket_path: PathBuf,
 }
 
-pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn std::error::Error>>
-{
+pub(crate) fn run_shared_proxy(
+    config: SharedProxyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut daemon: Option<DaemonPipe> = None;
 
     let stdin = std::io::stdin();
@@ -66,17 +67,10 @@ pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn 
                         continue;
                     }
                     TransportMode::ContentLength => {
-                        let Some(body) = read_content_length_frame(&mut reader, Some(peek))?
-                        else {
+                        let Some(body) = read_content_length_frame(&mut reader, Some(peek))? else {
                             break;
                         };
-                        handle_client_body(
-                            body,
-                            detected,
-                            &mut daemon,
-                            &config,
-                            &mut stdout,
-                        )?;
+                        handle_client_body(body, detected, &mut daemon, &config, &mut stdout)?;
                         continue;
                     }
                 }
@@ -111,17 +105,10 @@ pub(crate) fn run_shared_proxy(config: SharedProxyConfig) -> Result<(), Box<dyn 
                 if first_header.trim().is_empty() {
                     continue;
                 }
-                let Some(body) = read_content_length_frame(&mut reader, Some(first_header))?
-                else {
+                let Some(body) = read_content_length_frame(&mut reader, Some(first_header))? else {
                     break;
                 };
-                handle_client_body(
-                    body,
-                    effective_mode,
-                    &mut daemon,
-                    &config,
-                    &mut stdout,
-                )?;
+                handle_client_body(body, effective_mode, &mut daemon, &config, &mut stdout)?;
             }
         }
     }
@@ -152,7 +139,10 @@ fn handle_client_body(
         Ok(None) => None,
         Err(err) => {
             if expects_response {
-                Some(build_transport_error_response(&body, err.to_string().as_str()))
+                Some(build_transport_error_response(
+                    &body,
+                    err.to_string().as_str(),
+                ))
             } else {
                 None
             }
@@ -160,10 +150,7 @@ fn handle_client_body(
     };
 
     if expects_response
-        && resp_body
-            .as_ref()
-            .and_then(|body| parse_error_code(body))
-            == Some(-32002)
+        && resp_body.as_ref().and_then(|body| parse_error_code(body)) == Some(-32002)
         && matches!(method.as_deref(), Some("tools/call"))
     {
         *daemon = None;
@@ -178,7 +165,10 @@ fn handle_client_body(
         ) {
             Ok(Some(resp_body)) => Some(resp_body),
             Ok(None) => None,
-            Err(err) => Some(build_transport_error_response(&body, err.to_string().as_str())),
+            Err(err) => Some(build_transport_error_response(
+                &body,
+                err.to_string().as_str(),
+            )),
         };
     }
 
@@ -304,10 +294,7 @@ fn extract_request_method(body: &[u8]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn response_timeout_for_method(
-    method: Option<&str>,
-    expects_response: bool,
-) -> Option<Duration> {
+fn response_timeout_for_method(method: Option<&str>, expects_response: bool) -> Option<Duration> {
     if !expects_response {
         return None;
     }

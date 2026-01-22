@@ -85,10 +85,10 @@ mod unix {
             if trimmed.is_empty() {
                 break;
             }
-            if let Some((key, value)) = trimmed.split_once(':') {
-                if key.trim().eq_ignore_ascii_case("content-length") {
-                    content_length = Some(value.trim().parse().expect("content length"));
-                }
+            if let Some((key, value)) = trimmed.split_once(':')
+                && key.trim().eq_ignore_ascii_case("content-length")
+            {
+                content_length = Some(value.trim().parse().expect("content length"));
             }
         }
         let len = content_length.expect("missing content length");

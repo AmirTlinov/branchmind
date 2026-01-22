@@ -11,16 +11,27 @@ pub(super) struct CreatedTask {
     pub steps: Vec<bm_storage::StepRef>,
 }
 
+pub(super) struct CreateTaskWithStepsRequest {
+    pub task_title: String,
+    pub description: Option<String>,
+    pub steps: Vec<BootstrapStepInput>,
+    pub agent_id: Option<String>,
+}
+
 pub(super) fn create_task_with_steps(
     server: &mut McpServer,
     workspace: &WorkspaceId,
     parent_plan_id: &str,
-    task_title: String,
-    description: Option<String>,
-    steps: Vec<BootstrapStepInput>,
-    agent_id: Option<String>,
+    request: CreateTaskWithStepsRequest,
     events: &mut Vec<Value>,
 ) -> Result<CreatedTask, Value> {
+    let CreateTaskWithStepsRequest {
+        task_title,
+        description,
+        steps,
+        agent_id,
+    } = request;
+
     let payload = json!({
         "kind": "task",
         "title": task_title,

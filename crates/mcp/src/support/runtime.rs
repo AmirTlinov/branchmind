@@ -159,8 +159,7 @@ pub(crate) fn parse_default_workspace() -> Option<String> {
 }
 
 pub(crate) fn parse_workspace_lock() -> bool {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         if arg.as_str() == "--workspace-lock" {
             return true;
         }
@@ -209,8 +208,7 @@ pub(crate) fn parse_default_agent_id_config() -> Option<DefaultAgentIdConfig> {
         }
     }
 
-    if cli.is_none() && std::env::var("BRANCHMIND_AGENT_ID").ok().is_none() && auto_mode_enabled()
-    {
+    if cli.is_none() && std::env::var("BRANCHMIND_AGENT_ID").ok().is_none() && auto_mode_enabled() {
         return Some(DefaultAgentIdConfig::Auto);
     }
 
@@ -229,8 +227,7 @@ pub(crate) fn parse_shared_mode() -> bool {
     if auto_mode_enabled() {
         return true;
     }
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         if arg.as_str() == "--shared" {
             return true;
         }
@@ -239,8 +236,7 @@ pub(crate) fn parse_shared_mode() -> bool {
 }
 
 pub(crate) fn parse_daemon_mode() -> bool {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         if arg.as_str() == "--daemon" {
             return true;
         }
@@ -260,8 +256,12 @@ pub(crate) fn parse_socket_path(storage_dir: &Path) -> PathBuf {
         }
     }
 
-    cli.or_else(|| std::env::var("BRANCHMIND_MCP_SOCKET").ok().map(PathBuf::from))
-        .unwrap_or_else(|| storage_dir.join("branchmind_mcp.sock"))
+    cli.or_else(|| {
+        std::env::var("BRANCHMIND_MCP_SOCKET")
+            .ok()
+            .map(PathBuf::from)
+    })
+    .unwrap_or_else(|| storage_dir.join("branchmind_mcp.sock"))
 }
 
 fn parse_bool_env(key: &str) -> bool {

@@ -89,7 +89,7 @@ pub(super) fn fetch(
         }
     }
 
-    let open_each_limit = limit_candidates.min(6).max(1);
+    let open_each_limit = limit_candidates.clamp(1, 6);
     for req in [
         bm_storage::GraphQueryRequest {
             ids: None,

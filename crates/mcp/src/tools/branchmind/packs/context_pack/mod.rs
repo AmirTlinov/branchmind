@@ -336,13 +336,13 @@ impl McpServer {
                 "out_file must be a file path (got a directory)",
             );
         }
-        if let Some(parent) = out_path.parent() {
-            if let Err(err) = fs::create_dir_all(parent) {
-                return ai_error(
-                    "IO_ERROR",
-                    &format!("Failed to create parent directories: {err}"),
-                );
-            }
+        if let Some(parent) = out_path.parent()
+            && let Err(err) = fs::create_dir_all(parent)
+        {
+            return ai_error(
+                "IO_ERROR",
+                &format!("Failed to create parent directories: {err}"),
+            );
         }
 
         let tmp_path = out_path.with_extension(format!("tmp.{}", std::process::id()));

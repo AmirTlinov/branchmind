@@ -34,11 +34,11 @@ fn format_capture_content(
                 focus_idx = Some(idx);
                 break;
             }
-        } else if let Some(byte) = focus_byte {
-            if entry.get("byte").and_then(|v| v.as_u64()) == Some(byte) {
-                focus_idx = Some(idx);
-                break;
-            }
+        } else if let Some(byte) = focus_byte
+            && entry.get("byte").and_then(|v| v.as_u64()) == Some(byte)
+        {
+            focus_idx = Some(idx);
+            break;
         }
     }
     if let Some(idx) = focus_idx {
@@ -104,7 +104,10 @@ impl McpServer {
             }
             (None, Some(_)) => {}
             (Some(_), Some(_)) => {
-                return ai_error("INVALID_INPUT", "ref must include exactly one of line or byte");
+                return ai_error(
+                    "INVALID_INPUT",
+                    "ref must include exactly one of line or byte",
+                );
             }
             (None, None) => {
                 return ai_error("INVALID_INPUT", "ref.line or ref.byte is required");
@@ -128,7 +131,7 @@ impl McpServer {
         let root_dir = match canonicalize_existing_dir(&root_dir_path) {
             Ok(v) => v,
             Err(err) => {
-                return ai_error("INVALID_INPUT", &format!("root_dir: {}", err.to_string()));
+                return ai_error("INVALID_INPUT", &format!("root_dir: {err}"));
             }
         };
 
@@ -140,7 +143,7 @@ impl McpServer {
         let file_path = match canonicalize_existing_file(&joined) {
             Ok(v) => v,
             Err(err) => {
-                return ai_error("INVALID_INPUT", &format!("ref.path: {}", err.to_string()));
+                return ai_error("INVALID_INPUT", &format!("ref.path: {err}"));
             }
         };
         if !is_within_root(&root_dir, &file_path) {
@@ -266,8 +269,7 @@ impl McpServer {
             }
 
             let wanted_lines = before_lines.saturating_add(after_lines).saturating_add(1);
-            let mut window = (wanted_lines.saturating_mul(4096))
-                .clamp(64 * 1024, 512 * 1024);
+            let mut window = (wanted_lines.saturating_mul(4096)).clamp(64 * 1024, 512 * 1024);
             let max_window = 2 * 1024 * 1024;
 
             #[derive(Clone, Copy)]
@@ -284,7 +286,9 @@ impl McpServer {
                 let half = (window / 2) as u64;
                 let start = byte.saturating_sub(half);
                 let start = start.min(file_len.saturating_sub(1));
-                let end = (start as usize).saturating_add(window).min(file_len as usize);
+                let end = (start as usize)
+                    .saturating_add(window)
+                    .min(file_len as usize);
                 let to_read = end.saturating_sub(start as usize);
                 if to_read == 0 {
                     break;
@@ -320,10 +324,10 @@ impl McpServer {
                 while i <= bytes.len() {
                     let line_start = i;
                     let mut line_end = bytes.len();
-                    if i < bytes.len() {
-                        if let Some(pos) = bytes[i..].iter().position(|b| *b == b'\n') {
-                            line_end = i.saturating_add(pos);
-                        }
+                    if i < bytes.len()
+                        && let Some(pos) = bytes[i..].iter().position(|b| *b == b'\n')
+                    {
+                        line_end = i.saturating_add(pos);
                     }
                     let mut end_trim = line_end;
                     if end_trim > line_start && bytes[end_trim - 1] == b'\r' {
@@ -377,9 +381,14 @@ impl McpServer {
 
             let focus_idx = focus_idx.unwrap_or(0);
             let start_idx = focus_idx.saturating_sub(before_lines);
-            let end_idx = (focus_idx.saturating_add(after_lines)).min(spans.len().saturating_sub(1));
+            let end_idx =
+                (focus_idx.saturating_add(after_lines)).min(spans.len().saturating_sub(1));
 
-            for span in spans.iter().skip(start_idx).take(end_idx.saturating_sub(start_idx).saturating_add(1)) {
+            for span in spans
+                .iter()
+                .skip(start_idx)
+                .take(end_idx.saturating_sub(start_idx).saturating_add(1))
+            {
                 let line = &buf[span.start..span.end];
                 let Ok(value) = serde_json::from_slice::<Value>(line) else {
                     continue;
@@ -435,7 +444,8 @@ impl McpServer {
         // the portal tool exists in the current toolset.
         let mut suggestions = Vec::new();
         if matches!(self.toolset, Toolset::Daily | Toolset::Full) {
-            let capture_content = format_capture_content(&ref_path, focus_line, focus_byte, &entries);
+            let capture_content =
+                format_capture_content(&ref_path, focus_line, focus_byte, &entries);
 
             let mut transcript_ref = json!({ "path": ref_path });
             if let Some(line) = focus_line {

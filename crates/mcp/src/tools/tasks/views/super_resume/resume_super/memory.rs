@@ -207,15 +207,17 @@ pub(super) fn load_resume_super_memory(
         | ResumeSuperView::Audit => fetch_relevance_first_cards(
             server,
             workspace,
-            &reasoning.branch,
-            &reasoning.graph_doc,
-            cards_cursor,
-            cards_limit,
-            focus_step_tag.as_deref(),
-            agent_id.as_deref(),
-            warm_archive,
-            all_lanes,
-            read_only,
+            FetchRelevanceFirstCardsArgs {
+                branch: &reasoning.branch,
+                graph_doc: &reasoning.graph_doc,
+                cursor: cards_cursor,
+                cards_limit,
+                focus_step_tag: focus_step_tag.as_deref(),
+                agent_id: agent_id.as_deref(),
+                warm_archive,
+                all_lanes,
+                read_only,
+            },
             reasoning_branch_missing,
         )?,
     };
@@ -248,20 +250,38 @@ pub(super) fn load_resume_super_memory(
     })
 }
 
-fn fetch_relevance_first_cards(
-    server: &mut McpServer,
-    workspace: &WorkspaceId,
-    branch: &str,
-    graph_doc: &str,
+type RelevanceFirstCardsFetchResult = (Vec<Value>, Vec<Value>, Option<i64>, bool);
+
+struct FetchRelevanceFirstCardsArgs<'a> {
+    branch: &'a str,
+    graph_doc: &'a str,
     cursor: Option<i64>,
     cards_limit: usize,
-    focus_step_tag: Option<&str>,
-    agent_id: Option<&str>,
+    focus_step_tag: Option<&'a str>,
+    agent_id: Option<&'a str>,
     warm_archive: bool,
     all_lanes: bool,
     read_only: bool,
+}
+
+fn fetch_relevance_first_cards(
+    server: &mut McpServer,
+    workspace: &WorkspaceId,
+    args: FetchRelevanceFirstCardsArgs<'_>,
     reasoning_branch_missing: &mut bool,
-) -> Result<(Vec<Value>, Vec<Value>, Option<i64>, bool), Value> {
+) -> Result<RelevanceFirstCardsFetchResult, Value> {
+    let FetchRelevanceFirstCardsArgs {
+        branch,
+        graph_doc,
+        cursor,
+        cards_limit,
+        focus_step_tag,
+        agent_id,
+        warm_archive,
+        all_lanes,
+        read_only,
+    } = args;
+
     if cards_limit == 0 {
         return Ok((Vec::new(), Vec::new(), None, false));
     }
@@ -330,7 +350,7 @@ fn fetch_relevance_first_cards(
     if let Some(step_tag) = focus_step_tag {
         let tags_all = Some(vec![step_tag.to_string()]);
 
-        let step_open_limit = cards_limit.min(6).max(1).saturating_mul(lane_multiplier);
+        let step_open_limit = cards_limit.clamp(1, 6).saturating_mul(lane_multiplier);
         let step_open_slice = graph_query_or_empty(
             server,
             workspace,
@@ -364,7 +384,7 @@ fn fetch_relevance_first_cards(
         }
 
         if seen.len() < cards_limit {
-            let step_any_limit = cards_limit.min(4).max(1).saturating_mul(lane_multiplier);
+            let step_any_limit = cards_limit.clamp(1, 4).saturating_mul(lane_multiplier);
             let step_any_slice = graph_query_or_empty(
                 server,
                 workspace,
@@ -400,7 +420,7 @@ fn fetch_relevance_first_cards(
     }
 
     // Open core types (most agents care about the frontier more than the archive).
-    let open_each_limit = cards_limit.min(6).max(1).saturating_mul(lane_multiplier);
+    let open_each_limit = cards_limit.clamp(1, 6).saturating_mul(lane_multiplier);
     for req in [
         bm_storage::GraphQueryRequest {
             ids: None,

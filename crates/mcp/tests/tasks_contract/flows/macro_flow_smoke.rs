@@ -166,7 +166,7 @@ fn tasks_macro_finish_is_idempotent_when_already_done() {
         })
         .unwrap_or_default();
     assert!(
-        warning_codes.iter().any(|c| *c == "ALREADY_DONE"),
+        warning_codes.contains(&"ALREADY_DONE"),
         "second macro_finish should warn ALREADY_DONE"
     );
 }
@@ -224,9 +224,7 @@ fn tasks_macro_finish_suggests_closing_steps_when_open() {
         .unwrap_or_default();
 
     assert!(
-        suggested_tools
-            .iter()
-            .any(|t| *t == "tasks_macro_close_step"),
+        suggested_tools.contains(&"tasks_macro_close_step"),
         "macro_finish should suggest tasks_macro_close_step recovery"
     );
 }

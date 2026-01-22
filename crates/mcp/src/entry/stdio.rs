@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
+use crate::McpServer;
 use crate::entry::framing::{
     TransportMode, detect_mode_from_first_line, parse_request, read_content_length_frame,
     write_content_length_json, write_newline_json,
 };
-use crate::McpServer;
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
 
@@ -44,8 +44,7 @@ pub(crate) fn run_stdio(server: &mut McpServer) -> Result<(), Box<dyn std::error
                         continue;
                     }
                     TransportMode::ContentLength => {
-                        let Some(body) = read_content_length_frame(&mut reader, Some(peek))?
-                        else {
+                        let Some(body) = read_content_length_frame(&mut reader, Some(peek))? else {
                             break;
                         };
                         handle_body(server, &mut stdout, &body, detected)?;
@@ -77,8 +76,7 @@ pub(crate) fn run_stdio(server: &mut McpServer) -> Result<(), Box<dyn std::error
                 if first_header.trim().is_empty() {
                     continue;
                 }
-                let Some(body) = read_content_length_frame(&mut reader, Some(first_header))?
-                else {
+                let Some(body) = read_content_length_frame(&mut reader, Some(first_header))? else {
                     break;
                 };
                 handle_body(server, &mut stdout, &body, effective_mode)?;
