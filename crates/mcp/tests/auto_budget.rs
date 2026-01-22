@@ -40,7 +40,8 @@ fn default_budgets_apply_to_branchmind_show_when_omitted() {
 
 #[test]
 fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
-    let mut server = Server::start_initialized("auto_budget_escalates_multiple_times_when_truncated");
+    let mut server =
+        Server::start_initialized("auto_budget_escalates_multiple_times_when_truncated");
 
     server.request(json!({
         "jsonrpc": "2.0",

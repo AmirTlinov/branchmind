@@ -306,11 +306,7 @@ fn transcripts_digest_default_max_items_is_low_noise() {
 {{"timestamp":"2026-01-06T00:00:{:02}.000Z","type":"session_meta","payload":{{"id":"sess-defaults-{:02}","timestamp":"2026-01-06T00:00:{:02}.000Z","cwd":"/tmp/project"}}}}
 {{"timestamp":"2026-01-06T00:00:{:02}.500Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"**ИТОГ:** сделал {}"}}]}}}}
 "#,
-            idx,
-            idx,
-            idx,
-            idx,
-            idx
+            idx, idx, idx, idx, idx
         );
         std::fs::write(&file_path, content.trim_start()).expect("write transcript file");
     }
@@ -350,8 +346,9 @@ fn transcripts_digest_default_max_items_is_low_noise() {
 
 #[test]
 fn transcripts_digest_tight_scan_budget_still_reaches_older_summary() {
-    let mut server =
-        Server::start_initialized("transcripts_digest_tight_scan_budget_still_reaches_older_summary");
+    let mut server = Server::start_initialized(
+        "transcripts_digest_tight_scan_budget_still_reaches_older_summary",
+    );
 
     let _init = server.request(json!({
         "jsonrpc": "2.0",
@@ -425,7 +422,10 @@ fn transcripts_digest_tight_scan_budget_still_reaches_older_summary() {
         .and_then(|v| v.get("text"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    assert!(text.contains("ИТОГ"), "digest should include the summary marker");
+    assert!(
+        text.contains("ИТОГ"),
+        "digest should include the summary marker"
+    );
     let ref_path = items[0]
         .get("ref")
         .and_then(|v| v.get("path"))
@@ -439,8 +439,9 @@ fn transcripts_digest_tight_scan_budget_still_reaches_older_summary() {
 
 #[test]
 fn transcripts_digest_deep_tail_finds_summary_when_file_end_is_noise() {
-    let mut server =
-        Server::start_initialized("transcripts_digest_deep_tail_finds_summary_when_file_end_is_noise");
+    let mut server = Server::start_initialized(
+        "transcripts_digest_deep_tail_finds_summary_when_file_end_is_noise",
+    );
 
     let _init = server.request(json!({
         "jsonrpc": "2.0",
@@ -569,8 +570,14 @@ fn transcripts_digest_emits_byte_ref_for_huge_files_and_open_accepts_it() {
         .expect("digest");
     assert_eq!(items.len(), 1, "expected one digest item");
 
-    let ref_obj = items[0].get("ref").and_then(|v| v.as_object()).expect("ref");
-    let byte = ref_obj.get("byte").and_then(|v| v.as_u64()).expect("ref.byte");
+    let ref_obj = items[0]
+        .get("ref")
+        .and_then(|v| v.as_object())
+        .expect("ref");
+    let byte = ref_obj
+        .get("byte")
+        .and_then(|v| v.as_u64())
+        .expect("ref.byte");
     assert!(byte > 0, "expected a non-zero byte ref for huge files");
 
     let open = server.request(json!({
@@ -659,7 +666,9 @@ fn transcripts_digest_empty_under_scan_budget_emits_warning_and_retry_suggestion
         .cloned()
         .unwrap_or_default();
     assert!(
-        warnings.iter().any(|w| w.get("code").and_then(|v| v.as_str()) == Some("TRANSCRIPTS_SCAN_TRUNCATED")),
+        warnings
+            .iter()
+            .any(|w| w.get("code").and_then(|v| v.as_str()) == Some("TRANSCRIPTS_SCAN_TRUNCATED")),
         "expected TRANSCRIPTS_SCAN_TRUNCATED warning"
     );
 
@@ -669,7 +678,9 @@ fn transcripts_digest_empty_under_scan_budget_emits_warning_and_retry_suggestion
         .cloned()
         .unwrap_or_default();
     assert!(
-        suggestions.iter().any(|s| s.get("target").and_then(|v| v.as_str()) == Some("transcripts_digest")),
+        suggestions
+            .iter()
+            .any(|s| s.get("target").and_then(|v| v.as_str()) == Some("transcripts_digest")),
         "expected a retry suggestion"
     );
 }

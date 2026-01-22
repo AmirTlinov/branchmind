@@ -473,10 +473,12 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
                 // Portal DX: always include a copy/paste-safe default for `tasks_macro_close_step`.
                 // If extra confirmations become required (e.g., checkpoint evidence exists), include
                 // them explicitly so the macro can succeed in one call.
-                let missing_security =
-                    (require_security || proof_security_mode == Some("require")) && !security_confirmed;
-                let missing_perf = (require_perf || proof_perf_mode == Some("require")) && !perf_confirmed;
-                let missing_docs = (require_docs || proof_docs_mode == Some("require")) && !docs_confirmed;
+                let missing_security = (require_security || proof_security_mode == Some("require"))
+                    && !security_confirmed;
+                let missing_perf =
+                    (require_perf || proof_perf_mode == Some("require")) && !perf_confirmed;
+                let missing_docs =
+                    (require_docs || proof_docs_mode == Some("require")) && !docs_confirmed;
                 if missing_security || missing_perf || missing_docs {
                     let mut cp = serde_json::Map::new();
                     cp.insert("criteria".to_string(), Value::Bool(true));

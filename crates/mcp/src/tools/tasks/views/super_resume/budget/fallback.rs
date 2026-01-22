@@ -96,16 +96,15 @@ pub(super) fn ensure_limit(
                 changed |=
                     drop_fields_at(value, &["radar"], &["verify", "next", "blockers", "why"]);
             }
-            if json_len_chars(value) > limit {
-                if let Some(obj) = value.as_object_mut()
-                    && obj.contains_key("graph_diff")
-                {
-                    obj.insert(
-                        "graph_diff".to_string(),
-                        json!({ "available": false, "reason": "budget" }),
-                    );
-                    changed = true;
-                }
+            if json_len_chars(value) > limit
+                && let Some(obj) = value.as_object_mut()
+                && obj.contains_key("graph_diff")
+            {
+                obj.insert(
+                    "graph_diff".to_string(),
+                    json!({ "available": false, "reason": "budget" }),
+                );
+                changed = true;
             }
             if json_len_chars(value) > limit {
                 changed |= drop_fields_at(value, &["timeline"], &["events"]);

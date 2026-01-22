@@ -99,7 +99,7 @@ impl McpServer {
         let root_dir = match canonicalize_existing_dir(&root_dir_path) {
             Ok(v) => v,
             Err(err) => {
-                return ai_error("INVALID_INPUT", &format!("root_dir: {}", err.to_string()));
+                return ai_error("INVALID_INPUT", &format!("root_dir: {err}"));
             }
         };
 
@@ -201,10 +201,10 @@ impl McpServer {
                 "path": candidate.rel_path,
                 "byte": candidate.ref_byte
             });
-            if let Some(line_no) = candidate.ref_line {
-                if let Some(obj) = ref_obj.as_object_mut() {
-                    obj.insert("line".to_string(), json!(line_no));
-                }
+            if let Some(line_no) = candidate.ref_line
+                && let Some(obj) = ref_obj.as_object_mut()
+            {
+                obj.insert("line".to_string(), json!(line_no));
             }
 
             // Note: We intentionally avoid resolving `ref.line` by scanning from file start.
@@ -238,12 +238,8 @@ impl McpServer {
         {
             let ref_obj = first.get("ref").and_then(|v| v.as_object());
             let path = ref_obj.and_then(|o| o.get("path")).and_then(|v| v.as_str());
-            let line = ref_obj
-                .and_then(|o| o.get("line"))
-                .and_then(|v| v.as_u64());
-            let byte = ref_obj
-                .and_then(|o| o.get("byte"))
-                .and_then(|v| v.as_u64());
+            let line = ref_obj.and_then(|o| o.get("line")).and_then(|v| v.as_u64());
+            let byte = ref_obj.and_then(|o| o.get("byte")).and_then(|v| v.as_u64());
             if let Some(path) = path {
                 let mut open_ref = json!({ "path": path });
                 if let Some(line) = line {
@@ -280,7 +276,11 @@ impl McpServer {
             } else {
                 (max_bytes_total.saturating_mul(2)).min(256 * 1024 * 1024)
             };
-            let bump_files = if max_files < 120 { 120 } else { (max_files * 2).min(2048) };
+            let bump_files = if max_files < 120 {
+                120
+            } else {
+                (max_files * 2).min(2048)
+            };
 
             suggestions.push(suggest_call(
                 "transcripts_digest",
@@ -312,7 +312,10 @@ impl McpServer {
                 ));
             }
         }
-        if digest_total == 0 && !scan_truncated && scanned_files >= max_files.max(1) && scanned_bytes < max_bytes_total
+        if digest_total == 0
+            && !scan_truncated
+            && scanned_files >= max_files.max(1)
+            && scanned_bytes < max_bytes_total
         {
             warnings.push(warning(
                 "TRANSCRIPTS_MAX_FILES_REACHED",
@@ -330,7 +333,7 @@ impl McpServer {
                     "cwd_prefix": cwd_prefix.clone(),
                     "mode": mode,
                     "max_items": max_items,
-                    "max_files": (max_files.saturating_mul(2)).max(240).min(2048),
+                    "max_files": (max_files.saturating_mul(2)).clamp(240, 2048),
                     "max_bytes_total": max_bytes_total
                 }),
             ));
@@ -763,10 +766,10 @@ fn scan_tail_pick_candidate(
         while idx <= bytes.len() {
             let line_start = idx;
             let mut line_end = bytes.len();
-            if idx < bytes.len() {
-                if let Some(pos) = bytes[idx..].iter().position(|b| *b == b'\n') {
-                    line_end = idx.saturating_add(pos);
-                }
+            if idx < bytes.len()
+                && let Some(pos) = bytes[idx..].iter().position(|b| *b == b'\n')
+            {
+                line_end = idx.saturating_add(pos);
             }
 
             let mut line = &bytes[line_start..line_end];
@@ -774,27 +777,25 @@ fn scan_tail_pick_candidate(
                 line = &line[..line.len().saturating_sub(1)];
             }
             let line_trimmed = trim_ascii_ws(line);
-            if !line_trimmed.is_empty() {
-                if let Ok(value) = serde_json::from_slice::<Value>(line_trimmed) {
-                    if let Some(message) = extract_message(&value) {
-                        if message.role == "assistant" {
-                            assistant_seen = true;
-                            if mode != "summary" || looks_like_summary(&message.text) {
-                                let abs_byte = base_offset.saturating_add(line_start as u64);
-                                let abs_line = if can_compute_line_no {
-                                    Some(line_no)
-                                } else {
-                                    None
-                                };
-                                picked = Some(CandidateMessage {
-                                    ts: message.ts.clone(),
-                                    text: message.text,
-                                    byte: abs_byte,
-                                    line: abs_line,
-                                });
-                            }
-                        }
-                    }
+            if !line_trimmed.is_empty()
+                && let Ok(value) = serde_json::from_slice::<Value>(line_trimmed)
+                && let Some(message) = extract_message(&value)
+                && message.role == "assistant"
+            {
+                assistant_seen = true;
+                if mode != "summary" || looks_like_summary(&message.text) {
+                    let abs_byte = base_offset.saturating_add(line_start as u64);
+                    let abs_line = if can_compute_line_no {
+                        Some(line_no)
+                    } else {
+                        None
+                    };
+                    picked = Some(CandidateMessage {
+                        ts: message.ts.clone(),
+                        text: message.text,
+                        byte: abs_byte,
+                        line: abs_line,
+                    });
                 }
             }
 

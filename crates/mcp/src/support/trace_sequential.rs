@@ -305,17 +305,17 @@ pub(crate) fn derive_trace_sequential_graph(entries: &[Value]) -> Option<Value> 
             }
         }
 
-        if node.is_revision.as_ref().map(|(_, v)| *v).unwrap_or(false) {
-            if let Some(from) = node.revises_thought.as_ref().map(|(_, v)| *v) {
-                edges.push(SeqEdge {
-                    rel: "revision",
-                    from,
-                    to: node.thought_number,
-                    branch_id: None,
-                });
-                if !nodes_by_thought.contains_key(&from) {
-                    missing_revision_targets.insert(from);
-                }
+        if node.is_revision.as_ref().map(|(_, v)| *v).unwrap_or(false)
+            && let Some(from) = node.revises_thought.as_ref().map(|(_, v)| *v)
+        {
+            edges.push(SeqEdge {
+                rel: "revision",
+                from,
+                to: node.thought_number,
+                branch_id: None,
+            });
+            if !nodes_by_thought.contains_key(&from) {
+                missing_revision_targets.insert(from);
             }
         }
     }

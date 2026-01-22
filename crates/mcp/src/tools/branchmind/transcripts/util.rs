@@ -206,7 +206,11 @@ pub(super) fn session_matches_cwd_prefix(meta: &SessionMeta, cwd_prefix: &str) -
     {
         return true;
     }
-    if meta.path_hints.iter().any(|hint| hint.starts_with(cwd_prefix)) {
+    if meta
+        .path_hints
+        .iter()
+        .any(|hint| hint.starts_with(cwd_prefix))
+    {
         return true;
     }
 
@@ -343,8 +347,7 @@ pub(super) fn slice_around_match(
 
     let mut match_start_char: Option<usize> = None;
     let mut match_end_char: Option<usize> = None;
-    let mut char_index = 0usize;
-    for (byte_idx, _) in text.char_indices() {
+    for (char_index, (byte_idx, _)) in text.char_indices().enumerate() {
         if byte_idx == match_byte {
             match_start_char = Some(char_index);
         }
@@ -352,7 +355,6 @@ pub(super) fn slice_around_match(
             match_end_char = Some(char_index);
             break;
         }
-        char_index += 1;
     }
     let total_chars = text.chars().count();
     let match_start_char = match_start_char.unwrap_or(0);
@@ -365,8 +367,7 @@ pub(super) fn slice_around_match(
     let mut start_byte = 0usize;
     let mut end_byte = text.len();
     if start_char > 0 || end_char < total_chars {
-        let mut ci = 0usize;
-        for (byte_idx, _) in text.char_indices() {
+        for (ci, (byte_idx, _)) in text.char_indices().enumerate() {
             if ci == start_char {
                 start_byte = byte_idx;
             }
@@ -374,7 +375,6 @@ pub(super) fn slice_around_match(
                 end_byte = byte_idx;
                 break;
             }
-            ci += 1;
         }
     }
     normalize_snippet_whitespace(&text[start_byte..end_byte])

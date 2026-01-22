@@ -55,16 +55,18 @@ impl ContentLengthClient {
             if trimmed.is_empty() {
                 break;
             }
-            if let Some((key, value)) = trimmed.split_once(':') {
-                if key.trim().eq_ignore_ascii_case("content-length") {
-                    content_length = Some(value.trim().parse::<usize>().expect("content-length"));
-                }
+            if let Some((key, value)) = trimmed.split_once(':')
+                && key.trim().eq_ignore_ascii_case("content-length")
+            {
+                content_length = Some(value.trim().parse::<usize>().expect("content-length"));
             }
         }
 
         let len = content_length.expect("missing Content-Length in response");
         let mut buf = vec![0u8; len];
-        self.stdout.read_exact(&mut buf).expect("read response body");
+        self.stdout
+            .read_exact(&mut buf)
+            .expect("read response body");
         serde_json::from_slice(&buf).expect("parse response json")
     }
 
@@ -126,7 +128,9 @@ fn mcp_supports_content_length_framing() {
         .and_then(|v| v.as_array())
         .expect("result.tools");
     assert!(
-        tools.iter().any(|t| t.get("name").and_then(|v| v.as_str()) == Some("status")),
+        tools
+            .iter()
+            .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("status")),
         "tools/list must include status"
     );
 }

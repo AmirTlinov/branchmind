@@ -10,18 +10,33 @@ pub(super) struct TraceTail {
     pub(super) count: usize,
 }
 
+pub(super) struct TraceFetchRequest<'a> {
+    pub(super) branch: &'a str,
+    pub(super) trace_doc: &'a str,
+    pub(super) trace_limit_steps: usize,
+    pub(super) trace_statement_max_bytes: Option<usize>,
+    pub(super) agent_id: Option<&'a str>,
+    pub(super) all_lanes: bool,
+    pub(super) focus_task_id: Option<&'a str>,
+    pub(super) focus_step_path: Option<&'a str>,
+}
+
 pub(super) fn fetch(
     server: &mut McpServer,
     workspace: &WorkspaceId,
-    branch: &str,
-    trace_doc: &str,
-    trace_limit_steps: usize,
-    trace_statement_max_bytes: Option<usize>,
-    agent_id: Option<&str>,
-    all_lanes: bool,
-    focus_task_id: Option<&str>,
-    focus_step_path: Option<&str>,
+    request: TraceFetchRequest<'_>,
 ) -> Result<TraceTail, Value> {
+    let TraceFetchRequest {
+        branch,
+        trace_doc,
+        trace_limit_steps,
+        trace_statement_max_bytes,
+        agent_id,
+        all_lanes,
+        focus_task_id,
+        focus_step_path,
+    } = request;
+
     if trace_limit_steps == 0 {
         return Ok(TraceTail {
             entries: Vec::new(),

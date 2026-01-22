@@ -56,10 +56,12 @@ impl McpServer {
             self,
             &workspace,
             &parent_plan_id,
-            task_title,
-            description,
-            steps,
-            agent_id.clone(),
+            task::CreateTaskWithStepsRequest {
+                task_title,
+                description,
+                steps,
+                agent_id: agent_id.clone(),
+            },
             &mut events,
         ) {
             Ok(v) => v,

@@ -36,14 +36,20 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
+        // Keep copies for error mapping (suggestions need the original selectors).
+        let agent_id_for_errors = agent_id.clone();
+        let step_id_for_errors = step_id.clone();
+        let path_for_errors = path.clone();
+
         let result = self.store.step_note(
             &workspace,
-            &task_id,
-            expected_revision,
-            agent_id.as_deref(),
-            step_id.as_deref(),
-            path.as_ref(),
-            note,
+            bm_storage::StepNoteRequest {
+                task_id: task_id.clone(),
+                expected_revision,
+                agent_id,
+                selector: bm_storage::StepSelector { step_id, path },
+                note,
+            },
         );
 
         match result {
@@ -90,9 +96,9 @@ impl McpServer {
                 super::super::lease::lease_error_suggestions(
                     &workspace,
                     &task_id,
-                    step_id.as_deref(),
-                    path.as_ref(),
-                    agent_id.as_deref(),
+                    step_id_for_errors.as_deref(),
+                    path_for_errors.as_ref(),
+                    agent_id_for_errors.as_deref(),
                 ),
             ),
             Err(StoreError::UnknownId) => ai_error("UNKNOWN_ID", "Unknown task id"),

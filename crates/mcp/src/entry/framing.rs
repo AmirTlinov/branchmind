@@ -117,16 +117,12 @@ pub(crate) fn request_expects_response(body: &[u8]) -> bool {
     if !obj.contains_key("method") {
         return true;
     }
-    match obj.get("id") {
-        Some(Value::Null) | None => false,
-        _ => true,
-    }
+    !matches!(obj.get("id"), Some(Value::Null) | None)
 }
 
 pub(crate) fn parse_request(body: &[u8]) -> Result<crate::JsonRpcRequest, Value> {
-    let data: Value = serde_json::from_slice(body).map_err(|e| {
-        json_rpc_error(None, -32700, &format!("Parse error: {e}"))
-    })?;
+    let data: Value = serde_json::from_slice(body)
+        .map_err(|e| json_rpc_error(None, -32700, &format!("Parse error: {e}")))?;
 
     let (id, has_method) = match data.as_object() {
         Some(obj) => (obj.get("id").cloned(), obj.contains_key("method")),
@@ -138,7 +134,6 @@ pub(crate) fn parse_request(body: &[u8]) -> Result<crate::JsonRpcRequest, Value>
         return Err(json_rpc_error(id, -32600, "Invalid Request"));
     }
 
-    serde_json::from_value::<crate::JsonRpcRequest>(data).map_err(|e| {
-        json_rpc_error(id, -32600, &format!("Invalid Request: {e}"))
-    })
+    serde_json::from_value::<crate::JsonRpcRequest>(data)
+        .map_err(|e| json_rpc_error(id, -32600, &format!("Invalid Request: {e}")))
 }

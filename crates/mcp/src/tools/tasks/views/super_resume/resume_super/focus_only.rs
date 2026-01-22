@@ -134,10 +134,8 @@ pub(super) fn apply_focus_only_shaping(
     }
 
     // 2) Drop graph_diff by default (focus view favors relevance).
-    if !keep_graph_diff {
-        if let Some(obj) = result.as_object_mut() {
-            obj.remove("graph_diff");
-        }
+    if !keep_graph_diff && let Some(obj) = result.as_object_mut() {
+        obj.remove("graph_diff");
     }
 
     // 3) Compress memory: keep only relevant cards.
@@ -216,8 +214,9 @@ pub(super) fn apply_focus_only_shaping(
                 keep_ids.contains(id)
             });
         }
-        if cards.len() > engine_max_cards.max(1).min(20) {
-            cards.truncate(engine_max_cards.max(1).min(20));
+        let max_cards = engine_max_cards.clamp(1, 20);
+        if cards.len() > max_cards {
+            cards.truncate(max_cards);
         }
     }
     recompute_card_stats_at(result, &["memory", "cards"], &["memory", "stats"]);

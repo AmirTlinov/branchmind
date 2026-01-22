@@ -8,6 +8,17 @@ pub(crate) struct RelevanceFirstCards {
     pub(crate) cards: Vec<Value>,
 }
 
+pub(crate) struct RelevanceFirstCardsRequest<'a> {
+    pub(crate) branch: &'a str,
+    pub(crate) graph_doc: &'a str,
+    pub(crate) cards_limit: usize,
+    pub(crate) focus_step_tag: Option<&'a str>,
+    pub(crate) agent_id: Option<&'a str>,
+    pub(crate) warm_archive: bool,
+    pub(crate) all_lanes: bool,
+    pub(crate) read_only: bool,
+}
+
 fn empty_slice() -> bm_storage::GraphQuerySlice {
     bm_storage::GraphQuerySlice {
         nodes: Vec::new(),
@@ -57,15 +68,19 @@ fn node_to_card(node: GraphNode) -> Value {
 pub(crate) fn fetch_relevance_first_cards(
     server: &mut McpServer,
     workspace: &WorkspaceId,
-    branch: &str,
-    graph_doc: &str,
-    cards_limit: usize,
-    focus_step_tag: Option<&str>,
-    agent_id: Option<&str>,
-    warm_archive: bool,
-    all_lanes: bool,
-    read_only: bool,
+    request: RelevanceFirstCardsRequest<'_>,
 ) -> Result<RelevanceFirstCards, Value> {
+    let RelevanceFirstCardsRequest {
+        branch,
+        graph_doc,
+        cards_limit,
+        focus_step_tag,
+        agent_id,
+        warm_archive,
+        all_lanes,
+        read_only,
+    } = request;
+
     if cards_limit == 0 {
         return Ok(RelevanceFirstCards { cards: Vec::new() });
     }
@@ -138,7 +153,7 @@ pub(crate) fn fetch_relevance_first_cards(
         }
     }
 
-    let open_each_limit = cards_limit.min(6).max(1).saturating_mul(lane_multiplier);
+    let open_each_limit = cards_limit.clamp(1, 6).saturating_mul(lane_multiplier);
     for req in [
         bm_storage::GraphQueryRequest {
             ids: None,
@@ -208,7 +223,7 @@ pub(crate) fn fetch_relevance_first_cards(
     }
 
     if focus_step_tag.is_some() && seen.len() < cards_limit {
-        let step_any_limit = cards_limit.min(4).max(1).saturating_mul(lane_multiplier);
+        let step_any_limit = cards_limit.clamp(1, 4).saturating_mul(lane_multiplier);
         let step_any_slice = graph_query_or_empty(
             server,
             workspace,

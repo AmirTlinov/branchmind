@@ -72,7 +72,7 @@ impl McpServer {
         let root_dir = match canonicalize_existing_dir(&root_dir_path) {
             Ok(v) => v,
             Err(err) => {
-                return ai_error("INVALID_INPUT", &format!("root_dir: {}", err.to_string()));
+                return ai_error("INVALID_INPUT", &format!("root_dir: {err}"));
             }
         };
 
@@ -256,8 +256,7 @@ impl McpServer {
             .get("hits")
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
-        {
-            if let (Some(path), Some(line)) = (
+            && let (Some(path), Some(line)) = (
                 first
                     .get("ref")
                     .and_then(|v| v.get("path"))
@@ -266,18 +265,18 @@ impl McpServer {
                     .get("ref")
                     .and_then(|v| v.get("line"))
                     .and_then(|v| v.as_u64()),
-            ) {
-                suggestions.push(suggest_call(
-                    "transcripts_open",
-                    "Open the first matching transcript hit (bounded).",
-                    "low",
-                    json!({
-                        "workspace": workspace.as_str(),
-                        "root_dir": root_dir_raw.clone(),
-                        "ref": { "path": path, "line": line }
-                    }),
-                ));
-            }
+            )
+        {
+            suggestions.push(suggest_call(
+                "transcripts_open",
+                "Open the first matching transcript hit (bounded).",
+                "low",
+                json!({
+                    "workspace": workspace.as_str(),
+                    "root_dir": root_dir_raw.clone(),
+                    "ref": { "path": path, "line": line }
+                }),
+            ));
         }
 
         let mut warnings = Vec::new();

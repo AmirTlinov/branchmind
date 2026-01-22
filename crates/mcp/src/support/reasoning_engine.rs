@@ -347,13 +347,7 @@ fn weight_for_type(card_type: &str) -> f64 {
 }
 
 fn clamp01(v: f64) -> f64 {
-    if v < 0.0 {
-        0.0
-    } else if v > 1.0 {
-        1.0
-    } else {
-        v
-    }
+    v.clamp(0.0, 1.0)
 }
 
 fn confidence_key(node_id: &str, depth: usize) -> String {
@@ -364,13 +358,17 @@ fn card_type_of(card: &Value) -> &str {
     card.get("type").and_then(|v| v.as_str()).unwrap_or("card")
 }
 
+struct ConfidenceContext<'a, 'v> {
+    by_id: &'a std::collections::BTreeMap<String, &'v Value>,
+    incoming_supports: &'a std::collections::BTreeMap<String, Vec<String>>,
+    incoming_blocks: &'a std::collections::BTreeMap<String, Vec<String>>,
+    evidence_scores: &'a std::collections::BTreeMap<String, u8>,
+}
+
 fn confidence_for_id(
     node_id: &str,
     depth: usize,
-    by_id: &std::collections::BTreeMap<String, &Value>,
-    incoming_supports: &std::collections::BTreeMap<String, Vec<String>>,
-    incoming_blocks: &std::collections::BTreeMap<String, Vec<String>>,
-    evidence_scores: &std::collections::BTreeMap<String, u8>,
+    ctx: &ConfidenceContext<'_, '_>,
     memo: &mut std::collections::BTreeMap<String, f64>,
     stack: &mut std::collections::BTreeSet<String>,
 ) -> f64 {
@@ -386,10 +384,10 @@ fn confidence_for_id(
     }
     stack.insert(node_id.to_string());
 
-    let card = by_id.get(node_id).copied();
+    let card = ctx.by_id.get(node_id).copied();
     let card_type = card.map(card_type_of).unwrap_or("card");
     let base = if card_type == "evidence" {
-        evidence_scores
+        ctx.evidence_scores
             .get(node_id)
             .copied()
             .map(|v| v as f64 / 100.0)
@@ -404,39 +402,21 @@ fn confidence_for_id(
         let mut pos = 1.0;
         let mut neg = 1.0;
 
-        if let Some(ids) = incoming_supports.get(node_id) {
+        if let Some(ids) = ctx.incoming_supports.get(node_id) {
             for from in ids {
-                let from_card = by_id.get(from).copied();
+                let from_card = ctx.by_id.get(from).copied();
                 let from_type = from_card.map(card_type_of).unwrap_or("card");
                 let w = weight_for_type(from_type);
-                let c = confidence_for_id(
-                    from,
-                    depth.saturating_sub(1),
-                    by_id,
-                    incoming_supports,
-                    incoming_blocks,
-                    evidence_scores,
-                    memo,
-                    stack,
-                );
+                let c = confidence_for_id(from, depth.saturating_sub(1), ctx, memo, stack);
                 pos += w * c;
             }
         }
-        if let Some(ids) = incoming_blocks.get(node_id) {
+        if let Some(ids) = ctx.incoming_blocks.get(node_id) {
             for from in ids {
-                let from_card = by_id.get(from).copied();
+                let from_card = ctx.by_id.get(from).copied();
                 let from_type = from_card.map(card_type_of).unwrap_or("card");
                 let w = weight_for_type(from_type);
-                let c = confidence_for_id(
-                    from,
-                    depth.saturating_sub(1),
-                    by_id,
-                    incoming_supports,
-                    incoming_blocks,
-                    evidence_scores,
-                    memo,
-                    stack,
-                );
+                let c = confidence_for_id(from, depth.saturating_sub(1), ctx, memo, stack);
                 neg += w * c;
             }
         }
@@ -475,15 +455,13 @@ fn extract_cmd_from_test_card(card: &Value) -> Option<String> {
     if let Some(cmd) = cmd_from_meta(meta) {
         return Some(cmd);
     }
-    if let Some(inner) = meta.get("meta") {
-        if let Some(cmd) = cmd_from_meta(inner) {
-            return Some(cmd);
-        }
+    if let Some(inner) = meta.get("meta")
+        && let Some(cmd) = cmd_from_meta(inner)
+    {
+        return Some(cmd);
     }
 
-    let Some(text) = card.get("text").and_then(|v| v.as_str()) else {
-        return None;
-    };
+    let text = card.get("text").and_then(|v| v.as_str())?;
     for line in text.lines() {
         let line = strip_markdown_list_prefix(line);
         let Some(rest) = line.trim_start().strip_prefix("CMD:") else {
@@ -641,10 +619,10 @@ fn extract_stale_after_ms_from_test_card(card: &Value) -> Option<i64> {
     if let Some(ms) = ms_from_meta(meta) {
         return Some(ms);
     }
-    if let Some(inner) = meta.get("meta") {
-        if let Some(ms) = ms_from_meta(inner) {
-            return Some(ms);
-        }
+    if let Some(inner) = meta.get("meta")
+        && let Some(ms) = ms_from_meta(inner)
+    {
+        return Some(ms);
     }
     None
 }
@@ -668,10 +646,10 @@ fn extract_stale_after_days_from_test_card(card: &Value) -> Option<i64> {
     if let Some(days) = days_from_meta(meta) {
         return Some(days);
     }
-    if let Some(inner) = meta.get("meta") {
-        if let Some(days) = days_from_meta(inner) {
-            return Some(days);
-        }
+    if let Some(inner) = meta.get("meta")
+        && let Some(days) = days_from_meta(inner)
+    {
+        return Some(days);
     }
     None
 }
@@ -693,10 +671,10 @@ fn edge_triplet(edge: &Value) -> Option<(&str, &str, &str)> {
 
 fn trace_has_progress_signal(trace_entries: &[Value]) -> bool {
     for entry in trace_entries.iter().rev().take(12) {
-        if entry.get("kind").and_then(|v| v.as_str()) == Some("event") {
-            if entry.get("event_type").and_then(|v| v.as_str()) == Some("evidence_captured") {
-                return true;
-            }
+        if entry.get("kind").and_then(|v| v.as_str()) == Some("event")
+            && entry.get("event_type").and_then(|v| v.as_str()) == Some("evidence_captured")
+        {
+            return true;
         }
         if entry.get("kind").and_then(|v| v.as_str()) == Some("note")
             && entry.get("format").and_then(|v| v.as_str()) == Some("think_card")
@@ -1100,10 +1078,10 @@ pub(crate) fn derive_reasoning_engine(
         if card.get("type").and_then(|v| v.as_str()) != Some("decision") {
             continue;
         }
-        if card_has_tag(card, PIN_TAG) {
-            if let Some(id) = card.get("id").and_then(|v| v.as_str()) {
-                pinned_decision_ids.insert(id.to_string());
-            }
+        if card_has_tag(card, PIN_TAG)
+            && let Some(id) = card.get("id").and_then(|v| v.as_str())
+        {
+            pinned_decision_ids.insert(id.to_string());
         }
     }
 
@@ -1180,6 +1158,13 @@ pub(crate) fn derive_reasoning_engine(
     let mut memo = std::collections::BTreeMap::<String, f64>::new();
     let mut stack = std::collections::BTreeSet::<String>::new();
 
+    let confidence_ctx = ConfidenceContext {
+        by_id: &by_id,
+        incoming_supports: &incoming_supports,
+        incoming_blocks: &incoming_blocks,
+        evidence_scores: &evidence_scores,
+    };
+
     #[derive(Clone, Debug)]
     struct ConfidenceCandidate<'a> {
         id: &'a str,
@@ -1200,16 +1185,7 @@ pub(crate) fn derive_reasoning_engine(
                 if !card_has_tag(card, PIN_TAG) {
                     continue;
                 }
-                let c = confidence_for_id(
-                    id,
-                    3,
-                    &by_id,
-                    &incoming_supports,
-                    &incoming_blocks,
-                    &evidence_scores,
-                    &mut memo,
-                    &mut stack,
-                );
+                let c = confidence_for_id(id, 3, &confidence_ctx, &mut memo, &mut stack);
                 pinned_decisions.push(ConfidenceCandidate {
                     id,
                     card,
@@ -1225,16 +1201,7 @@ pub(crate) fn derive_reasoning_engine(
                 {
                     continue;
                 }
-                let c = confidence_for_id(
-                    id,
-                    3,
-                    &by_id,
-                    &incoming_supports,
-                    &incoming_blocks,
-                    &evidence_scores,
-                    &mut memo,
-                    &mut stack,
-                );
+                let c = confidence_for_id(id, 3, &confidence_ctx, &mut memo, &mut stack);
                 open_hypotheses.push(ConfidenceCandidate {
                     id,
                     card,
@@ -1498,10 +1465,8 @@ pub(crate) fn derive_reasoning_engine(
         if let Some(title) = card.get("title").and_then(|v| v.as_str()) {
             matched |= looks_like_tradeoff_text(title);
         }
-        if !matched {
-            if let Some(text) = card.get("text").and_then(|v| v.as_str()) {
-                matched |= looks_like_tradeoff_text(text);
-            }
+        if !matched && let Some(text) = card.get("text").and_then(|v| v.as_str()) {
+            matched |= looks_like_tradeoff_text(text);
         }
         if !matched {
             continue;
