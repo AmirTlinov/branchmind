@@ -19,16 +19,20 @@ fn viewer_projects_endpoint_includes_scanned_non_git_projects() {
 
     let current = scan_root.join("current_project");
     std::fs::create_dir_all(current.join(".git")).expect("create fake .git");
-    let current_storage = current.join(".branchmind_rust");
+    let current_storage = current.join(".agents").join("mcp").join(".branchmind");
     let _ = SqliteStore::open(&current_storage).expect("create current store");
 
     let nogit = scan_root.join("nogit_project");
     std::fs::create_dir_all(&nogit).expect("create non-git project");
-    let nogit_storage = nogit.join(".branchmind_rust");
+    let nogit_storage = nogit.join(".agents").join("mcp").join(".branchmind");
     let _ = SqliteStore::open(&nogit_storage).expect("create non-git store");
 
     // Add one broken catalog entry to ensure store_present is computed.
-    let missing_storage = scan_root.join("missing_project").join(".branchmind_rust");
+    let missing_storage = scan_root
+        .join("missing_project")
+        .join(".agents")
+        .join("mcp")
+        .join(".branchmind");
     let missing_entry = serde_json::json!({
         "project_guard": "repo:deadbeef00000000",
         "label": "missing_project",

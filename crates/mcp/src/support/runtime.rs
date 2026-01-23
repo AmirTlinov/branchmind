@@ -72,25 +72,37 @@ fn default_project_guard_from_root(root: &Path) -> String {
 fn is_repo_local_storage_dir(storage_dir: &Path) -> bool {
     let canonical =
         std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
-    let Some(dir_name) = canonical.file_name().and_then(|name| name.to_str()) else {
+    let Some(repo_root) = repo_root_from_storage_dir(&canonical) else {
         return false;
     };
-    if dir_name != ".branchmind_rust" {
-        return false;
+    repo_root.join(".git").exists()
+}
+
+fn repo_root_from_storage_dir(storage_dir: &Path) -> Option<PathBuf> {
+    let Some(dir_name) = storage_dir.file_name().and_then(|name| name.to_str()) else {
+        return None;
+    };
+    if dir_name != ".branchmind" {
+        return None;
     }
-    let Some(parent) = canonical.parent() else {
-        return false;
-    };
-    parent.join(".git").exists()
+    let mcp_dir = storage_dir.parent()?;
+    if mcp_dir.file_name().and_then(|v| v.to_str()) != Some("mcp") {
+        return None;
+    }
+    let agents_dir = mcp_dir.parent()?;
+    if agents_dir.file_name().and_then(|v| v.to_str()) != Some(".agents") {
+        return None;
+    }
+    agents_dir.parent().map(|p| p.to_path_buf())
 }
 
 fn default_project_guard_root_from_storage_dir(storage_dir: &Path) -> PathBuf {
     let canonical =
         std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
-    if is_repo_local_storage_dir(&canonical)
-        && let Some(parent) = canonical.parent()
+    if let Some(repo_root) = repo_root_from_storage_dir(&canonical)
+        && is_repo_local_storage_dir(&canonical)
     {
-        return parent.to_path_buf();
+        return repo_root;
     }
     default_repo_root()
 }
@@ -142,7 +154,7 @@ pub(crate) fn parse_storage_dir() -> PathBuf {
     // Flagship DX: keep the store repo-local when running inside a git repo.
     // This is deterministic and avoids requiring `--storage-dir` in typical MCP client setups.
     let root = default_repo_root();
-    root.join(".branchmind_rust")
+    root.join(".agents").join("mcp").join(".branchmind")
 }
 
 pub(crate) fn parse_toolset() -> Toolset {

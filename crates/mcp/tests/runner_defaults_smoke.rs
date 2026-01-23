@@ -63,7 +63,7 @@ fn bm_runner_defaults_can_find_repo_root_store_from_subdir() {
     let nested = repo_root.join("a").join("b");
     std::fs::create_dir_all(&nested).expect("create nested dir");
 
-    let storage_dir = repo_root.join(".branchmind_rust");
+    let storage_dir = repo_root.join(".agents").join("mcp").join(".branchmind");
     let workspace = repo_workspace_id(&repo_root);
 
     // 1) Create a job in the repo-root store/workspace.

@@ -1212,16 +1212,28 @@ fn repo_root_from_cwd() -> PathBuf {
 fn is_repo_local_storage_dir(storage_dir: &Path) -> bool {
     let canonical =
         std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
-    let Some(dir_name) = canonical.file_name().and_then(|name| name.to_str()) else {
+    let Some(repo_root) = repo_root_from_storage_dir(&canonical) else {
         return false;
     };
-    if dir_name != ".branchmind_rust" {
-        return false;
+    repo_root.join(".git").exists()
+}
+
+fn repo_root_from_storage_dir(storage_dir: &Path) -> Option<PathBuf> {
+    let Some(dir_name) = storage_dir.file_name().and_then(|name| name.to_str()) else {
+        return None;
+    };
+    if dir_name != ".branchmind" {
+        return None;
     }
-    let Some(parent) = canonical.parent() else {
-        return false;
-    };
-    parent.join(".git").exists()
+    let mcp_dir = storage_dir.parent()?;
+    if mcp_dir.file_name().and_then(|v| v.to_str()) != Some("mcp") {
+        return None;
+    }
+    let agents_dir = mcp_dir.parent()?;
+    if agents_dir.file_name().and_then(|v| v.to_str()) != Some(".agents") {
+        return None;
+    }
+    agents_dir.parent().map(|p| p.to_path_buf())
 }
 
 fn default_workspace_from_root(root: &Path) -> String {

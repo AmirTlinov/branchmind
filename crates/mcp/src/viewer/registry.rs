@@ -13,7 +13,9 @@ const DEFAULT_CATALOG_SUBDIR: &str = "catalog";
 const DEFAULT_SCAN_MAX_DEPTH: usize = 6;
 const MAX_SCAN_STORES: usize = 2_000;
 const STORE_DB_FILENAME: &str = "branchmind_rust.db";
-const STORE_DIRNAME: &str = ".branchmind_rust";
+const STORE_DIRNAME: &str = ".branchmind";
+const STORE_PARENT_MCP: &str = "mcp";
+const STORE_PARENT_AGENTS: &str = ".agents";
 const STALE_HEARTBEAT_MS: i64 = 30_000;
 
 #[derive(Clone, Debug)]
@@ -728,6 +730,11 @@ fn scan_for_stores(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
             continue;
         }
 
+        if name.as_ref() == STORE_PARENT_AGENTS {
+            scan_for_stores(&path, depth + 1, out);
+            continue;
+        }
+
         if name.starts_with('.') {
             continue;
         }
@@ -744,11 +751,15 @@ fn repo_root_from_storage_dir(storage_dir: &Path) -> PathBuf {
         return storage_dir.to_path_buf();
     };
     if dir_name == STORE_DIRNAME
-        && let Some(parent) = storage_dir.parent()
+        && let Some(mcp_dir) = storage_dir.parent()
+        && mcp_dir.file_name().and_then(|v| v.to_str()) == Some(STORE_PARENT_MCP)
+        && let Some(agents_dir) = mcp_dir.parent()
+        && agents_dir.file_name().and_then(|v| v.to_str()) == Some(STORE_PARENT_AGENTS)
+        && let Some(repo_root) = agents_dir.parent()
     {
-        // Prefer the parent directory even when the project isn't a git repo.
+        // Prefer the repo root even when the project isn't a git repo.
         // This matches how default workspace/project_guard are derived in auto-mode.
-        return parent.to_path_buf();
+        return repo_root.to_path_buf();
     }
     storage_dir.to_path_buf()
 }

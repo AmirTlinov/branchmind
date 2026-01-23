@@ -52,7 +52,7 @@ For “plug it in and it works” setups, `bm_mcp` may also **auto-start** `bm_r
 Runtime flags:
 
 - `--storage-dir <path>` — set the embedded store directory.
-  - Default: repo-local `.branchmind_rust/` (derived from the nearest `.git` root; falls back to current directory).
+  - Default: repo-local `.agents/mcp/.branchmind/` (derived from the nearest `.git` root; falls back to current directory).
 - `--workspace <id>` — set the **default workspace** (callers may omit `workspace` in tool calls).
   - Default: derived deterministically from the repo root directory name.
 - `--workspace-lock` — lock the server to the configured default workspace (rejects mismatched `workspace` to prevent accidental cross-project access).

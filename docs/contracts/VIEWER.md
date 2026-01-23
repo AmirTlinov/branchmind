@@ -91,7 +91,7 @@ Projects are discovered via a local registry written by active session processes
 and a durable local catalog updated opportunistically while BranchMind is used.
 
 Additionally, the viewer may perform a **best-effort bounded local filesystem scan** on startup to
-seed the durable catalog with any on-disk BranchMind stores (repo-local `.branchmind_rust/branchmind_rust.db`),
+seed the durable catalog with any on-disk BranchMind stores (repo-local `.agents/mcp/.branchmind/branchmind_rust.db`),
 so older sessions/projects remain selectable even without a recent heartbeat.
 
 The scan is:

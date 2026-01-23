@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub(crate) const DEFAULT_STORE_DIRNAME: &str = ".branchmind_rust";
+pub(crate) const DEFAULT_STORE_DIRNAME: &str = ".agents/mcp/.branchmind";
 
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut current = start.to_path_buf();

@@ -207,7 +207,7 @@ struct FakeRepo {
 fn create_fake_repo(base: &Path, name: &str) -> FakeRepo {
     let root = base.join(name);
     std::fs::create_dir_all(root.join(".git")).expect("create fake .git");
-    let storage_dir = root.join(".branchmind_rust");
+    let storage_dir = root.join(".agents").join("mcp").join(".branchmind");
     std::fs::create_dir_all(&storage_dir).expect("create storage dir");
     FakeRepo { root, storage_dir }
 }

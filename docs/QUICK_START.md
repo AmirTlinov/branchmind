@@ -18,7 +18,7 @@ Zero-arg invocation enables flagship DX defaults:
 
 - shared proxy (session-scoped)
 - default workspace (derived from repo root)
-- repo-local store (`.branchmind_rust/`)
+- repo-local store (`.agents/mcp/.branchmind/`)
 - daily toolset
 - workspace lock (guards against accidental cross-workspace calls)
 

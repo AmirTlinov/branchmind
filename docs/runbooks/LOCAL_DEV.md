@@ -9,7 +9,7 @@ make run-mcp
 
 ## Storage
 
-- Default store directory: repo-local `.branchmind_rust/` (derived from the nearest `.git` root)
+- Default store directory: repo-local `.agents/mcp/.branchmind/` (derived from the nearest `.git` root)
 - Override: `--storage-dir <path>`
 
 ## Workspace safety
