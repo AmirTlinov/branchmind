@@ -22,6 +22,23 @@ Zero-arg invocation enables flagship DX defaults:
 - daily toolset
 - workspace lock (guards against accidental cross-workspace calls)
 
+## OpenCode (recommended)
+
+Configure the server as a local MCP backend and let BranchMind auto-configure everything:
+
+```json
+{
+  "mcp": {
+    "branchmind": {
+      "type": "local",
+      "command": ["/abs/path/to/bm_mcp"],
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
+```
+
 ## 3) Where to look next
 
 - Contracts: `docs/contracts/OVERVIEW.md`

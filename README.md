@@ -24,6 +24,28 @@ Developer:
 The server is a stdio JSON-RPC MCP backend (no GUI/TUI in the core).
 An optional **local read-only HTTP viewer** can be enabled for human situational awareness.
 
+### OpenCode (recommended)
+
+Add BranchMind as a local MCP server (no flags needed; BranchMind uses DX defaults):
+
+```json
+{
+  "mcp": {
+    "branchmind": {
+      "type": "local",
+      "command": ["/abs/path/to/bm_mcp"],
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
+```
+
+Notes:
+
+- Build/install both binaries so runner autostart works: `bm_mcp` and `bm_runner` should be in the same directory (or `bm_runner` in `PATH`).
+- Verify: `opencode mcp list`.
+
 Delegated work is tracked as `JOB-*` and executed out-of-process by `bm_runner` so `bm_mcp` can stay deterministic.
 For “plug it in and it works” setups, `bm_mcp` may also **auto-start** `bm_runner` (first-party) when jobs are queued.
 
