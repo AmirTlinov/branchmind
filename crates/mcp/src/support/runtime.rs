@@ -11,6 +11,7 @@ fn auto_mode_enabled() -> bool {
         "BRANCHMIND_MCP_DAEMON",
         "BRANCHMIND_MCP_SOCKET",
         "BRANCHMIND_WORKSPACE",
+        "BRANCHMIND_WORKSPACE_ALLOWLIST",
         "BRANCHMIND_TOOLSET",
         "BRANCHMIND_AGENT_ID",
         "BRANCHMIND_WORKSPACE_LOCK",
@@ -79,9 +80,7 @@ fn is_repo_local_storage_dir(storage_dir: &Path) -> bool {
 }
 
 fn repo_root_from_storage_dir(storage_dir: &Path) -> Option<PathBuf> {
-    let Some(dir_name) = storage_dir.file_name().and_then(|name| name.to_str()) else {
-        return None;
-    };
+    let dir_name = storage_dir.file_name().and_then(|name| name.to_str())?;
     if dir_name != ".branchmind" {
         return None;
     }
@@ -176,7 +175,7 @@ pub(crate) fn parse_toolset() -> Toolset {
     Toolset::parse(value.as_deref())
 }
 
-pub(crate) fn parse_default_workspace() -> Option<String> {
+pub(crate) fn parse_workspace_explicit() -> Option<String> {
     let mut cli: Option<String> = None;
     let mut saw_flag = false;
     for arg in std::env::args().skip(1) {
@@ -187,30 +186,85 @@ pub(crate) fn parse_default_workspace() -> Option<String> {
         saw_flag = arg.as_str() == "--workspace";
     }
 
-    let value = cli.or_else(|| std::env::var("BRANCHMIND_WORKSPACE").ok());
-    let value = value
+    cli.or_else(|| std::env::var("BRANCHMIND_WORKSPACE").ok())
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    if value.is_some() {
-        return value;
+        .filter(|v| !v.is_empty())
+}
+
+pub(crate) fn parse_workspace_allowlist() -> Option<Vec<String>> {
+    let mut cli: Option<String> = None;
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(arg);
+            break;
+        }
+        saw_flag = arg.as_str() == "--workspace-allowlist";
+    }
+
+    let raw = cli.or_else(|| std::env::var("BRANCHMIND_WORKSPACE_ALLOWLIST").ok())?;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for item in raw.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace()) {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            out.push(trimmed.to_string());
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+pub(crate) fn parse_default_workspace(
+    explicit: Option<&str>,
+    allowlist: Option<&[String]>,
+) -> Option<String> {
+    if let Some(value) = explicit {
+        return Some(value.to_string());
     }
 
     // Flagship DX: pick a stable default workspace derived from the repo root.
     // This keeps agents from having to repeat `workspace=...` on every call.
     let root = default_repo_root();
-    Some(default_workspace_from_root(&root))
+    let derived = default_workspace_from_root(&root);
+    match allowlist {
+        Some(list) if !list.is_empty() => {
+            if list.iter().any(|item| item == &derived) {
+                Some(derived)
+            } else {
+                list.first().cloned()
+            }
+        }
+        _ => Some(derived),
+    }
 }
 
-pub(crate) fn parse_workspace_lock() -> bool {
+pub(crate) fn parse_workspace_lock(explicit_workspace: bool, allowlist_present: bool) -> bool {
     for arg in std::env::args().skip(1) {
         if arg.as_str() == "--workspace-lock" {
             return true;
         }
     }
+    if let Some(value) = parse_bool_env_override("BRANCHMIND_WORKSPACE_LOCK") {
+        return value;
+    }
+    if allowlist_present {
+        return false;
+    }
+    if explicit_workspace {
+        return true;
+    }
     if auto_mode_enabled() {
         return true;
     }
-    parse_bool_env("BRANCHMIND_WORKSPACE_LOCK")
+    false
 }
 
 pub(crate) fn parse_project_guard_explicit() -> bool {
@@ -451,6 +505,17 @@ pub(crate) fn parse_runner_autostart_dry_run() -> bool {
         }
     }
     parse_bool_env("BRANCHMIND_RUNNER_AUTOSTART_DRY_RUN")
+}
+
+fn parse_bool_env_override(key: &str) -> Option<bool> {
+    let Ok(value) = std::env::var(key) else {
+        return None;
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 fn parse_bool_env(key: &str) -> bool {

@@ -1219,9 +1219,7 @@ fn is_repo_local_storage_dir(storage_dir: &Path) -> bool {
 }
 
 fn repo_root_from_storage_dir(storage_dir: &Path) -> Option<PathBuf> {
-    let Some(dir_name) = storage_dir.file_name().and_then(|name| name.to_str()) else {
-        return None;
-    };
+    let dir_name = storage_dir.file_name().and_then(|name| name.to_str())?;
     if dir_name != ".branchmind" {
         return None;
     }

@@ -15,33 +15,7 @@ struct RawServer {
 
 impl RawServer {
     fn start_with(storage_dir: &std::path::Path, extra_args: &[&str]) -> Self {
-        let has_viewer_flag = extra_args
-            .iter()
-            .any(|arg| matches!(arg.trim(), "--viewer" | "--no-viewer"));
-        let default_viewer: &[&str] = if has_viewer_flag {
-            &[]
-        } else {
-            &["--no-viewer"]
-        };
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bm_mcp"))
-            .arg("--storage-dir")
-            .arg(storage_dir)
-            .args(["--toolset", "full"])
-            .args(default_viewer)
-            .args(extra_args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn bm_mcp");
-
-        let stdin = child.stdin.take().expect("stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("stdout"));
-
-        Self {
-            child,
-            stdin,
-            stdout,
-        }
+        start_with_env(storage_dir, extra_args, &[])
     }
 
     fn initialize(&mut self) {
@@ -73,6 +47,43 @@ impl RawServer {
     fn request(&mut self, req: serde_json::Value) -> serde_json::Value {
         self.send(req);
         self.recv()
+    }
+}
+
+fn start_with_env(
+    storage_dir: &std::path::Path,
+    extra_args: &[&str],
+    env_vars: &[(&str, &str)],
+) -> RawServer {
+    let has_viewer_flag = extra_args
+        .iter()
+        .any(|arg| matches!(arg.trim(), "--viewer" | "--no-viewer"));
+    let default_viewer: &[&str] = if has_viewer_flag {
+        &[]
+    } else {
+        &["--no-viewer"]
+    };
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bm_mcp"));
+    cmd.arg("--storage-dir")
+        .arg(storage_dir)
+        .args(["--toolset", "full"])
+        .args(default_viewer)
+        .args(extra_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    for (key, value) in env_vars {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd.spawn().expect("spawn bm_mcp");
+
+    let stdin = child.stdin.take().expect("stdin");
+    let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+
+    RawServer {
+        child,
+        stdin,
+        stdout,
     }
 }
 
@@ -110,6 +121,61 @@ fn workspace_lock_rejects_explicit_workspace_mismatch() {
             .and_then(|v| v.as_str()),
         Some("WORKSPACE_LOCKED")
     );
+}
+
+#[test]
+fn workspace_allowlist_rejects_unknown_workspace() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let pid = std::process::id();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let storage_dir = std::env::temp_dir().join(format!("bm_allowlist_{pid}_{nonce}"));
+    std::fs::create_dir_all(&storage_dir).expect("create temp dir");
+
+    let mut server = start_with_env(
+        &storage_dir,
+        &[],
+        &[("BRANCHMIND_WORKSPACE_ALLOWLIST", "alpha,beta")],
+    );
+    server.initialize();
+
+    let ok = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "alpha", "kind": "plan", "title": "Plan Alpha" } }
+    }));
+    assert_eq!(
+        ok.get("result")
+            .and_then(|v| v.get("isError"))
+            .and_then(|v| v.as_bool()),
+        Some(false)
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "gamma", "kind": "plan", "title": "Plan Gamma" } }
+    }));
+    let text = extract_tool_text(&resp);
+    assert_eq!(
+        resp.get("result")
+            .and_then(|v| v.get("isError"))
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        text.get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("WORKSPACE_NOT_ALLOWED")
+    );
+
+    let _ = std::fs::remove_dir_all(&storage_dir);
 }
 
 #[test]

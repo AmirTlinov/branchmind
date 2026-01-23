@@ -109,6 +109,11 @@ DX note (workspace lock, optional):
   - passing a different `workspace` becomes a typed error,
   - omitting `workspace` continues to work (defaults remain the golden path).
 
+DX note (workspace allowlist, optional):
+
+- The server may be configured with an allowlist of workspace ids (`BRANCHMIND_WORKSPACE_ALLOWLIST`).
+- When an allowlist is set, any `workspace` outside the list becomes a typed error.
+
 ### AgentId (multi-agent lanes, v0.5)
 
 A short stable identifier for an agent instance when multiple agents work in the same workspace.
@@ -375,6 +380,7 @@ Recommended `error.code` values:
 - `NOT_INITIALIZED`
 - `UNKNOWN_WORKSPACE`
 - `WORKSPACE_LOCKED`
+- `WORKSPACE_NOT_ALLOWED`
 - `PROJECT_GUARD_MISMATCH`
 - `UNKNOWN_ID`
 - `INVALID_NAME`

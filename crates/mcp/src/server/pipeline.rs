@@ -60,6 +60,35 @@ impl McpServer {
             ));
         }
 
+        if let Some(allowlist) = self.workspace_allowlist.as_ref()
+            && let Some(workspace) = args_obj.get("workspace").and_then(|v| v.as_str())
+            && !allowlist.iter().any(|allowed| allowed == workspace)
+        {
+            let mut allowed = allowlist.clone();
+            allowed.sort();
+            let limit = allowed.len().min(5);
+            let preview = allowed
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let hint = if allowed.len() > limit {
+                format!(
+                    "Allowed workspaces (showing {limit} of {}): {preview}",
+                    allowed.len()
+                )
+            } else {
+                format!("Allowed workspaces: {preview}")
+            };
+            return Some(crate::ai_error_with(
+                "WORKSPACE_NOT_ALLOWED",
+                "workspace is not in the allowlist",
+                Some(&hint),
+                Vec::new(),
+            ));
+        }
+
         // AI-first invariant: portal tools are always context-first (BM-L1 lines).
         // Do not expose / depend on a json-vs-lines toggle in portals.
         if super::portal::is_portal_tool(name) {

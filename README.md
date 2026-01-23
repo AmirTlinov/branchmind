@@ -55,7 +55,10 @@ Runtime flags:
   - Default: repo-local `.agents/mcp/.branchmind/` (derived from the nearest `.git` root; falls back to current directory).
 - `--workspace <id>` — set the **default workspace** (callers may omit `workspace` in tool calls).
   - Default: derived deterministically from the repo root directory name.
-- `--workspace-lock` — lock the server to the configured default workspace (rejects mismatched `workspace` to prevent accidental cross-project access).
+  - When set explicitly, the server auto-locks to that workspace unless an allowlist is provided.
+- `BRANCHMIND_WORKSPACE_ALLOWLIST` — optional comma/space/semicolon separated list of allowed workspaces.
+  - When set, callers may switch between these workspaces; others are rejected.
+- `--workspace-lock` — force-lock the server to the default workspace (advanced; usually not needed).
 - `--project-guard <value>` — override the deterministic project guard stored per workspace.
 - `--agent-id <id>` — set a default **actor id** used by the tasks subsystem (step leases) and some audit/meta fields when supported.
   - `--agent-id auto` creates (once) and reuses a stable default id stored in the embedded DB (survives restarts; reduces “forgot agent_id” drift).
@@ -108,7 +111,8 @@ Environment:
 
 - `BRANCHMIND_TOOLSET=full|daily|core` — same as `--toolset`, but useful for MCP clients that prefer env-based configuration.
 - `BRANCHMIND_WORKSPACE=<id>` — same as `--workspace` (default workspace).
-- `BRANCHMIND_WORKSPACE_LOCK=1` — same as `--workspace-lock`.
+- `BRANCHMIND_WORKSPACE_ALLOWLIST=<id[,id]>` — comma/space/semicolon separated allowlist of workspaces.
+- `BRANCHMIND_WORKSPACE_LOCK=1|0` — same as `--workspace-lock` (set `0` to disable auto-lock).
 - `BRANCHMIND_PROJECT_GUARD=<value>` — same as `--project-guard`.
 - `BRANCHMIND_AGENT_ID=<id>` — same as `--agent-id` (`auto` is supported).
 

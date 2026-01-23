@@ -18,6 +18,7 @@ pub(crate) struct DaemonConfig {
     pub(crate) storage_dir: PathBuf,
     pub(crate) toolset: Toolset,
     pub(crate) default_workspace: Option<String>,
+    pub(crate) workspace_allowlist: Option<Vec<String>>,
     pub(crate) workspace_lock: bool,
     pub(crate) project_guard: Option<String>,
     pub(crate) project_guard_rebind_enabled: bool,
@@ -134,6 +135,7 @@ fn handle_connection(
                             "storage_dir": storage_dir,
                             "toolset": config.toolset.as_str(),
                             "default_workspace": config.default_workspace,
+                            "workspace_allowlist": config.workspace_allowlist,
                             "workspace_lock": config.workspace_lock,
                             "project_guard": config.project_guard,
                             "viewer_enabled": config.viewer_enabled,
@@ -168,6 +170,7 @@ fn build_server(config: &DaemonConfig) -> Result<McpServer, Box<dyn std::error::
         crate::McpServerConfig {
             toolset: config.toolset,
             default_workspace: config.default_workspace.clone(),
+            workspace_allowlist: config.workspace_allowlist.clone(),
             workspace_lock: config.workspace_lock,
             project_guard: config.project_guard.clone(),
             project_guard_rebind_enabled: config.project_guard_rebind_enabled,

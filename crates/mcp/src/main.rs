@@ -34,6 +34,7 @@ pub(crate) struct McpServer {
     store: SqliteStore,
     toolset: Toolset,
     default_workspace: Option<String>,
+    workspace_allowlist: Option<Vec<String>>,
     workspace_lock: bool,
     project_guard: Option<String>,
     project_guard_rebind_enabled: bool,
@@ -57,6 +58,7 @@ pub(crate) struct RunnerAutostartEntry {
 pub(crate) struct McpServerConfig {
     toolset: Toolset,
     default_workspace: Option<String>,
+    workspace_allowlist: Option<Vec<String>>,
     workspace_lock: bool,
     project_guard: Option<String>,
     project_guard_rebind_enabled: bool,
@@ -74,8 +76,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage_dir = parse_storage_dir();
     let toolset = parse_toolset();
-    let default_workspace = parse_default_workspace();
-    let workspace_lock = parse_workspace_lock();
+    let workspace_explicit = parse_workspace_explicit();
+    let workspace_allowlist = parse_workspace_allowlist();
+    let default_workspace = parse_default_workspace(
+        workspace_explicit.as_deref(),
+        workspace_allowlist.as_deref(),
+    );
+    let workspace_lock =
+        parse_workspace_lock(workspace_explicit.is_some(), workspace_allowlist.is_some());
     let project_guard = parse_project_guard(&storage_dir);
     let project_guard_rebind_enabled = parse_project_guard_rebind_enabled(&storage_dir);
     let default_agent_id_config = parse_default_agent_id_config();
@@ -127,6 +135,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 storage_dir,
                 toolset,
                 default_workspace,
+                workspace_explicit: workspace_explicit.is_some(),
+                workspace_allowlist: workspace_allowlist.clone(),
                 workspace_lock,
                 project_guard,
                 project_guard_rebind_enabled,
@@ -160,6 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 storage_dir,
                 toolset,
                 default_workspace,
+                workspace_allowlist: workspace_allowlist.clone(),
                 workspace_lock,
                 project_guard,
                 project_guard_rebind_enabled,
@@ -197,6 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         McpServerConfig {
             toolset,
             default_workspace,
+            workspace_allowlist: workspace_allowlist.clone(),
             workspace_lock,
             project_guard,
             project_guard_rebind_enabled,

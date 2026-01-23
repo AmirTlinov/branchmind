@@ -23,6 +23,8 @@ pub(crate) struct SharedProxyConfig {
     pub(crate) storage_dir: PathBuf,
     pub(crate) toolset: Toolset,
     pub(crate) default_workspace: Option<String>,
+    pub(crate) workspace_explicit: bool,
+    pub(crate) workspace_allowlist: Option<Vec<String>>,
     pub(crate) workspace_lock: bool,
     pub(crate) project_guard: Option<String>,
     pub(crate) project_guard_rebind_enabled: bool,
@@ -322,6 +324,7 @@ fn ensure_local_server<'a>(
             crate::McpServerConfig {
                 toolset: config.toolset,
                 default_workspace: config.default_workspace.clone(),
+                workspace_allowlist: config.workspace_allowlist.clone(),
                 workspace_lock: config.workspace_lock,
                 project_guard: config.project_guard.clone(),
                 project_guard_rebind_enabled: config.project_guard_rebind_enabled,
@@ -669,8 +672,16 @@ fn spawn_daemon(config: &SharedProxyConfig) -> Result<(), Box<dyn std::error::Er
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        if let Some(workspace) = &config.default_workspace {
-            command.arg("--workspace").arg(workspace);
+        if config.workspace_explicit {
+            if let Some(workspace) = &config.default_workspace {
+                command.arg("--workspace").arg(workspace);
+            }
+            if !config.workspace_lock {
+                command.env("BRANCHMIND_WORKSPACE_LOCK", "0");
+            }
+        }
+        if let Some(allowlist) = &config.workspace_allowlist {
+            command.env("BRANCHMIND_WORKSPACE_ALLOWLIST", allowlist.join(","));
         }
         if config.workspace_lock {
             command.arg("--workspace-lock");
@@ -780,6 +791,18 @@ fn daemon_is_compatible(
         return Ok(false);
     }
 
+    let daemon_workspace_allowlist = info
+        .get("workspace_allowlist")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        });
+    if !allowlist_equivalent(&daemon_workspace_allowlist, &config.workspace_allowlist) {
+        return Ok(false);
+    }
+
     let daemon_project_guard = info
         .get("project_guard")
         .and_then(|v| v.as_str())
@@ -797,6 +820,22 @@ fn daemon_is_compatible(
     }
 
     Ok(true)
+}
+
+fn allowlist_equivalent(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            let mut left = left.clone();
+            let mut right = right.clone();
+            left.sort();
+            left.dedup();
+            right.sort();
+            right.dedup();
+            left == right
+        }
+        _ => false,
+    }
 }
 
 fn probe_daemon_info(
