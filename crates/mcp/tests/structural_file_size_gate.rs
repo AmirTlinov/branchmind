@@ -97,10 +97,8 @@ fn should_skip_dir(name: &str) -> bool {
 }
 
 fn relative_path(root: &Path, path: &Path) -> String {
-    let rel = path
-        .strip_prefix(root)
+    path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
-        .replace('\\', "/");
-    rel
+        .replace('\\', "/")
 }
