@@ -10,7 +10,7 @@ help:
 		"  make fmt-check  Verify formatting" \
 		"  make clippy     Run clippy (deny warnings)" \
 		"  make test       Run workspace tests" \
-		"  make run-mcp    Run MCP server (DX auto defaults)"
+		"  make run-mcp    Run MCP server (DX defaults)"
 
 fmt:
 	$(CARGO) fmt
@@ -26,6 +26,6 @@ test:
 
 check: fmt-check clippy test
 
-# Golden path: zero-arg run enables DX auto defaults.
+# Golden path: zero-arg run enables DX defaults.
 run-mcp:
 	$(CARGO) run -p bm_mcp

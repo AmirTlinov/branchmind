@@ -14,7 +14,13 @@ make check
 make run-mcp
 ```
 
-Zero-arg invocation enables DX auto defaults (shared proxy + daily toolset + workspace lock).
+Zero-arg invocation enables flagship DX defaults:
+
+- shared proxy (session-scoped)
+- default workspace (derived from repo root)
+- repo-local store (`.branchmind_rust/`)
+- daily toolset
+- workspace lock (guards against accidental cross-workspace calls)
 
 ## 3) Where to look next
 

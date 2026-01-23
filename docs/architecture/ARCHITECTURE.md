@@ -14,18 +14,24 @@ They must share a single consistency boundary: a task mutation and its emitted e
 
 ## Workspace shape (current)
 
-BranchMind is a Cargo workspace with three crates:
+BranchMind is a Cargo workspace with four crates:
 
 - **`bm_core`** (`crates/core`): pure domain types + invariants (std-only).
 - **`bm_storage`** (`crates/storage`): persistence adapter (single embedded SQLite store).
 - **`bm_mcp`** (`crates/mcp`): MCP stdio JSON-RPC server + tool handlers (schema/budget discipline).
+- **`bm_runner`** (`crates/runner`): first-party external runner for delegation (`JOB-*`).
+  - Executes work out-of-process.
+  - May be started manually or auto-started by `bm_mcp` when enabled.
 
-Dependency direction is strict:
+Dependency direction is strict for the core server:
 
 - `bm_mcp` → `bm_storage` → `bm_core`
 - `bm_mcp` → `bm_core`
 
 `bm_core` must remain independent of transport and persistence.
+
+`bm_runner` is intentionally not part of the core dependency chain; it is an external operator/worker
+process that talks to BranchMind via MCP tools and/or shared store.
 
 ## Boundaries (ports & adapters)
 

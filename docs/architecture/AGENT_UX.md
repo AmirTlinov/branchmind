@@ -123,10 +123,11 @@ The number of tools is part of the UX.
 Progressive disclosure mechanism:
 
 - `tools/list` accepts optional `{ "toolset": "full|daily|core" }` params to override the server default for that call.
-- To reduce boilerplate, tool calls may accept omitted `workspace` when the server is configured with a default
-  workspace (`--workspace` / `BRANCHMIND_WORKSPACE`). Explicit `workspace` always wins.
-- When a default workspace is configured, portal outputs should avoid repeating it in “next action” args (keep actions copy/paste-ready but minimal).
-  - Note: when a default workspace is configured, the server may also treat it as the implicit `workspace` for non-portal tools (DX optimization).
+- To reduce boilerplate, tool calls may omit `workspace`.
+  - The server uses its default workspace (derived deterministically from the repo root, or overridden via
+    `--workspace` / `BRANCHMIND_WORKSPACE`).
+  - Explicit `workspace` always wins.
+- When a default workspace is present, portal outputs should avoid repeating it in “next action” args (keep actions copy/paste-ready but minimal).
 
 ## 5) Budgets everywhere
 

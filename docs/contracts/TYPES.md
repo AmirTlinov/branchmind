@@ -97,7 +97,9 @@ A stable namespace for a project/workspace (IDE-provided).
 
 DX note (default workspace):
 
-- When the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`), callers may omit `workspace` in tool calls and it will default to that workspace.
+- Callers may omit `workspace` in tool calls.
+  - The server uses a deterministic default derived from the repo root directory name.
+  - Override via `--workspace` / `BRANCHMIND_WORKSPACE`.
 - Explicit `workspace` always wins (no silent re-targeting).
 
 DX note (workspace lock, optional):

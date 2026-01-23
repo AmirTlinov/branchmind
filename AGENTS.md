@@ -33,7 +33,9 @@ Optional: a local-only, read-only HTTP viewer may be enabled for human situation
 
 - No outbound network calls (no remote I/O).
 - Loopback-only HTTP viewer is allowed when enabled (read-only, local-first).
-- No code execution.
+- No arbitrary external program execution in `bm_mcp`.
+  - Exception: `bm_mcp` may optionally auto-start the first-party delegation runner (`bm_runner`).
+    See `docs/contracts/DELEGATION.md`.
 - Never log committed artifacts to stdout/stderr outside explicit “read” tools.
 - Treat all stored artifacts as potentially sensitive; do not auto-ingest env/config.
 
@@ -68,7 +70,7 @@ Optional: a local-only, read-only HTTP viewer may be enabled for human situation
 
 ## Project map (current)
 
-The repo is contract-first and already implemented as a workspace with three crates.
+The repo is contract-first and already implemented as a workspace with four crates.
 
 ```text
 docs/
@@ -78,6 +80,7 @@ crates/
   core/                    pure domain (tasks + reasoning primitives)
   storage/                 persistence adapter (single embedded store)
   mcp/                     MCP server (stdio) adapter
+  runner/                  first-party delegation runner (JOB-* worker)
 ```
 
 ## Primary code entrypoints (current)
@@ -85,6 +88,7 @@ crates/
 - MCP server binary: `crates/mcp/src/main.rs`
 - Domain core root: `crates/core/src/lib.rs`
 - Storage adapter root: `crates/storage/src/lib.rs`
+- Runner binary: `crates/runner/src/main.rs`
 
 ## “Agent-first” maintenance rules (flagship)
 

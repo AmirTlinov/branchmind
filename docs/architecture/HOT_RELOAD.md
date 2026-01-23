@@ -7,7 +7,7 @@ rebuilt/replaced, already running MCP server processes will automatically upgrad
 
 - Keep long-lived agent sessions usable during active development.
 - Avoid MCP startup failures (no broken pipes during initialize).
-- Stay deterministic and safe (no outbound network; no code execution features added).
+- Stay deterministic and safe (no outbound network; no arbitrary program execution features added).
 
 ## Mechanism
 

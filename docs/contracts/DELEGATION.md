@@ -5,13 +5,20 @@ while keeping daily views low-noise under tight budgets.
 
 ## Safety boundary (non-negotiable)
 
-BranchMind is deterministic and does **not** execute external programs.
+BranchMind is deterministic and does **not** execute arbitrary external programs.
 
 Delegation is modeled as a **job protocol** inside the store:
 
 - BranchMind creates and tracks `JOB-*` entities.
-- An external **runner** (client/daemon) polls/claims jobs, executes work (e.g. Codex CLI),
-  and reports progress/results back via MCP tools.
+- Work is executed out-of-process by a **runner** (`bm_runner`) that polls/claims jobs and
+  reports progress/results back via MCP tools.
+
+Flagship DX option:
+
+- `bm_mcp` may auto-start the first-party `bm_runner` binary when jobs are queued and no runner
+  lease is active. This is limited to `bm_runner` only (no arbitrary program execution) and can
+  be controlled via `--runner-autostart` / `--no-runner-autostart` and `BRANCHMIND_RUNNER_AUTOSTART=1|0`.
+  - Default: enabled in `daily|core`, disabled in `full`.
 
 This keeps the server safe and deterministic while still enabling real execution.
 

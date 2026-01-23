@@ -5,7 +5,7 @@ These rules exist to keep the MCP server deterministic, cheap to maintain, and s
 ## Golden path
 
 - `make check` (fmt-check + clippy + tests)
-- `make run-mcp` (run the MCP server with DX auto defaults)
+- `make run-mcp` (run the MCP server with DX defaults)
 
 ## Contract-first (non-negotiable)
 

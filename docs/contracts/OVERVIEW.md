@@ -6,7 +6,9 @@ This folder defines the **stable, versioned contracts** for the MCP tools expose
 
 - Contracts describe **logical JSON payloads** for each tool.
 - MCP transport (stdio, JSON-RPC envelope) is not repeated here.
-- All tools are deterministic and side-effect only inside the local store, unless explicitly stated.
+- All tools are deterministic.
+- Side effects are limited to the local embedded store, except for explicitly documented
+  local-only features (e.g. loopback viewer, optional runner autostart).
 
 ## Versioning
 

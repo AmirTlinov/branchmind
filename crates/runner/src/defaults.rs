@@ -37,7 +37,7 @@ fn normalize_workspace_id(raw: &str) -> String {
 }
 
 pub(crate) fn default_storage_dir_from_start(start: &Path) -> PathBuf {
-    // Align with `bm_mcp` auto-mode behavior: prefer repo-root store, not CWD.
+    // Align with `bm_mcp` defaults: prefer repo-root store, not CWD.
     // This prevents "runner is running but sees no jobs" when launched from a subdirectory.
     find_repo_root(start)
         .unwrap_or_else(|| start.to_path_buf())

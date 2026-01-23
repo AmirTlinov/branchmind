@@ -1289,7 +1289,7 @@ Notes:
 
 Action kinds (non-exhaustive baseline):
 
-- `run_test` — run a concrete test and capture evidence (server never executes).
+- `run_test` — run a concrete test and capture evidence (bm_mcp never executes the command; execution is out-of-process).
 - `add_test_stub` — create the smallest runnable test stub for a hypothesis.
 - `resolve_contradiction` — disambiguate supports vs blocks (usually via a decisive test).
 - `use_playbook` — load a deterministic playbook skeleton (e.g. `experiment`, `criteria_matrix`, `debug`).
@@ -1307,7 +1307,7 @@ Accepted conventions (best-effort):
 - `card.meta.cmd` (string) — shorthand form.
 - `card.text` containing a line that starts with `CMD:` — fallback form.
 
-The server never executes commands; it only uses them to rank and suggest “run → capture evidence” actions.
+bm_mcp never executes commands; it only uses them to rank and suggest “run → capture evidence” actions.
 
 ### Draft hygiene (experimental)
 

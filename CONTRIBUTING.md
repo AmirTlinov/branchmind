@@ -8,7 +8,7 @@ Prereqs: Rust toolchain (see `rust-toolchain.toml`).
 make check
 ```
 
-Run the MCP server (DX auto defaults):
+Run the MCP server (DX defaults):
 
 ```bash
 make run-mcp

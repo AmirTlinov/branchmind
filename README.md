@@ -25,19 +25,23 @@ The server is a stdio JSON-RPC MCP backend (no GUI/TUI in the core).
 An optional **local read-only HTTP viewer** can be enabled for human situational awareness.
 
 Delegated work is tracked as `JOB-*` and executed out-of-process by `bm_runner` so `bm_mcp` can stay deterministic.
+For “plug it in and it works” setups, `bm_mcp` may also **auto-start** `bm_runner` (first-party) when jobs are queued.
 
 Runtime flags:
 
-- `--storage-dir <path>` — set the embedded store directory (default: `.branchmind_rust`).
-- `--workspace <id>` — set the **default workspace** for portal tools (lets agents omit `workspace` in daily calls).
+- `--storage-dir <path>` — set the embedded store directory.
+  - Default: repo-local `.branchmind_rust/` (derived from the nearest `.git` root; falls back to current directory).
+- `--workspace <id>` — set the **default workspace** (callers may omit `workspace` in tool calls).
+  - Default: derived deterministically from the repo root directory name.
 - `--workspace-lock` — lock the server to the configured default workspace (rejects mismatched `workspace` to prevent accidental cross-project access).
+- `--project-guard <value>` — override the deterministic project guard stored per workspace.
 - `--agent-id <id>` — set a default **actor id** used by the tasks subsystem (step leases) and some audit/meta fields when supported.
   - `--agent-id auto` creates (once) and reuses a stable default id stored in the embedded DB (survives restarts; reduces “forgot agent_id” drift).
   - Durable memory is **meaning-first and shared-by-default**; noise control uses visibility tags (`v:canon` / `v:draft`) plus explicit disclosure flags (`include_drafts` / `all_lanes` / `view="audit"`).
 - `--toolset full|daily|core` — controls what is **advertised** via `tools/list`:
-  - `full` (default): full parity surface (best for power users and compatibility).
-  - `daily` (DX-first): a **small “portal” set** for everyday agent work (progressive disclosure).
-  - `core` (ultra-minimal): **3-tool “golden path”** for the smallest possible tool surface.
+  - `daily` (default): a small portal-first surface for everyday agent work.
+  - `full`: full parity surface (best for power users and compatibility).
+  - `core`: ultra-minimal tool surface.
 - `--shared` — run a stdio proxy that connects to a shared local daemon (deduplicates processes across sessions).
 - `--daemon` — run the shared local daemon on a Unix socket (no stdio).
 - `--socket <path>` — override the Unix socket path (default: `<storage-dir>/branchmind_mcp.sock`).
@@ -47,11 +51,12 @@ Runtime flags:
 - `--hot-reload` — (unix-only) auto-restart the running process via `exec` when the on-disk `bm_mcp` binary changes (dev DX).
 - `--no-hot-reload` — disable hot reload.
 - `--hot-reload-poll-ms <ms>` — override the hot reload polling interval (default: `1000`).
+- `--runner-autostart` — allow `bm_mcp` to auto-start `bm_runner` when jobs are queued (default in `daily|core`).
+- `--no-runner-autostart` — disable runner autostart (default in `full`).
 
 Hot reload defaults:
 
-- In **auto-mode** (no args and no `BRANCHMIND_*` env), BranchMind uses shared proxy mode and enables hot reload by default.
-- In **shared mode** (`--shared` / `BRANCHMIND_MCP_SHARED=1`), hot reload is enabled by default to keep long-lived local sessions aligned with rebuilds.
+- Hot reload is enabled by default in **session** modes (stdio + shared proxy).
 - To disable: pass `--no-hot-reload` or set `BRANCHMIND_HOT_RELOAD=0`.
 
 Viewer note:
@@ -67,6 +72,7 @@ Environment overrides:
 - `BRANCHMIND_VIEWER=1` — same as `--viewer`.
 - `BRANCHMIND_VIEWER=0` — same as `--no-viewer`.
 - `BRANCHMIND_VIEWER_PORT=<port>` — same as `--viewer-port`.
+- `BRANCHMIND_RUNNER_AUTOSTART=1|0` — same as `--runner-autostart` / `--no-runner-autostart`.
 
 `tools/list` also supports optional params `{ "toolset": "full|daily|core" }` to override the default for a single call.
 
@@ -79,7 +85,7 @@ Output formats (DX):
 Environment:
 
 - `BRANCHMIND_TOOLSET=full|daily|core` — same as `--toolset`, but useful for MCP clients that prefer env-based configuration.
-- `BRANCHMIND_WORKSPACE=<id>` — same as `--workspace` (default workspace for portal tools).
+- `BRANCHMIND_WORKSPACE=<id>` — same as `--workspace` (default workspace).
 - `BRANCHMIND_WORKSPACE_LOCK=1` — same as `--workspace-lock`.
 - `BRANCHMIND_PROJECT_GUARD=<value>` — same as `--project-guard`.
 - `BRANCHMIND_AGENT_ID=<id>` — same as `--agent-id` (`auto` is supported).
@@ -108,9 +114,10 @@ Multi-agent lanes (DX):
 
 ## Delegation runner (bm_runner)
 
-`bm_mcp` never executes external programs; it only persists tasks/memory/jobs deterministically.
+`bm_mcp` does not execute arbitrary external programs; it only persists tasks/memory/jobs deterministically.
+Delegated work is executed out-of-process by `bm_runner`.
 
-To make delegated jobs “real”, run the external runner:
+To make delegated jobs “real”, run the external runner (or allow `bm_mcp` to auto-start it):
 
 - `bm_runner` polls `JOB-*`, claims work, runs a headless Codex session, and reports progress/results back via MCP.
 - It supports long runs (up to 24h by default) via heartbeats, time-slices, and stale-job reclaim.
