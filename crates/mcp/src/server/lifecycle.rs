@@ -10,6 +10,8 @@ impl McpServer {
             store,
             toolset: cfg.toolset,
             default_workspace: cfg.default_workspace,
+            workspace_explicit: cfg.workspace_explicit,
+            workspace_override: None,
             workspace_allowlist: cfg.workspace_allowlist,
             workspace_lock: cfg.workspace_lock,
             project_guard: cfg.project_guard,

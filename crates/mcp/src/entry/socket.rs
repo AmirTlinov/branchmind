@@ -18,6 +18,7 @@ pub(crate) struct DaemonConfig {
     pub(crate) storage_dir: PathBuf,
     pub(crate) toolset: Toolset,
     pub(crate) default_workspace: Option<String>,
+    pub(crate) workspace_explicit: bool,
     pub(crate) workspace_allowlist: Option<Vec<String>>,
     pub(crate) workspace_lock: bool,
     pub(crate) project_guard: Option<String>,
@@ -131,16 +132,17 @@ fn handle_connection(
                     Some(crate::json_rpc_response(
                         request.id,
                         json!({
-                            "fingerprint": crate::build_fingerprint(),
-                            "storage_dir": storage_dir,
-                            "toolset": config.toolset.as_str(),
-                            "default_workspace": config.default_workspace,
-                            "workspace_allowlist": config.workspace_allowlist,
-                            "workspace_lock": config.workspace_lock,
-                            "project_guard": config.project_guard,
-                            "viewer_enabled": config.viewer_enabled,
-                            "viewer_port": config.viewer_port
-                        }),
+                                        "fingerprint": crate::build_fingerprint(),
+                                        "storage_dir": storage_dir,
+                        "toolset": config.toolset.as_str(),
+                        "default_workspace": config.default_workspace,
+                        "workspace_explicit": config.workspace_explicit,
+                        "workspace_allowlist": config.workspace_allowlist,
+                        "workspace_lock": config.workspace_lock,
+                        "project_guard": config.project_guard,
+                        "viewer_enabled": config.viewer_enabled,
+                                        "viewer_port": config.viewer_port
+                                    }),
                     ))
                 } else {
                     server.handle(request)
@@ -170,6 +172,7 @@ fn build_server(config: &DaemonConfig) -> Result<McpServer, Box<dyn std::error::
         crate::McpServerConfig {
             toolset: config.toolset,
             default_workspace: config.default_workspace.clone(),
+            workspace_explicit: config.workspace_explicit,
             workspace_allowlist: config.workspace_allowlist.clone(),
             workspace_lock: config.workspace_lock,
             project_guard: config.project_guard.clone(),

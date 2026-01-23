@@ -7,13 +7,17 @@ use std::collections::HashSet;
 impl McpServer {
     pub(super) fn preprocess_args(&mut self, name: &str, args: &mut Value) -> Option<Value> {
         let args_obj = args.as_object_mut()?;
+        let effective_default = self
+            .workspace_override
+            .as_deref()
+            .or(self.default_workspace.as_deref());
 
         // DX: when a default workspace is configured, treat it as the implicit workspace
         // for all tool calls unless the caller explicitly provides `workspace`.
         //
         // This keeps daily usage cheap (no boilerplate) and makes BM-L1 "copy/paste" commands
         // usable across restarts when the server is scoped to a single project.
-        if let Some(default_workspace) = self.default_workspace.as_deref()
+        if let Some(default_workspace) = effective_default
             && !args_obj.contains_key("workspace")
         {
             args_obj.insert(
@@ -45,18 +49,31 @@ impl McpServer {
             && let Some(workspace) = args_obj.get("workspace").and_then(|v| v.as_str())
             && workspace != default_workspace
         {
+            let mut retry_args = args_obj.clone();
+            retry_args.remove("workspace");
+            let mut suggestions = Vec::new();
+            if retry_args.is_empty() {
+                suggestions.push(crate::suggest_call(
+                    name,
+                    "Retry using the default workspace (omit workspace).",
+                    "high",
+                    serde_json::json!({}),
+                ));
+            } else {
+                suggestions.push(crate::suggest_call(
+                    name,
+                    "Retry using the default workspace (omit workspace).",
+                    "high",
+                    Value::Object(retry_args),
+                ));
+            }
             return Some(crate::ai_error_with(
                 "WORKSPACE_LOCKED",
                 "workspace is locked to the configured default workspace",
                 Some(
                     "Drop the workspace argument (use the default) or restart the server without workspace lock.",
                 ),
-                vec![crate::suggest_call(
-                    name,
-                    "Retry using the default workspace (omit workspace).",
-                    "high",
-                    serde_json::json!({}),
-                )],
+                suggestions,
             ));
         }
 
@@ -81,11 +98,41 @@ impl McpServer {
             } else {
                 format!("Allowed workspaces: {preview}")
             };
+            let preferred = self
+                .default_workspace
+                .as_deref()
+                .and_then(|ws| {
+                    if allowlist.iter().any(|allowed| allowed == ws) {
+                        Some(ws.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| allowed.first().cloned());
+            let mut suggestions = Vec::new();
+            if let Some(preferred) = preferred {
+                let mut retry_args = args_obj.clone();
+                retry_args.insert("workspace".to_string(), Value::String(preferred.clone()));
+                suggestions.push(crate::suggest_call(
+                    name,
+                    "Retry with an allowed workspace.",
+                    "high",
+                    Value::Object(retry_args),
+                ));
+                if name != "workspace_use" {
+                    suggestions.push(crate::suggest_call(
+                        "workspace_use",
+                        "Switch the session workspace.",
+                        "medium",
+                        serde_json::json!({ "workspace": preferred }),
+                    ));
+                }
+            }
             return Some(crate::ai_error_with(
                 "WORKSPACE_NOT_ALLOWED",
                 "workspace is not in the allowlist",
                 Some(&hint),
-                Vec::new(),
+                suggestions,
             ));
         }
 
@@ -130,6 +177,7 @@ impl McpServer {
             super::budgets::apply_read_tool_default_budgets(name, args_obj);
         }
         if self.default_workspace.is_none()
+            && self.workspace_override.is_none()
             && super::portal::is_portal_tool(name)
             && !args_obj.contains_key("workspace")
         {

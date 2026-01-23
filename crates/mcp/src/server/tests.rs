@@ -34,6 +34,7 @@ fn project_guard_mismatch_errors_when_rebind_disabled() {
         crate::McpServerConfig {
             toolset: crate::Toolset::Core,
             default_workspace: Some("demo".to_string()),
+            workspace_explicit: false,
             workspace_allowlist: None,
             workspace_lock: true,
             project_guard: Some("repo:bbbbbbbbbbbbbbbb".to_string()),
@@ -73,6 +74,7 @@ fn project_guard_mismatch_rebinds_when_enabled() {
         crate::McpServerConfig {
             toolset: crate::Toolset::Core,
             default_workspace: Some("demo".to_string()),
+            workspace_explicit: false,
             workspace_allowlist: None,
             workspace_lock: true,
             project_guard: Some("repo:bbbbbbbbbbbbbbbb".to_string()),
@@ -112,6 +114,7 @@ fn portal_auto_budget_escalation_removes_budget_warnings() {
         crate::McpServerConfig {
             toolset: crate::Toolset::Daily,
             default_workspace: Some("demo".to_string()),
+            workspace_explicit: false,
             workspace_allowlist: None,
             workspace_lock: true,
             project_guard: None,

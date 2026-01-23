@@ -58,7 +58,7 @@ Planned:
 
 Present:
 
-- init / status / help / diagnostics
+- init / status / workspace_use / help / diagnostics
 - branch_create / branch_list / checkout
 - macro_branch_note
 - notes_commit / show / diff / merge / export

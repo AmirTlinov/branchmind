@@ -87,6 +87,31 @@ impl McpServer {
 
         let build_profile = build_profile_label();
         let git_sha = build_git_sha();
+        let workspace_effective = self
+            .workspace_override
+            .as_deref()
+            .or(self.default_workspace.as_deref())
+            .map(|v| v.to_string());
+        let workspace_mode = if self.workspace_allowlist.is_some() {
+            "allowlist"
+        } else if self.workspace_explicit {
+            "explicit"
+        } else {
+            "auto"
+        };
+        let (workspace_allowlist, allowlist_count, allowlist_truncated) =
+            if let Some(list) = &self.workspace_allowlist {
+                let mut list = list.clone();
+                list.sort();
+                let count = list.len();
+                let truncated = count > 20;
+                if truncated {
+                    list.truncate(20);
+                }
+                (Some(list), count, truncated)
+            } else {
+                (None, 0, false)
+            };
 
         let (disclosure_toolset, disclosure_hint) = match self.toolset {
             crate::Toolset::Core => (
@@ -142,6 +167,12 @@ impl McpServer {
             "defaults": defaults,
             "workspace_policy": {
                 "default_workspace": self.default_workspace.clone(),
+                "workspace_override": self.workspace_override.clone(),
+                "workspace_effective": workspace_effective,
+                "workspace_mode": workspace_mode,
+                "workspace_allowlist": workspace_allowlist,
+                "workspace_allowlist_count": allowlist_count,
+                "workspace_allowlist_truncated": allowlist_truncated,
                 "workspace_lock": self.workspace_lock,
                 "project_guard_configured": self.project_guard.is_some(),
                 "project_guard_stored": project_guard_stored,

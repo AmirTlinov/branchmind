@@ -34,6 +34,8 @@ pub(crate) struct McpServer {
     store: SqliteStore,
     toolset: Toolset,
     default_workspace: Option<String>,
+    workspace_explicit: bool,
+    workspace_override: Option<String>,
     workspace_allowlist: Option<Vec<String>>,
     workspace_lock: bool,
     project_guard: Option<String>,
@@ -58,6 +60,7 @@ pub(crate) struct RunnerAutostartEntry {
 pub(crate) struct McpServerConfig {
     toolset: Toolset,
     default_workspace: Option<String>,
+    workspace_explicit: bool,
     workspace_allowlist: Option<Vec<String>>,
     workspace_lock: bool,
     project_guard: Option<String>,
@@ -170,6 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 storage_dir,
                 toolset,
                 default_workspace,
+                workspace_explicit: workspace_explicit.is_some(),
                 workspace_allowlist: workspace_allowlist.clone(),
                 workspace_lock,
                 project_guard,
@@ -208,6 +212,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         McpServerConfig {
             toolset,
             default_workspace,
+            workspace_explicit: workspace_explicit.is_some(),
             workspace_allowlist: workspace_allowlist.clone(),
             workspace_lock,
             project_guard,

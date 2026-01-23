@@ -28,6 +28,17 @@ pub(crate) fn core_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "workspace_use",
+            "description": "Switch the active workspace for this session (no restart).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
             "name": "open",
             "description": "Open a single artifact by stable id/reference (CARD-..., <doc>@<seq>, a:<anchor>, runner:<id>, TASK-..., PLAN-..., JOB-...).",
             "inputSchema": {

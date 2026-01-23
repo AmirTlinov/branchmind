@@ -9,6 +9,7 @@ pub(super) fn is_portal_tool(name: &str) -> bool {
             | "anchor_snapshot"
             | "macro_anchor_note"
             | "anchors_export"
+            | "workspace_use"
             | "tasks_macro_start"
             | "tasks_macro_delegate"
             | "tasks_macro_close_step"

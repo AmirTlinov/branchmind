@@ -324,6 +324,7 @@ fn ensure_local_server<'a>(
             crate::McpServerConfig {
                 toolset: config.toolset,
                 default_workspace: config.default_workspace.clone(),
+                workspace_explicit: config.workspace_explicit,
                 workspace_allowlist: config.workspace_allowlist.clone(),
                 workspace_lock: config.workspace_lock,
                 project_guard: config.project_guard.clone(),

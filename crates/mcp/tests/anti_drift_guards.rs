@@ -179,6 +179,57 @@ fn workspace_allowlist_rejects_unknown_workspace() {
 }
 
 #[test]
+fn workspace_use_overrides_default_for_session() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let pid = std::process::id();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let storage_dir = std::env::temp_dir().join(format!("bm_workspace_use_{pid}_{nonce}"));
+    std::fs::create_dir_all(&storage_dir).expect("create temp dir");
+
+    let mut server = start_with_env(&storage_dir, &[], &[("BRANCHMIND_WORKSPACE_LOCK", "0")]);
+    server.initialize();
+
+    let switch = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "workspace_use", "arguments": { "workspace": "ws_alt" } }
+    }));
+    assert_eq!(
+        switch
+            .get("result")
+            .and_then(|v| v.get("isError"))
+            .and_then(|v| v.as_bool()),
+        Some(false)
+    );
+
+    let init = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "init", "arguments": {} }
+    }));
+    let init_text = extract_tool_text(&init);
+    assert_eq!(
+        init_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        init_text
+            .get("result")
+            .and_then(|v| v.get("workspace"))
+            .and_then(|v| v.as_str()),
+        Some("ws_alt")
+    );
+
+    let _ = std::fs::remove_dir_all(&storage_dir);
+}
+
+#[test]
 fn project_guard_mismatch_is_typed_error() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -330,6 +381,7 @@ fn advertised_portal_toolsets_stay_minimal() {
             "tasks_macro_delegate",
             "think_card",
             "think_playbook",
+            "workspace_use",
         ],
         "daily toolset must stay the small portal set"
     );

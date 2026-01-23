@@ -518,8 +518,8 @@ fn tools_list_daily_toolset_is_curated() {
     assert!(!has_tag_delete, "daily toolset must hide tag_delete");
 
     assert!(
-        tools.len() <= 11,
-        "daily toolset must stay small (<= 11 tools)"
+        tools.len() <= 12,
+        "daily toolset must stay small (<= 12 tools)"
     );
 }
 
@@ -538,8 +538,8 @@ fn tools_list_params_can_override_toolset() {
         .and_then(|v| v.as_array())
         .expect("daily result.tools");
     assert!(
-        daily_tools.len() <= 11,
-        "server daily toolset should advertise <= 11 tools"
+        daily_tools.len() <= 12,
+        "server daily toolset should advertise <= 12 tools"
     );
 
     let full_list = server.request(json!({

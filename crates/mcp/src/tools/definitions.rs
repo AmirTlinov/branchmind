@@ -56,6 +56,7 @@ fn is_daily_tool_name(name: &str) -> bool {
             | "tasks_jobs_radar"
             | "open"
             | "skill"
+            | "workspace_use"
             | "think_card"
             | "think_playbook"
     )

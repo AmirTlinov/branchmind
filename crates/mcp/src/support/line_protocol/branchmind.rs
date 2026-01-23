@@ -12,10 +12,23 @@ pub(super) fn render_branchmind_status_lines(
     _toolset: Toolset,
 ) -> String {
     let result = response.get("result").unwrap_or(&Value::Null);
+    let workspace = result
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)));
     let checkout = result
         .get("checkout")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
+    let workspace_mode = result
+        .get("workspace_policy")
+        .and_then(|v| v.get("workspace_mode"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)));
+    let workspace_lock = result
+        .get("workspace_policy")
+        .and_then(|v| v.get("workspace_lock"))
+        .and_then(|v| v.as_bool());
     let version = result
         .get("server")
         .and_then(|v| v.get("version"))
@@ -43,6 +56,17 @@ pub(super) fn render_branchmind_status_lines(
 
     let mut lines = Vec::new();
     let mut state = format!("ready checkout={checkout}");
+    if let Some(workspace) = workspace {
+        state.push_str(" workspace=");
+        state.push_str(workspace);
+    }
+    if let Some(mode) = workspace_mode {
+        state.push_str(" mode=");
+        state.push_str(mode);
+    }
+    if workspace_lock == Some(true) {
+        state.push_str(" lock=true");
+    }
     if let Some(version) = version {
         state.push_str(" version=");
         state.push_str(version);
@@ -67,6 +91,39 @@ pub(super) fn render_branchmind_status_lines(
     // The portal output should remain tiny. Prefer a safe, read-only next step that can be run
     // immediately without extra parameters.
     lines.push("tasks_snapshot".to_string());
+    append_warnings_as_warnings(&mut lines, response);
+    lines.join("\n")
+}
+
+pub(super) fn render_branchmind_workspace_use_lines(_args: &Value, response: &Value) -> String {
+    let result = response.get("result").unwrap_or(&Value::Null);
+    let workspace = result
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)))
+        .unwrap_or("-");
+    let previous = result
+        .get("previous")
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)));
+    let cleared = result
+        .get("override_cleared")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let mut lines = Vec::new();
+    let mut state = format!("workspace now={workspace}");
+    if let Some(previous) = previous
+        && previous != workspace
+    {
+        state.push_str(" prev=");
+        state.push_str(previous);
+    }
+    if cleared {
+        state.push_str(" override=cleared");
+    }
+    lines.push(state);
+    lines.push("status".to_string());
     append_warnings_as_warnings(&mut lines, response);
     lines.join("\n")
 }
