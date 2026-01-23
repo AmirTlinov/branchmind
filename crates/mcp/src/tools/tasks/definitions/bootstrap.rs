@@ -37,6 +37,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                     "task_title": { "type": "string" },
                     "description": { "type": "string" },
                     "template": { "type": "string" },
+                    "reasoning_mode": { "type": "string" },
                     "steps": {
                         "type": "array",
                         "items": {
@@ -47,7 +48,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                                 "tests": { "type": "array", "items": { "type": "string" } },
                                 "blockers": { "type": "array", "items": { "type": "string" } }
                             },
-                            "required": ["title", "success_criteria", "tests"]
+                            "required": ["title", "success_criteria"]
                         }
                     },
                     "think": think_schema()
@@ -70,6 +71,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                     "task_title": { "type": "string" },
                     "description": { "type": "string" },
                     "template": { "type": "string" },
+                    "reasoning_mode": { "type": "string" },
                     "steps": {
                         "type": "array",
                         "items": {
@@ -80,14 +82,77 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                                 "tests": { "type": "array", "items": { "type": "string" } },
                                 "blockers": { "type": "array", "items": { "type": "string" } }
                             },
-                            "required": ["title", "success_criteria", "tests"]
+                            "required": ["title", "success_criteria"]
                         }
                     },
                     "think": think_schema(),
                     "view": { "type": "string" },
+                    "refs": { "type": "boolean" },
                     "resume_max_chars": { "type": "integer" }
                 },
                 "required": ["task_title"]
+            }
+        }),
+        json!({
+            "name": "tasks_macro_delegate",
+            "description": "One-call delegate: bootstrap task + seed pinned cockpit + return super-resume.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "agent_id": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "parent": { "type": "string" },
+                    "plan_title": { "type": "string" },
+                    "plan_template": { "type": "string" },
+                    "task_title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "reasoning_mode": { "type": "string" },
+                    "anchor": { "type": "string" },
+                    "anchor_kind": { "type": "string" },
+                    "cockpit": { "type": "string" },
+                    "job": { "type": "boolean" },
+                    "job_kind": { "type": "string" },
+                    "job_priority": { "type": "string" },
+                    "view": { "type": "string" },
+                    "refs": { "type": "boolean" },
+                    "resume_max_chars": { "type": "integer" }
+                },
+                "required": ["task_title"]
+            }
+        }),
+        json!({
+            "name": "tasks_macro_fanout_jobs",
+            "description": "Fan-out: split one task into multiple per-anchor jobs (3–10 recommended).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "agent_id": { "type": "string" },
+                    "task": { "type": "string" },
+                    "anchors": { "type": "array", "items": { "type": "string" } },
+                    "prompt": { "type": "string" },
+                    "title_prefix": { "type": "string" },
+                    "job_kind": { "type": "string" },
+                    "job_priority": { "type": "string" }
+                },
+                "required": ["anchors", "prompt"]
+            }
+        }),
+        json!({
+            "name": "tasks_macro_merge_report",
+            "description": "Fan-in: merge multiple delegated jobs into one pinned canonical report.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "agent_id": { "type": "string" },
+                    "task": { "type": "string" },
+                    "jobs": { "type": "array", "items": { "type": "string" } },
+                    "title": { "type": "string" },
+                    "pin": { "type": "boolean" }
+                },
+                "required": ["jobs"]
             }
         }),
         json!({
@@ -109,6 +174,14 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                         ]
                     },
                     "note": { "type": "string" },
+                    "override": {
+                        "type": "object",
+                        "properties": {
+                            "reason": { "type": "string" },
+                            "risk": { "type": "string" }
+                        },
+                        "required": ["reason", "risk"]
+                    },
                     "proof": {
                         "anyOf": [
                             { "type": "string" },
@@ -117,6 +190,7 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                         ]
                     },
                     "view": { "type": "string" },
+                    "refs": { "type": "boolean" },
                     "resume_max_chars": { "type": "integer" }
                 },
                 "required": []

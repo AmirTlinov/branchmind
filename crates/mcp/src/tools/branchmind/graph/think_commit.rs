@@ -27,6 +27,31 @@ impl McpServer {
             supports,
             blocks,
         } = args;
+        let mut parsed = parsed;
+
+        // Meaning-mode: durable artifacts are shared-by-default (agent_id is audit/meta only).
+        // Keep legacy lane tags readable (as draft markers), but ensure new writes are normalized.
+        apply_lane_stamp_to_tags(&mut parsed.tags, None);
+        apply_lane_stamp_to_meta(&mut parsed.meta_value, None);
+
+        // Visibility defaults (type-based) keep the portal low-noise without deleting anything.
+        //
+        // Principle: "frontier lives in canon, chatter lives in draft".
+        // - hypothesis/question are the active frontier and should be visible in smart views.
+        // - decision/evidence/test are durable anchors and should be visible by default.
+        // - update is a compact narrative artifact and should be visible in explore/audit views.
+        // - note (and other free-form) default to draft to prevent long-term noise.
+        if !tags_has(&parsed.tags, VIS_TAG_DRAFT) && !tags_has(&parsed.tags, VIS_TAG_CANON) {
+            let default = match parsed.card_type.trim().to_ascii_lowercase().as_str() {
+                "decision" | "evidence" | "test" | "hypothesis" | "question" | "update" => {
+                    VIS_TAG_CANON
+                }
+                _ => VIS_TAG_DRAFT,
+            };
+            parsed.tags.push(default.to_string());
+        }
+        parsed.tags =
+            bm_core::graph::normalize_tags(&parsed.tags).unwrap_or_else(|_| parsed.tags.clone());
         let card_id = match parsed.card_id.clone() {
             Some(id) => id,
             None => match self.store.next_card_id(workspace) {

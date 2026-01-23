@@ -38,7 +38,7 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Task", "template": "principal-task" } }
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Task", "template": "principal-task", "reasoning_mode": "normal" } }
     }));
     let start_text = extract_tool_text_str(&started);
     assert_tag_light(&start_text);
@@ -69,18 +69,30 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
     let snap_text = extract_tool_text_str(&snapshot);
     assert_tag_light(&snap_text);
     let snap_lines = snap_text.lines().collect::<Vec<_>>();
-    assert_eq!(
-        snap_lines.len(),
-        2,
-        "snapshot should remain 2 lines even when proof is required"
+    assert!(
+        snap_lines.len() == 2,
+        "snapshot must stay 2 lines (state + command) in daily flagship, got {} lines:\n{snap_text}",
+        snap_lines.len()
     );
     assert!(
-        snap_lines[1].starts_with("tasks_macro_close_step"),
-        "snapshot should suggest closing the next step"
+        snap_lines[0].contains("| ref="),
+        "snapshot state line must include ref=... for navigation"
     );
     assert!(
-        snap_lines[1].contains("proof=["),
-        "proof-required step should inject a proof placeholder into the next action"
+        snap_lines[1].starts_with("think_card"),
+        "when where=unknown, snapshot must suggest a canonical anchor attach command"
+    );
+    assert!(
+        snap_lines[1].contains("v:canon"),
+        "anchor attach suggestion must be canonical (v:canon)"
+    );
+    assert!(
+        snap_lines[0].contains("| backup tasks_macro_close_step"),
+        "snapshot state line must preserve progress as a backup command"
+    );
+    assert!(
+        snap_lines[0].contains("proof=["),
+        "proof-required step must inject a proof placeholder into the backup progress command"
     );
 
     // Attempting to close without proof must produce a typed error with a portal-first retry.
@@ -133,7 +145,7 @@ fn proof_weak_warning_is_soft_and_does_not_block_closing() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Weak Task", "template": "principal-task" } }
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Weak Task", "template": "principal-task", "reasoning_mode": "normal" } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -186,7 +198,7 @@ fn proof_markdown_bullets_are_normalized_and_do_not_trigger_proof_weak() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof MD Bullets", "template": "principal-task" } }
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof MD Bullets", "template": "principal-task", "reasoning_mode": "normal" } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -244,7 +256,7 @@ fn proof_url_attachment_satisfies_soft_link_receipt_lint() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Attachment Link", "template": "principal-task" } }
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Attachment Link", "template": "principal-task", "reasoning_mode": "normal" } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -299,7 +311,7 @@ fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Placeholder Task", "template": "principal-task" } }
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Placeholder Task", "template": "principal-task", "reasoning_mode": "normal" } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -347,5 +359,58 @@ fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
     assert!(
         lines[1].contains("proof="),
         "recovery command must include proof template"
+    );
+}
+
+#[test]
+fn proof_in_note_is_salvaged_and_satisfies_proof_required_gate() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_in_note_is_salvaged_and_satisfies_proof_required_gate",
+        &["--toolset", "daily", "--workspace", "ws_proof_note_salvage"],
+    );
+
+    let started = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Note Salvage", "template": "principal-task", "reasoning_mode": "normal" } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!( {
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    // Provide proof as receipts inside the note field (no explicit proof arg).
+    // The macro must salvage the receipts and satisfy the proof-required gate.
+    let closed = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_close_step",
+            "arguments": {
+                "note": "CMD: cargo test\nLINK: https://example.com/ci/run/789"
+            }
+        }
+    }));
+    let text = extract_tool_text_str(&closed);
+    assert_tag_light(&text);
+    assert!(
+        !text.starts_with("ERROR:"),
+        "macro_close_step should succeed when proof receipts are present in note"
+    );
+    assert!(
+        !text.lines().any(|l| l.starts_with("WARNING: PROOF_WEAK")),
+        "salvaged proof receipts should satisfy the soft lint when both CMD+LINK are present"
     );
 }

@@ -71,9 +71,7 @@ impl McpServer {
         let root_dir_path = PathBuf::from(&root_dir_raw);
         let root_dir = match canonicalize_existing_dir(&root_dir_path) {
             Ok(v) => v,
-            Err(err) => {
-                return ai_error("INVALID_INPUT", &format!("root_dir: {err}"));
-            }
+            Err(err) => return ai_error("INVALID_INPUT", &format!("root_dir: {err}")),
         };
 
         let cwd_prefix = cwd_prefix_raw

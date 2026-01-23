@@ -16,6 +16,35 @@ pub(crate) fn format_store_error(err: StoreError) -> String {
             format!("Revision mismatch: expected={expected} actual={actual}")
         }
         StoreError::UnknownId => "Unknown id".to_string(),
+        StoreError::JobNotClaimable { job_id, status } => {
+            format!("Job not claimable: job_id={job_id} status={status}")
+        }
+        StoreError::JobNotRunning { job_id, status } => {
+            format!("Job not running: job_id={job_id} status={status}")
+        }
+        StoreError::JobClaimMismatch {
+            job_id,
+            expected_runner_id,
+            actual_runner_id,
+            expected_revision,
+            actual_revision,
+        } => match expected_runner_id {
+            Some(expected_runner_id) => format!(
+                "Job claim mismatch: job_id={job_id} expected_runner_id={expected_runner_id} actual_runner_id={actual_runner_id} expected_revision={expected_revision} actual_revision={actual_revision}"
+            ),
+            None => format!(
+                "Job claim mismatch: job_id={job_id} expected_runner_id=<none> actual_runner_id={actual_runner_id} expected_revision={expected_revision} actual_revision={actual_revision}"
+            ),
+        },
+        StoreError::JobNotMessageable { job_id, status } => {
+            format!("Job not messageable: job_id={job_id} status={status}")
+        }
+        StoreError::JobAlreadyTerminal { job_id, status } => {
+            format!("Job already terminal: job_id={job_id} status={status}")
+        }
+        StoreError::JobNotRequeueable { job_id, status } => {
+            format!("Job not requeueable: job_id={job_id} status={status}")
+        }
         StoreError::UnknownBranch => "Unknown branch".to_string(),
         StoreError::UnknownConflict => "Unknown conflict".to_string(),
         StoreError::ConflictAlreadyResolved => "Conflict already resolved".to_string(),
@@ -214,6 +243,23 @@ fn enrich_invalid_input_message(message: &str) -> String {
         return trimmed.to_string();
     }
 
+    // Graph node ids are used across the system (cards, graph edges, etc). When a user/agent
+    // accidentally pastes large text into an id field, the raw storage error is hard to act on.
+    // Provide a copy/paste-friendly hint that points back to stable ids.
+    if trimmed == "node id is too long" {
+        return "id: too long (max 1024 chars); fix: use a stable short id (CARD-... / TASK-... / PLAN-... / JOB-... / a:<anchor>)".to_string();
+    }
+    if trimmed == "node id must not be empty" {
+        return "id: expected non-empty; fix: use CARD-... / TASK-... / PLAN-... / JOB-... / a:<anchor>".to_string();
+    }
+    if trimmed == "node id must not contain '|'" {
+        return "id: must not contain '|'; fix: use a stable short id (CARD-... / TASK-... / ... )"
+            .to_string();
+    }
+    if trimmed == "node id contains control characters" {
+        return "id: contains control characters; fix: copy the id again (CARD-... / TASK-... / ...)".to_string();
+    }
+
     if trimmed == "arguments must be an object" {
         return "arguments: expected object; fix: {\"workspace\":\"ws\"}".to_string();
     }
@@ -306,6 +352,15 @@ fn invalid_input_hints(message: &str) -> Vec<Value> {
             "kind": "type",
             "field": "arguments",
             "expected": "object"
+        }));
+        return hints;
+    }
+
+    if trimmed == "node id is too long" {
+        hints.push(json!({
+            "kind": "length",
+            "subject": "graph_node_id",
+            "max_chars": 1024
         }));
         return hints;
     }

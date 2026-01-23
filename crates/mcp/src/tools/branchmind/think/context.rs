@@ -33,12 +33,16 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let include_drafts = match optional_bool(args_obj, "include_drafts") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
         let all_lanes = match optional_bool(args_obj, "all_lanes") {
             Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
         let warm_archive = view.warm_archive();
-        let all_lanes = all_lanes || view.implies_all_lanes();
+        let all_lanes = all_lanes || include_drafts || view.implies_all_lanes();
         let step = match optional_string(args_obj, "step") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -81,7 +85,7 @@ impl McpServer {
             match super::step_context::resolve_step_context_from_args(
                 self, &workspace, args_obj, step_raw,
             ) {
-                Ok(v) => Some(v),
+                Ok(v) => v,
                 Err(resp) => return resp,
             }
         } else {
@@ -105,10 +109,10 @@ impl McpServer {
 
         let cards = match fetch_relevance_first_cards(
             self,
-            &workspace,
-            RelevanceFirstCardsRequest {
-                branch: &branch,
-                graph_doc: &graph_doc,
+            RelevanceFirstCardsArgs {
+                workspace: &workspace,
+                branch: branch.as_str(),
+                graph_doc: graph_doc.as_str(),
                 cards_limit: limit_cards,
                 focus_step_tag: step_tag,
                 agent_id: agent_id.as_deref(),

@@ -19,6 +19,7 @@ pub(crate) fn steps_task_ops_definitions() -> Vec<Value> {
                     "context": { "type": "string" },
                     "priority": { "type": "string" },
                     "new_domain": { "type": "string" },
+                    "reasoning_mode": { "type": "string" },
                     "tags": { "type": "array", "items": { "type": "string" } },
                     "depends_on": { "type": "array", "items": { "type": "string" } },
                     "contract": { "type": "string" },

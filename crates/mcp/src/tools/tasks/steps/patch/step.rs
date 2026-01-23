@@ -42,6 +42,8 @@ pub(super) fn handle_step_patch(
         success_criteria: None,
         tests: None,
         blockers: None,
+        next_action: None,
+        stop_criteria: None,
         proof_tests_mode: None,
         proof_security_mode: None,
         proof_perf_mode: None,
@@ -99,6 +101,133 @@ pub(super) fn handle_step_patch(
                 }
                 patch.blockers = Some(blockers_list.clone());
                 fields.push("blockers");
+            }
+            "next_action" => {
+                if op_name == "set" {
+                    let Some(Value::String(v)) = value else {
+                        return ai_error("INVALID_INPUT", "next_action must be a string");
+                    };
+                    patch.next_action = Some(Some(v.clone()));
+                    fields.push("next_action");
+                } else if op_name == "unset" {
+                    patch.next_action = Some(None);
+                    fields.push("next_action");
+                } else {
+                    return ai_error("INVALID_INPUT", "next_action supports only set|unset");
+                }
+            }
+            "stop_criteria" => {
+                if op_name == "set" {
+                    let Some(Value::String(v)) = value else {
+                        return ai_error("INVALID_INPUT", "stop_criteria must be a string");
+                    };
+                    patch.stop_criteria = Some(Some(v.clone()));
+                    fields.push("stop_criteria");
+                } else if op_name == "unset" {
+                    patch.stop_criteria = Some(None);
+                    fields.push("stop_criteria");
+                } else {
+                    return ai_error("INVALID_INPUT", "stop_criteria supports only set|unset");
+                }
+            }
+            "proof_tests_mode" => {
+                if op_name == "unset" {
+                    patch.proof_tests_mode = Some(bm_storage::ProofMode::Off);
+                    fields.push("proof_tests_mode");
+                } else if op_name == "set" {
+                    let Some(Value::String(v)) = value else {
+                        return ai_error("INVALID_INPUT", "proof_tests_mode must be a string");
+                    };
+                    patch.proof_tests_mode = Some(match v.as_str() {
+                        "off" => bm_storage::ProofMode::Off,
+                        "warn" => bm_storage::ProofMode::Warn,
+                        "require" => bm_storage::ProofMode::Require,
+                        _ => {
+                            return ai_error(
+                                "INVALID_INPUT",
+                                "proof_tests_mode must be one of: off|warn|require",
+                            );
+                        }
+                    });
+                    fields.push("proof_tests_mode");
+                } else {
+                    return ai_error("INVALID_INPUT", "proof_tests_mode supports only set|unset");
+                }
+            }
+            "proof_security_mode" => {
+                if op_name == "unset" {
+                    patch.proof_security_mode = Some(bm_storage::ProofMode::Off);
+                    fields.push("proof_security_mode");
+                } else if op_name == "set" {
+                    let Some(Value::String(v)) = value else {
+                        return ai_error("INVALID_INPUT", "proof_security_mode must be a string");
+                    };
+                    patch.proof_security_mode = Some(match v.as_str() {
+                        "off" => bm_storage::ProofMode::Off,
+                        "warn" => bm_storage::ProofMode::Warn,
+                        "require" => bm_storage::ProofMode::Require,
+                        _ => {
+                            return ai_error(
+                                "INVALID_INPUT",
+                                "proof_security_mode must be one of: off|warn|require",
+                            );
+                        }
+                    });
+                    fields.push("proof_security_mode");
+                } else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "proof_security_mode supports only set|unset",
+                    );
+                }
+            }
+            "proof_perf_mode" => {
+                if op_name == "unset" {
+                    patch.proof_perf_mode = Some(bm_storage::ProofMode::Off);
+                    fields.push("proof_perf_mode");
+                } else if op_name == "set" {
+                    let Some(Value::String(v)) = value else {
+                        return ai_error("INVALID_INPUT", "proof_perf_mode must be a string");
+                    };
+                    patch.proof_perf_mode = Some(match v.as_str() {
+                        "off" => bm_storage::ProofMode::Off,
+                        "warn" => bm_storage::ProofMode::Warn,
+                        "require" => bm_storage::ProofMode::Require,
+                        _ => {
+                            return ai_error(
+                                "INVALID_INPUT",
+                                "proof_perf_mode must be one of: off|warn|require",
+                            );
+                        }
+                    });
+                    fields.push("proof_perf_mode");
+                } else {
+                    return ai_error("INVALID_INPUT", "proof_perf_mode supports only set|unset");
+                }
+            }
+            "proof_docs_mode" => {
+                if op_name == "unset" {
+                    patch.proof_docs_mode = Some(bm_storage::ProofMode::Off);
+                    fields.push("proof_docs_mode");
+                } else if op_name == "set" {
+                    let Some(Value::String(v)) = value else {
+                        return ai_error("INVALID_INPUT", "proof_docs_mode must be a string");
+                    };
+                    patch.proof_docs_mode = Some(match v.as_str() {
+                        "off" => bm_storage::ProofMode::Off,
+                        "warn" => bm_storage::ProofMode::Warn,
+                        "require" => bm_storage::ProofMode::Require,
+                        _ => {
+                            return ai_error(
+                                "INVALID_INPUT",
+                                "proof_docs_mode must be one of: off|warn|require",
+                            );
+                        }
+                    });
+                    fields.push("proof_docs_mode");
+                } else {
+                    return ai_error("INVALID_INPUT", "proof_docs_mode supports only set|unset");
+                }
             }
             _ => return ai_error("INVALID_INPUT", "unknown step field"),
         }

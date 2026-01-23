@@ -5,6 +5,8 @@ use super::util::add_column_if_missing;
 use rusqlite::Connection;
 
 pub(super) fn apply(conn: &Connection) -> Result<(), StoreError> {
+    add_column_if_missing(conn, "steps", "next_action", "TEXT")?;
+    add_column_if_missing(conn, "steps", "stop_criteria", "TEXT")?;
     add_column_if_missing(conn, "steps", "completed_at_ms", "INTEGER")?;
     add_column_if_missing(conn, "steps", "started_at_ms", "INTEGER")?;
     add_column_if_missing(

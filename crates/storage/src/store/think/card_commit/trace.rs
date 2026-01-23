@@ -11,7 +11,7 @@ pub(super) fn insert_trace_entry_if_needed_tx(
     card: &ThinkCardInput,
     card_id: &str,
     now_ms: i64,
-) -> Result<bool, StoreError> {
+) -> Result<(bool, i64), StoreError> {
     // Trace: idempotent note entry keyed by card_id.
     ensure_document_tx(
         tx,
@@ -23,29 +23,29 @@ pub(super) fn insert_trace_entry_if_needed_tx(
     )?;
 
     let trace_source_event_id = format!("think_card:{card_id}");
-    let existing_payload: Option<Option<String>> = tx
+    let existing_row: Option<(i64, Option<String>)> = tx
         .query_row(
             r#"
-            SELECT payload_json
+            SELECT seq, payload_json
             FROM doc_entries
             WHERE workspace=?1 AND branch=?2 AND doc=?3 AND source_event_id=?4
             LIMIT 1
             "#,
             params![workspace, branch, trace_doc, trace_source_event_id.as_str()],
-            |row| row.get::<_, Option<String>>(0),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .optional()?;
 
-    match existing_payload {
-        Some(Some(existing)) => {
+    match existing_row {
+        Some((seq, Some(existing))) => {
             if existing != card.payload_json {
                 return Err(StoreError::InvalidInput(
                     "card_id already exists with a different payload",
                 ));
             }
-            Ok(false)
+            Ok((false, seq))
         }
-        Some(None) => Err(StoreError::InvalidInput(
+        Some((_seq, None)) => Err(StoreError::InvalidInput(
             "card_id already exists but stored payload is missing",
         )),
         None => {
@@ -77,7 +77,26 @@ pub(super) fn insert_trace_entry_if_needed_tx(
             if inserted {
                 touch_document_tx(tx, workspace, branch, trace_doc, now_ms)?;
             }
-            Ok(inserted)
+
+            let seq: Option<i64> = tx
+                .query_row(
+                    r#"
+                    SELECT seq
+                    FROM doc_entries
+                    WHERE workspace=?1 AND branch=?2 AND doc=?3 AND source_event_id=?4
+                    LIMIT 1
+                    "#,
+                    params![workspace, branch, trace_doc, trace_source_event_id.as_str()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            let Some(seq) = seq else {
+                return Err(StoreError::InvalidInput(
+                    "trace entry insert succeeded but seq lookup returned none",
+                ));
+            };
+
+            Ok((inserted, seq))
         }
     }
 }

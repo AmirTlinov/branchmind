@@ -58,6 +58,21 @@ pub struct DocSlice {
 }
 
 #[derive(Clone, Debug)]
+pub struct DocEntriesSinceRequest {
+    pub branch: String,
+    pub doc: String,
+    pub since_seq: i64,
+    pub limit: usize,
+    pub kind: Option<DocEntryKind>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DocEntriesSinceResult {
+    pub entries: Vec<DocEntryRow>,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct WorkspaceDocEntryHead {
     pub seq: i64,
     pub ts_ms: i64,

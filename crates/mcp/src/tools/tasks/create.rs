@@ -194,6 +194,8 @@ impl McpServer {
                                 success_criteria: None,
                                 tests: Some(tests.clone()),
                                 blockers: Some(blockers.clone()),
+                                next_action: None,
+                                stop_criteria: None,
                                 proof_tests_mode: None,
                                 proof_security_mode: None,
                                 proof_perf_mode: None,

@@ -92,6 +92,7 @@ impl SqliteStore {
             id,
             expected_revision,
             status,
+            parked_until_ts_ms,
             status_manual,
             require_steps_completed,
             event_type,
@@ -134,10 +135,15 @@ impl SqliteStore {
         }
 
         let new_revision = revision + 1;
+        let parked_until_ts_ms = if status == "PARKED" {
+            parked_until_ts_ms
+        } else {
+            None
+        };
         tx.execute(
             r#"
             UPDATE tasks
-            SET revision = ?3, status = ?4, status_manual = ?5, updated_at_ms = ?6
+            SET revision = ?3, status = ?4, parked_until_ts_ms = ?5, status_manual = ?6, updated_at_ms = ?7
             WHERE workspace = ?1 AND id = ?2
             "#,
             params![
@@ -145,6 +151,7 @@ impl SqliteStore {
                 &id,
                 new_revision,
                 &status,
+                parked_until_ts_ms,
                 if status_manual { 1i64 } else { 0i64 },
                 now_ms
             ],

@@ -70,13 +70,21 @@ impl McpServer {
         };
 
         let published_id = format!("CARD-PUB-{}", card_id.trim());
-        if published_id.len() > 256 {
+        if published_id.len() > 1024 {
             return ai_error("INVALID_INPUT", "published id is too long");
         }
 
         let mut tags = source.tags.clone();
         // Rewrite lane tags and force the published copy into the shared lane.
         apply_lane_stamp_to_tags(&mut tags, None);
+        // Publishing is a promotion into canon: never keep draft markers on the published copy.
+        tags.retain(|t| !t.trim().eq_ignore_ascii_case(VIS_TAG_DRAFT));
+        if !tags
+            .iter()
+            .any(|t| t.trim().eq_ignore_ascii_case(VIS_TAG_CANON))
+        {
+            tags.push(VIS_TAG_CANON.to_string());
+        }
         if pin {
             tags.push(PIN_TAG.to_string());
             // Normalize (dedupe + lowercase).

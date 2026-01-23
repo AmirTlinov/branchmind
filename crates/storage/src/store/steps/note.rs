@@ -14,32 +14,31 @@ impl SqliteStore {
         if request.note.trim().is_empty() {
             return Err(StoreError::InvalidInput("note must not be empty"));
         }
-
-        let StepNoteRequest {
-            task_id,
-            expected_revision,
-            agent_id,
-            selector,
-            note,
-        } = request;
+        let task_id = request.task_id;
+        let note = request.note;
 
         let now_ms = now_ms();
         let tx = self.conn.transaction()?;
 
-        let task_revision =
-            bump_task_revision_tx(&tx, workspace.as_str(), &task_id, expected_revision, now_ms)?;
+        let task_revision = bump_task_revision_tx(
+            &tx,
+            workspace.as_str(),
+            &task_id,
+            request.expected_revision,
+            now_ms,
+        )?;
         let (step_id, path) = resolve_step_selector_tx(
             &tx,
             workspace.as_str(),
             &task_id,
-            selector.step_id.as_deref(),
-            selector.path.as_ref(),
+            request.selector.step_id.as_deref(),
+            request.selector.path.as_ref(),
         )?;
         super::lease::enforce_step_lease_tx(
             &tx,
             workspace.as_str(),
             &step_id,
-            agent_id.as_deref(),
+            request.agent_id.as_deref(),
         )?;
 
         tx.execute(
@@ -57,7 +56,7 @@ impl SqliteStore {
             &tx,
             workspace.as_str(),
             now_ms,
-            Some(task_id.to_string()),
+            Some(task_id.clone()),
             Some(path.clone()),
             "step_noted",
             &event_payload_json,

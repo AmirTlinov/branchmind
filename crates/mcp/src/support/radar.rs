@@ -45,6 +45,7 @@ pub(crate) fn build_radar_context_with_options(
                 "revision": t.revision,
                 "status": t.status,
                 "parent": t.parent_plan_id,
+                "reasoning_mode": t.reasoning_mode,
                 "title": t.title,
                 "description": t.description,
                 "created_at_ms": t.created_at_ms,
@@ -93,6 +94,7 @@ pub(crate) fn build_radar_context_with_options(
     let mut next = Vec::<String>::new();
     let mut blockers = Vec::<String>::new();
     let mut steps_summary: Option<Value> = None;
+    let mut horizon: Option<Value> = None;
 
     if kind == TaskKind::Task {
         if let Ok(summary) = store.task_steps_summary(workspace, target_id) {
@@ -113,6 +115,8 @@ pub(crate) fn build_radar_context_with_options(
                     "step_id": s.step_id,
                     "path": s.path,
                     "title": s.title,
+                    "next_action": s.next_action,
+                    "stop_criteria": s.stop_criteria,
                     "criteria_confirmed": s.criteria_confirmed,
                     "tests_confirmed": s.tests_confirmed,
                     "security_confirmed": s.security_confirmed,
@@ -180,7 +184,11 @@ pub(crate) fn build_radar_context_with_options(
                     } else {
                         next.push(format!("Close next step {}", first.path));
                     }
-                } else if target.get("status").and_then(|v| v.as_str()) != Some("DONE") {
+                } else if let Some(status) = target.get("status").and_then(|v| v.as_str())
+                    && status != "DONE"
+                    && status != "PARKED"
+                    && status != "CANCELED"
+                {
                     next.push("Finish task".to_string());
                 }
             }
@@ -191,13 +199,67 @@ pub(crate) fn build_radar_context_with_options(
         }
     }
 
-    let radar = json!({
+    if kind == TaskKind::Plan {
+        const DEFAULT_TASK_STALE_AFTER_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+        let now_ms = super::now_ms_i64();
+        if let Ok(stats) = store.plan_horizon_stats_for_plan(
+            workspace,
+            target_id,
+            now_ms,
+            DEFAULT_TASK_STALE_AFTER_MS,
+        ) {
+            let active = stats.active.max(0);
+            let backlog = stats.backlog.max(0);
+            let parked = stats.parked.max(0);
+            let stale = stats.stale.max(0);
+            let done = stats.done.max(0);
+            let total = stats.total.max(0);
+
+            let mut out = json!({
+                "active": active,
+                "backlog": backlog,
+                "parked": parked,
+                "stale": stale,
+                "done": done,
+                "total": total,
+                "active_limit": 3,
+                "over_active_limit": active > 3
+            });
+            if let Some(wake) = stats.next_wake
+                && let Some(obj) = out.as_object_mut()
+            {
+                obj.insert(
+                    "next_wake".to_string(),
+                    json!({
+                        "task": wake.task_id,
+                        "parked_until_ts_ms": wake.parked_until_ts_ms
+                    }),
+                );
+            }
+            horizon = Some(out);
+
+            // Soft nudge: too many active tasks is a noise bug.
+            if active > 3 {
+                verify.push(format!(
+                    "Active horizon too large: {} (target <= 3)",
+                    active
+                ));
+            }
+        }
+    }
+
+    let mut radar = json!({
         "now": now,
         "why": why,
         "verify": verify,
         "next": next,
         "blockers": blockers
     });
+    if let Some(horizon) = horizon
+        && let Some(obj) = radar.as_object_mut()
+    {
+        obj.insert("horizon".to_string(), horizon);
+    }
 
     Ok(RadarContext {
         target,

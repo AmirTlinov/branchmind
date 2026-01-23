@@ -14,6 +14,33 @@ pub enum StoreError {
         actual: i64,
     },
     UnknownId,
+    JobNotClaimable {
+        job_id: String,
+        status: String,
+    },
+    JobNotRunning {
+        job_id: String,
+        status: String,
+    },
+    JobClaimMismatch {
+        job_id: String,
+        expected_runner_id: Option<String>,
+        actual_runner_id: String,
+        expected_revision: i64,
+        actual_revision: i64,
+    },
+    JobNotMessageable {
+        job_id: String,
+        status: String,
+    },
+    JobAlreadyTerminal {
+        job_id: String,
+        status: String,
+    },
+    JobNotRequeueable {
+        job_id: String,
+        status: String,
+    },
     UnknownBranch,
     UnknownConflict,
     ConflictAlreadyResolved,
@@ -64,6 +91,37 @@ impl std::fmt::Display for StoreError {
                 )
             }
             Self::UnknownId => write!(f, "unknown id"),
+            Self::JobNotClaimable { job_id, status } => {
+                write!(f, "job not claimable (job_id={job_id}, status={status})")
+            }
+            Self::JobNotRunning { job_id, status } => {
+                write!(f, "job not running (job_id={job_id}, status={status})")
+            }
+            Self::JobClaimMismatch {
+                job_id,
+                expected_runner_id,
+                actual_runner_id,
+                expected_revision,
+                actual_revision,
+            } => match expected_runner_id {
+                Some(expected_runner_id) => write!(
+                    f,
+                    "job claim mismatch (job_id={job_id}, expected_runner_id={expected_runner_id}, actual_runner_id={actual_runner_id}, expected_revision={expected_revision}, actual_revision={actual_revision})"
+                ),
+                None => write!(
+                    f,
+                    "job claim mismatch (job_id={job_id}, expected_runner_id=<none>, actual_runner_id={actual_runner_id}, expected_revision={expected_revision}, actual_revision={actual_revision})"
+                ),
+            },
+            Self::JobNotMessageable { job_id, status } => {
+                write!(f, "job not messageable (job_id={job_id}, status={status})")
+            }
+            Self::JobAlreadyTerminal { job_id, status } => {
+                write!(f, "job already terminal (job_id={job_id}, status={status})")
+            }
+            Self::JobNotRequeueable { job_id, status } => {
+                write!(f, "job not requeueable (job_id={job_id}, status={status})")
+            }
             Self::UnknownBranch => write!(f, "unknown branch"),
             Self::UnknownConflict => write!(f, "unknown conflict"),
             Self::ConflictAlreadyResolved => write!(f, "conflict already resolved"),

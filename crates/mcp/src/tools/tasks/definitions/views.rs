@@ -39,7 +39,7 @@ pub(crate) fn views_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "tasks_complete",
-            "description": "Set status for a plan/task (TODO/ACTIVE/DONE).",
+            "description": "Set status for a plan/task (TODO/ACTIVE/DONE/PARKED/CANCELED).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -47,7 +47,9 @@ pub(crate) fn views_definitions() -> Vec<Value> {
                     "task": { "type": "string" },
                     "plan": { "type": "string" },
                     "expected_revision": { "type": "integer" },
-                    "status": { "type": "string", "enum": ["TODO", "ACTIVE", "DONE"] }
+                    "status": { "type": "string", "enum": ["TODO", "ACTIVE", "DONE", "PARKED", "CANCELED"] },
+                    "parked_for_s": { "type": "integer" },
+                    "parked_until_ts_ms": { "type": "integer" }
                 },
                 "required": ["workspace"]
             }
@@ -213,6 +215,9 @@ pub(crate) fn views_definitions() -> Vec<Value> {
                     "view": { "type": "string" },
                     "context_budget": { "type": "integer" },
                     "agent_id": { "type": "string" },
+                    "delta": { "type": "boolean" },
+                    "refs": { "type": "boolean" },
+                    "delta_limit": { "type": "integer" },
                     "events_limit": { "type": "integer" },
                     "decisions_limit": { "type": "integer" },
                     "evidence_limit": { "type": "integer" },
@@ -244,6 +249,21 @@ pub(crate) fn views_definitions() -> Vec<Value> {
                     "plan": { "type": "string" },
                     "max_chars": { "type": "integer" },
                     "delta_limit": { "type": "integer" },
+                    "read_only": { "type": "boolean" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_mindpack",
+            "description": "Workspace mindpack: bounded semantic compaction for resume-by-meaning.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "update": { "type": "boolean" },
+                    "reason": { "type": "string" },
+                    "max_chars": { "type": "integer" },
                     "read_only": { "type": "boolean" }
                 },
                 "required": ["workspace"]

@@ -19,7 +19,7 @@ pub(crate) fn branches_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "macro_branch_note",
-            "description": "One-call: (optional) branch create/checkout + append a note (daily portal).",
+            "description": "One-call: (optional) branch checkout/create by name + append a note (daily portal).",
             "inputSchema": {
                 "type": "object",
                 "properties": {

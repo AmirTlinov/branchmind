@@ -79,10 +79,8 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let meta_json = merge_meta_with_fields(
-            base_meta,
-            vec![("lane".to_string(), lane_meta_value(agent_id.as_deref()))],
-        );
+        let meta_json =
+            merge_meta_with_fields(base_meta, vec![("lane".to_string(), lane_meta_value(None))]);
 
         let omit_workspace = self.default_workspace.as_deref() == Some(workspace.as_str());
         let status_suggestion_params = {
@@ -122,9 +120,13 @@ impl McpServer {
             retry_note_params.insert("meta".to_string(), parsed);
         }
 
-        let (info, previous, current) = if let Some(name) = name.clone() {
+        let (info, previous, current, branch_created) = if let Some(name) = name.clone() {
+            let mut branch_created = false;
             let info = match self.store.branch_create(&workspace, &name, from.as_deref()) {
-                Ok(v) => v,
+                Ok(v) => {
+                    branch_created = true;
+                    v
+                }
                 Err(StoreError::UnknownBranch) => {
                     let checkout = match self.store.branch_checkout_get(&workspace) {
                         Ok(v) => v,
@@ -162,29 +164,22 @@ impl McpServer {
                     return ai_error_with("UNKNOWN_ID", &msg, Some(&recovery), suggestions);
                 }
                 Err(StoreError::BranchAlreadyExists) => {
-                    let msg = format!("Branch already exists: name=\"{name}\"");
-                    let recovery = "If you meant to write on the existing branch, omit name and pass from=name. Otherwise choose a different name.";
-                    let mut switch_params = retry_note_params.clone();
-                    switch_params.insert("from".to_string(), Value::String(name.clone()));
-                    return ai_error_with(
-                        "CONFLICT",
-                        &msg,
-                        Some(recovery),
-                        vec![
-                            suggest_call(
-                                "macro_branch_note",
-                                "Write the note on the existing branch by switching checkout (omit name; set from=name).",
-                                "high",
-                                Value::Object(switch_params),
-                            ),
-                            suggest_call(
-                                "status",
-                                "Show checkout and defaults for this workspace.",
-                                "medium",
-                                status_suggestion_params.clone(),
-                            ),
-                        ],
-                    );
+                    // Daily portal should be resilient to retries and "checkout by name" usage.
+                    // When the branch already exists, treat `name` as a checkout target (not a hard conflict)
+                    // and keep `branch.created=false` so agents can tell no new branch was created.
+                    let base_info = match self.store.branch_base_info(&workspace, &name) {
+                        Ok(v) => v,
+                        Err(StoreError::InvalidInput(msg)) => {
+                            return ai_error("INVALID_INPUT", msg);
+                        }
+                        Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                    };
+                    bm_storage::BranchInfo {
+                        name: name.clone(),
+                        base_branch: base_info.as_ref().map(|(base, _)| base.to_string()),
+                        base_seq: base_info.map(|(_, seq)| seq),
+                        created_at_ms: None,
+                    }
                 }
                 Err(StoreError::BranchCycle) => {
                     return ai_error("INVALID_INPUT", "Branch base cycle");
@@ -224,7 +219,7 @@ impl McpServer {
                 Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
                 Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
             };
-            (info, previous, current)
+            (info, previous, current, branch_created)
         } else {
             // Note-only mode: append to checkout (or switch to an existing branch via `from`).
             let (previous, current) = if let Some(from) = from.as_ref() {
@@ -301,6 +296,7 @@ impl McpServer {
                 },
                 previous,
                 current,
+                false,
             )
         };
 
@@ -343,7 +339,7 @@ impl McpServer {
                     "name": info.name,
                     "base_branch": info.base_branch,
                     "base_seq": info.base_seq,
-                    "created": name.is_some()
+                    "created": branch_created
                 },
                 "checkout": {
                     "previous": previous,

@@ -12,7 +12,7 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+        let _agent_id = match optional_agent_id(args_obj, "agent_id") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -99,10 +99,8 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let meta_json = merge_meta_with_fields(
-            base_meta,
-            vec![("lane".to_string(), lane_meta_value(agent_id.as_deref()))],
-        );
+        let meta_json =
+            merge_meta_with_fields(base_meta, vec![("lane".to_string(), lane_meta_value(None))]);
 
         let entry = match self.store.doc_append_note(
             &workspace,

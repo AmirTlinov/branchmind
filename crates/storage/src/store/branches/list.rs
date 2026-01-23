@@ -10,7 +10,8 @@ impl SqliteStore {
     ) -> Result<Vec<BranchInfo>, StoreError> {
         use std::collections::HashMap;
 
-        let limit = limit.clamp(1, 500);
+        // Allow callers to probe "has more" by requesting (limit + 1) under a hard cap.
+        let limit = limit.clamp(1, 501);
         let mut map: HashMap<String, BranchInfo> = HashMap::new();
 
         let mut stmt = self.conn.prepare(

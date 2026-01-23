@@ -73,14 +73,20 @@ impl McpServer {
 
         let portals = json!({
             "core": ["status", "tasks_macro_start", "tasks_snapshot"],
-            "daily": ["status", "macro_branch_note", "tasks_macro_start", "tasks_macro_close_step", "tasks_snapshot"]
+            "daily": [
+                "status",
+                "macro_branch_note",
+                "tasks_macro_start",
+                "tasks_macro_close_step",
+                "tasks_snapshot",
+                "open",
+                "think_card",
+                "think_playbook"
+            ]
         });
 
-        let build_profile = if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        };
+        let build_profile = build_profile_label();
+        let git_sha = build_git_sha();
 
         let (disclosure_toolset, disclosure_hint) = match self.toolset {
             crate::Toolset::Core => (
@@ -110,6 +116,8 @@ impl McpServer {
                 { "tool": "macro_branch_note", "purpose": "start an initiative branch + seed a first note" },
                 { "tool": "tasks_macro_start", "purpose": "create a task with steps and open a resume capsule" },
                 { "tool": "tasks_macro_close_step", "purpose": "confirm checkpoints + close step + return resume" },
+                { "tool": "think_playbook", "purpose": "load deterministic prompts (strict skepticism / breakthrough)"},
+                { "tool": "think_card", "purpose": "commit a structured reasoning card (hypothesis/test/evidence/decision)"},
                 { "tool": "tasks_snapshot", "purpose": "refresh unified snapshot (tasks + reasoning + diff)" }
             ]),
             crate::Toolset::Full => json!([
@@ -123,7 +131,9 @@ impl McpServer {
             "server": {
                 "name": SERVER_NAME,
                 "version": SERVER_VERSION,
-                "build_profile": build_profile
+                "build_profile": build_profile,
+                "git_sha": git_sha,
+                "build_fingerprint": build_fingerprint()
             },
             "workspace": workspace.as_str(),
             "schema_version": "v0",
@@ -142,6 +152,11 @@ impl McpServer {
             "recommended_templates": recommended_templates,
             "progressive_disclosure": progressive_disclosure,
             "golden_path": golden_path,
+            "last_task_event": last_event.map(|(seq, ts_ms)| json!({
+                "event_id": format!("evt_{:016}", seq),
+                "ts": ts_ms_to_rfc3339(ts_ms),
+                "ts_ms": ts_ms
+            })),
             "last_event": last_event.map(|(seq, ts_ms)| json!({
                 "event_id": format!("evt_{:016}", seq),
                 "ts": ts_ms_to_rfc3339(ts_ms),

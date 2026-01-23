@@ -6,6 +6,30 @@ use super::step_context::apply_step_context_to_card;
 use crate::*;
 use serde_json::{Value, json};
 
+fn validate_edge_node_ids(field: &str, values: &[String]) -> Result<(), Value> {
+    for (idx, raw) in values.iter().enumerate() {
+        match bm_core::graph::GraphNodeId::try_new(raw.clone()) {
+            Ok(_) => {}
+            Err(err) => {
+                let recovery = match err {
+                    bm_core::graph::GraphNodeIdError::TooLong
+                    | bm_core::graph::GraphNodeIdError::ContainsControl => Some(
+                        "supports[]/blocks[] must contain short, single-line graph ids (usually CARD-... ids). If you pasted long narrative text here by accident, move it into card.text instead.",
+                    ),
+                    _ => None,
+                };
+                return Err(ai_error_with(
+                    "INVALID_INPUT",
+                    &format!("{field}[{idx}]: {}", err.message()),
+                    recovery,
+                    Vec::new(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl McpServer {
     pub(crate) fn tool_branchmind_think_template(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
@@ -92,6 +116,7 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
+        let mut warnings = Vec::<Value>::new();
 
         let supports = match optional_string_array(args_obj, "supports") {
             Ok(v) => v.unwrap_or_default(),
@@ -101,14 +126,22 @@ impl McpServer {
             Ok(v) => v.unwrap_or_default(),
             Err(resp) => return resp,
         };
+        if let Err(resp) = validate_edge_node_ids("supports", &supports) {
+            return resp;
+        }
+        if let Err(resp) = validate_edge_node_ids("blocks", &blocks) {
+            return resp;
+        }
 
         let card_value = args_obj.get("card").cloned().unwrap_or(Value::Null);
         let mut parsed = match parse_think_card(&workspace, card_value) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        if let Err(resp) = apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
-            return resp;
+        match apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
+            Ok(Some(w)) => warnings.push(w),
+            Ok(None) => {}
+            Err(resp) => return resp,
         }
         if let Err(resp) = apply_lane_context_to_card(args_obj, &mut parsed) {
             return resp;
@@ -132,7 +165,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        ai_ok(
+        let trace_ref = format!("{}@{}", trace_doc, result.trace_seq);
+        let graph_ref = result.last_seq.map(|seq| format!("{}@{}", graph_doc, seq));
+
+        let response = ai_ok(
             "think_card",
             json!({
                 "workspace": workspace.as_str(),
@@ -141,12 +177,22 @@ impl McpServer {
                 "graph_doc": graph_doc,
                 "card_id": card_id,
                 "inserted": result.inserted,
+                "trace_seq": result.trace_seq,
+                "trace_ref": trace_ref,
                 "graph_applied": {
                     "nodes_upserted": result.nodes_upserted,
                     "edges_upserted": result.edges_upserted
                 },
-                "last_seq": result.last_seq
+                "last_seq": result.last_seq,
+                "graph_ref": graph_ref
             }),
-        )
+        );
+
+        if warnings.is_empty() {
+            response
+        } else {
+            let result = response.get("result").cloned().unwrap_or(Value::Null);
+            ai_ok_with_warnings("think_card", result, warnings, Vec::new())
+        }
     }
 }

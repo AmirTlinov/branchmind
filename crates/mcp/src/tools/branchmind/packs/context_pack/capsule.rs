@@ -11,7 +11,6 @@ pub(super) struct ContextPackCapsuleArgs<'a> {
     pub(super) notes_doc: &'a str,
     pub(super) trace_doc: &'a str,
     pub(super) graph_doc: &'a str,
-    pub(super) agent_id: Option<&'a str>,
     pub(super) all_lanes: bool,
     pub(super) step_ctx: Option<&'a ResolvedStepContext>,
     pub(super) engine: Option<&'a Value>,
@@ -57,7 +56,7 @@ pub(super) fn build_context_pack_capsule(args: ContextPackCapsuleArgs<'_>) -> Va
     let lane = if args.all_lanes {
         json!({ "kind": "all" })
     } else {
-        lane_meta_value(args.agent_id)
+        lane_meta_value(None)
     };
 
     json!({

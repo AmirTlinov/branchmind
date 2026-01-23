@@ -65,6 +65,8 @@ impl McpServer {
                     success_criteria,
                     tests,
                     blockers,
+                    next_action: None,
+                    stop_criteria: None,
                     proof_tests_mode: None,
                     proof_security_mode: None,
                     proof_perf_mode: None,

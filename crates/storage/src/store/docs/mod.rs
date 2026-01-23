@@ -2,6 +2,7 @@
 
 mod append;
 mod diff_tail;
+mod get;
 mod ingest;
 mod list;
 mod merge_notes;

@@ -36,7 +36,13 @@ An agent can only trust a tool that behaves predictably:
 
 “Magic convenience” is allowed only when it is safe, explainable, and recoverable.
 
-## 4) Branching is how uncertainty is handled
+## 4) Human situational awareness is optional, not a dependency
+
+The core remains MCP-only and automation-first. A **local read-only HTTP viewer** may exist as an
+optional adapter for non-technical users, but it must never become a dependency of core execution
+or reasoning behavior.
+
+## 5) Branching is how uncertainty is handled
 
 When the right path is unclear:
 

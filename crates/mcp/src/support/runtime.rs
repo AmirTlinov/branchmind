@@ -69,6 +69,32 @@ fn default_project_guard_from_root(root: &Path) -> String {
     format!("repo:{hash:016x}")
 }
 
+fn is_repo_local_storage_dir(storage_dir: &Path) -> bool {
+    let canonical =
+        std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
+    let Some(dir_name) = canonical.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if dir_name != ".branchmind_rust" {
+        return false;
+    }
+    let Some(parent) = canonical.parent() else {
+        return false;
+    };
+    parent.join(".git").exists()
+}
+
+fn default_project_guard_root_from_storage_dir(storage_dir: &Path) -> PathBuf {
+    let canonical =
+        std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
+    if is_repo_local_storage_dir(&canonical)
+        && let Some(parent) = canonical.parent()
+    {
+        return parent.to_path_buf();
+    }
+    default_repo_root()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Toolset {
     Full,
@@ -100,62 +126,67 @@ impl Toolset {
 }
 
 pub(crate) fn parse_storage_dir() -> PathBuf {
-    let mut args = std::env::args().skip(1);
     let mut storage_dir: Option<PathBuf> = None;
-    while let Some(arg) = args.next() {
-        if arg.as_str() == "--storage-dir"
-            && let Some(value) = args.next()
-        {
-            storage_dir = Some(PathBuf::from(value));
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            storage_dir = Some(PathBuf::from(arg));
+            saw_flag = false;
+            continue;
         }
+        saw_flag = arg.as_str() == "--storage-dir";
     }
     if let Some(dir) = storage_dir {
         return dir;
     }
-    if auto_mode_enabled() {
-        let root = default_repo_root();
-        return root.join(".branchmind_rust");
-    }
-    PathBuf::from(".branchmind_rust")
+    // Flagship DX: keep the store repo-local when running inside a git repo.
+    // This is deterministic and avoids requiring `--storage-dir` in typical MCP client setups.
+    let root = default_repo_root();
+    root.join(".branchmind_rust")
 }
 
 pub(crate) fn parse_toolset() -> Toolset {
-    let mut args = std::env::args().skip(1);
     let mut cli: Option<String> = None;
-    while let Some(arg) = args.next() {
-        if arg.as_str() == "--toolset"
-            && let Some(value) = args.next()
-        {
-            cli = Some(value);
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(arg);
             break;
         }
+        saw_flag = arg.as_str() == "--toolset";
     }
 
     let value = cli.or_else(|| std::env::var("BRANCHMIND_TOOLSET").ok());
-    if value.is_none() && auto_mode_enabled() {
+    // Flagship DX: default to the small portal-first toolset unless explicitly overridden.
+    if value.is_none() {
         return Toolset::Daily;
     }
     Toolset::parse(value.as_deref())
 }
 
 pub(crate) fn parse_default_workspace() -> Option<String> {
-    let mut args = std::env::args().skip(1);
     let mut cli: Option<String> = None;
-    while let Some(arg) = args.next() {
-        if arg.as_str() == "--workspace"
-            && let Some(value) = args.next()
-        {
-            cli = Some(value);
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(arg);
             break;
         }
+        saw_flag = arg.as_str() == "--workspace";
     }
 
     let value = cli.or_else(|| std::env::var("BRANCHMIND_WORKSPACE").ok());
-    if value.is_none() && auto_mode_enabled() {
-        let root = default_repo_root();
-        return Some(default_workspace_from_root(&root));
+    let value = value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if value.is_some() {
+        return value;
     }
-    value
+
+    // Flagship DX: pick a stable default workspace derived from the repo root.
+    // This keeps agents from having to repeat `workspace=...` on every call.
+    let root = default_repo_root();
+    Some(default_workspace_from_root(&root))
 }
 
 pub(crate) fn parse_workspace_lock() -> bool {
@@ -170,24 +201,46 @@ pub(crate) fn parse_workspace_lock() -> bool {
     parse_bool_env("BRANCHMIND_WORKSPACE_LOCK")
 }
 
-pub(crate) fn parse_project_guard() -> Option<String> {
-    let mut args = std::env::args().skip(1);
+pub(crate) fn parse_project_guard_explicit() -> bool {
+    for arg in std::env::args().skip(1) {
+        if arg.as_str() == "--project-guard" {
+            return true;
+        }
+    }
+    match std::env::var("BRANCHMIND_PROJECT_GUARD") {
+        Ok(value) => !value.trim().is_empty(),
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn parse_project_guard(storage_dir: &Path) -> Option<String> {
     let mut cli: Option<String> = None;
-    while let Some(arg) = args.next() {
-        if arg.as_str() == "--project-guard"
-            && let Some(value) = args.next()
-        {
-            cli = Some(value);
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(arg);
             break;
         }
+        saw_flag = arg.as_str() == "--project-guard";
     }
 
     let value = cli.or_else(|| std::env::var("BRANCHMIND_PROJECT_GUARD").ok());
-    if value.is_none() && auto_mode_enabled() {
-        let root = default_repo_root();
-        return Some(default_project_guard_from_root(&root));
+    let value = value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if value.is_some() {
+        return value;
     }
-    value
+
+    let root = default_project_guard_root_from_storage_dir(storage_dir);
+    Some(default_project_guard_from_root(&root))
+}
+
+pub(crate) fn parse_project_guard_rebind_enabled(storage_dir: &Path) -> bool {
+    if parse_project_guard_explicit() {
+        return false;
+    }
+    is_repo_local_storage_dir(storage_dir)
 }
 
 #[derive(Clone, Debug)]
@@ -197,15 +250,14 @@ pub(crate) enum DefaultAgentIdConfig {
 }
 
 pub(crate) fn parse_default_agent_id_config() -> Option<DefaultAgentIdConfig> {
-    let mut args = std::env::args().skip(1);
     let mut cli: Option<String> = None;
-    while let Some(arg) = args.next() {
-        if arg.as_str() == "--agent-id"
-            && let Some(value) = args.next()
-        {
-            cli = Some(value);
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(arg);
             break;
         }
+        saw_flag = arg.as_str() == "--agent-id";
     }
 
     if cli.is_none() && std::env::var("BRANCHMIND_AGENT_ID").ok().is_none() && auto_mode_enabled() {
@@ -244,16 +296,60 @@ pub(crate) fn parse_daemon_mode() -> bool {
     parse_bool_env("BRANCHMIND_MCP_DAEMON")
 }
 
+pub(crate) fn parse_hot_reload_enabled() -> bool {
+    for arg in std::env::args().skip(1) {
+        if arg.as_str() == "--no-hot-reload" {
+            return false;
+        }
+        if arg.as_str() == "--hot-reload" {
+            return true;
+        }
+    }
+
+    match std::env::var("BRANCHMIND_HOT_RELOAD") {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        // DX default: enable hot reload in session modes so Codex users don't have to restart
+        // the MCP server manually after rebuilding `bm_mcp`. Daemons remain opt-in.
+        Err(_) => !parse_daemon_mode(),
+    }
+}
+
+pub(crate) fn parse_hot_reload_poll_ms() -> u64 {
+    // DX default: low-frequency polling to stay cheap but responsive in dev.
+    const DEFAULT_POLL_MS: u64 = 1000;
+
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            return arg
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|v| *v > 0)
+                .unwrap_or(DEFAULT_POLL_MS);
+        }
+        saw_flag = arg.as_str() == "--hot-reload-poll-ms";
+    }
+
+    std::env::var("BRANCHMIND_HOT_RELOAD_POLL_MS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_POLL_MS)
+}
+
 pub(crate) fn parse_socket_path(storage_dir: &Path) -> PathBuf {
-    let mut args = std::env::args().skip(1);
     let mut cli: Option<PathBuf> = None;
-    while let Some(arg) = args.next() {
-        if arg.as_str() == "--socket"
-            && let Some(value) = args.next()
-        {
-            cli = Some(PathBuf::from(value));
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(PathBuf::from(arg));
             break;
         }
+        saw_flag = arg.as_str() == "--socket";
     }
 
     cli.or_else(|| {
@@ -262,6 +358,87 @@ pub(crate) fn parse_socket_path(storage_dir: &Path) -> PathBuf {
             .map(PathBuf::from)
     })
     .unwrap_or_else(|| storage_dir.join("branchmind_mcp.sock"))
+}
+
+pub(crate) fn parse_viewer_enabled() -> bool {
+    parse_viewer_enabled_with_default(true, "BRANCHMIND_VIEWER")
+}
+
+pub(crate) fn parse_viewer_enabled_daemon() -> bool {
+    // Daemons are long-lived by design; a local HTTP viewer would otherwise persist beyond the
+    // calling session. Keep the daemon viewer opt-in.
+    parse_viewer_enabled_with_default(false, "BRANCHMIND_VIEWER_DAEMON")
+}
+
+fn parse_viewer_enabled_with_default(default_enabled: bool, env_key: &str) -> bool {
+    for arg in std::env::args().skip(1) {
+        if arg.as_str() == "--no-viewer" {
+            return false;
+        }
+        if arg.as_str() == "--viewer" {
+            return true;
+        }
+    }
+    match std::env::var(env_key) {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default_enabled,
+    }
+}
+
+pub(crate) fn parse_viewer_port() -> u16 {
+    const DEFAULT_VIEWER_PORT: u16 = 7331;
+    let mut cli: Option<String> = None;
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(arg);
+            break;
+        }
+        saw_flag = arg.as_str() == "--viewer-port";
+    }
+
+    let raw = cli.or_else(|| std::env::var("BRANCHMIND_VIEWER_PORT").ok());
+    let Some(raw) = raw else {
+        return DEFAULT_VIEWER_PORT;
+    };
+    let parsed = raw.trim().parse::<u16>().ok();
+    match parsed {
+        Some(0) | None => DEFAULT_VIEWER_PORT,
+        Some(value) => value,
+    }
+}
+
+pub(crate) fn parse_runner_autostart_override() -> Option<bool> {
+    for arg in std::env::args().skip(1) {
+        if arg.as_str() == "--no-runner-autostart" {
+            return Some(false);
+        }
+        if arg.as_str() == "--runner-autostart" {
+            return Some(true);
+        }
+    }
+    match std::env::var("BRANCHMIND_RUNNER_AUTOSTART") {
+        Ok(raw) => {
+            let v = matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+            Some(v)
+        }
+        Err(_) => None,
+    }
+}
+
+pub(crate) fn parse_runner_autostart_dry_run() -> bool {
+    for arg in std::env::args().skip(1) {
+        if arg.as_str() == "--runner-autostart-dry-run" {
+            return true;
+        }
+    }
+    parse_bool_env("BRANCHMIND_RUNNER_AUTOSTART_DRY_RUN")
 }
 
 fn parse_bool_env(key: &str) -> bool {

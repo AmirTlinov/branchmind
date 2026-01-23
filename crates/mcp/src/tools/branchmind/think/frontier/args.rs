@@ -6,7 +6,6 @@ use serde_json::Value;
 pub(super) struct FrontierArgs {
     pub(super) workspace: WorkspaceId,
     pub(super) step: Option<String>,
-    pub(super) agent_id: Option<String>,
     pub(super) all_lanes: bool,
     pub(super) limit_hypotheses: usize,
     pub(super) limit_questions: usize,
@@ -29,9 +28,10 @@ pub(super) fn parse(args_obj: &serde_json::Map<String, Value>) -> Result<Frontie
         },
     )?;
     let step = optional_string(args_obj, "step")?;
-    let agent_id = optional_agent_id(args_obj, "agent_id")?;
+    let _agent_id = optional_agent_id(args_obj, "agent_id")?;
+    let include_drafts = optional_bool(args_obj, "include_drafts")?.unwrap_or(false);
     let all_lanes = optional_bool(args_obj, "all_lanes")?.unwrap_or(false);
-    let all_lanes = all_lanes || view.implies_all_lanes();
+    let all_lanes = all_lanes || include_drafts || view.implies_all_lanes();
     let limit_hypotheses = optional_usize(args_obj, "limit_hypotheses")?.unwrap_or(5);
     let limit_questions = optional_usize(args_obj, "limit_questions")?.unwrap_or(5);
     let limit_subgoals = optional_usize(args_obj, "limit_subgoals")?.unwrap_or(5);
@@ -46,7 +46,6 @@ pub(super) fn parse(args_obj: &serde_json::Map<String, Value>) -> Result<Frontie
     Ok(FrontierArgs {
         workspace,
         step,
-        agent_id,
         all_lanes,
         limit_hypotheses,
         limit_questions,

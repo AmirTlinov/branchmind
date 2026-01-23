@@ -11,7 +11,9 @@ Build a **single MCP server** that makes AI agents dramatically better at:
 - exploring alternatives via branching and merging,
 - resuming work fast with low-noise summaries.
 
-No GUI/TUI. MCP-only. Rust-first. Deterministic.
+No GUI/TUI in the core. MCP-first (stdio). Rust-first. Deterministic.
+
+Optional: a local-only, read-only HTTP viewer may be enabled for human situational awareness.
 
 ## Golden files (read first)
 
@@ -29,7 +31,8 @@ No GUI/TUI. MCP-only. Rust-first. Deterministic.
 
 ### Determinism & safety
 
-- No network calls.
+- No outbound network calls (no remote I/O).
+- Loopback-only HTTP viewer is allowed when enabled (read-only, local-first).
 - No code execution.
 - Never log committed artifacts to stdout/stderr outside explicit “read” tools.
 - Treat all stored artifacts as potentially sensitive; do not auto-ingest env/config.

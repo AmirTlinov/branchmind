@@ -11,7 +11,190 @@ mod signals;
 mod timeline;
 
 use crate::*;
-use serde_json::Value;
+use serde_json::{Value, json};
+
+use queries::graph_query_or_empty;
+
+fn job_row_to_capsule_job(job: &bm_storage::JobRow) -> Value {
+    // Keep this intentionally small and copy/paste-friendly: the snapshot HUD should not
+    // become a second dashboard. Deep detail lives in `tasks_jobs_open` / `open JOB-*`.
+    json!({
+        "id": job.id,
+        "status": job.status,
+        "runner": job.runner.as_deref().map(|v| truncate_string(&redact_text(v), 80)).unwrap_or_else(|| "-".to_string()),
+        "summary": job.summary.as_deref().map(|v| truncate_string(&redact_text(v), 140)).unwrap_or_else(|| "-".to_string()),
+        "updated_at_ms": job.updated_at_ms
+    })
+}
+
+fn job_open_to_capsule_job(opened: &bm_storage::JobOpenResult) -> Value {
+    // A slightly richer job hint: keep a single “latest meaningful update” so supervision
+    // is cheap without opening the full job view.
+    let job = &opened.job;
+
+    // Attention is sticky across intervening progress noise.
+    // - A `question` needs an explicit manager message after it.
+    // - An `error` is considered resolved once a later `checkpoint` is recorded.
+    let last_question_seq = opened
+        .events
+        .iter()
+        .find(|e| e.kind == "question")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_manager_seq = opened
+        .events
+        .iter()
+        .find(|e| e.kind == "manager")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_manager_proof_seq = opened
+        .events
+        .iter()
+        .find(|e| e.kind == "manager" && !e.refs.is_empty())
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_error_seq = opened
+        .events
+        .iter()
+        .find(|e| e.kind == "error")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_proof_gate_seq = opened
+        .events
+        .iter()
+        .find(|e| e.kind == "proof_gate")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_checkpoint_seq = opened
+        .events
+        .iter()
+        .find(|e| e.kind == "checkpoint")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+
+    let needs_manager = last_question_seq > last_manager_seq;
+    let has_error = last_error_seq > last_checkpoint_seq;
+    let needs_proof = last_proof_gate_seq > last_checkpoint_seq.max(last_manager_proof_seq);
+
+    let last = opened
+        .events
+        .iter()
+        .find(|e| {
+            e.kind != "heartbeat"
+                && matches!(
+                    e.kind.as_str(),
+                    "error" | "question" | "manager" | "proof_gate"
+                )
+        })
+        .or_else(|| {
+            opened.events.iter().find(|e| {
+                e.kind != "heartbeat"
+                    && !e
+                        .message
+                        .trim_start()
+                        .get(..7)
+                        .is_some_and(|p| p.eq_ignore_ascii_case("runner:"))
+            })
+        })
+        .or_else(|| opened.events.iter().find(|e| e.kind != "heartbeat"))
+        .or_else(|| opened.events.first());
+
+    let last_value = if let Some(ev) = last {
+        let mut refs = ev.refs.clone();
+        refs.truncate(4);
+        json!({
+            "ref": format!("{}@{}", ev.job_id, ev.seq),
+            "seq": ev.seq,
+            "ts_ms": ev.ts_ms,
+            "kind": ev.kind.clone(),
+            "message": truncate_string(&redact_text(&ev.message), 160),
+            "refs": refs
+        })
+    } else {
+        Value::Null
+    };
+
+    json!({
+        "id": job.id.clone(),
+        "status": job.status.clone(),
+        "runner": job.runner.as_deref().map(|v| truncate_string(&redact_text(v), 80)).unwrap_or_else(|| "-".to_string()),
+        "summary": job.summary.as_deref().map(|v| truncate_string(&redact_text(v), 140)).unwrap_or_else(|| "-".to_string()),
+        "updated_at_ms": job.updated_at_ms,
+        "last": last_value,
+        "attention": {
+            "needs_manager": needs_manager,
+            "needs_proof": needs_proof,
+            "has_error": has_error
+        }
+    })
+}
+
+fn build_meaning_map_hud(
+    cards: &[Value],
+    include_drafts: bool,
+    focus_step_tag: Option<&str>,
+) -> Value {
+    use std::collections::BTreeMap;
+
+    // Filter by visibility first (drafts hidden unless explicitly included).
+    let visible_cards = cards
+        .iter()
+        .filter(|card| card_value_visibility_allows(card, include_drafts, focus_step_tag))
+        .collect::<Vec<_>>();
+
+    // Prefer step-scoped cards to derive the "where" anchor.
+    let mut step_scoped: Vec<&Value> = Vec::new();
+    if let Some(step_tag) = focus_step_tag.map(str::trim).filter(|t| !t.is_empty()) {
+        for card in &visible_cards {
+            let Some(tags) = card.get("tags").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            if tags.iter().any(|t| t.as_str() == Some(step_tag)) {
+                step_scoped.push(*card);
+            }
+        }
+    }
+
+    // Fallback to the full visible slice when step scope is missing.
+    let source: Vec<&Value> = if !step_scoped.is_empty() {
+        step_scoped
+    } else {
+        visible_cards
+    };
+
+    // Stats: anchor_id -> (max_ts_ms, count)
+    let mut stats = BTreeMap::<String, (i64, usize)>::new();
+    for card in source {
+        let ts = card.get("last_ts_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+        for anchor in card_value_anchor_tags(card) {
+            let entry = stats.entry(anchor).or_insert((0, 0));
+            entry.0 = entry.0.max(ts);
+            entry.1 = entry.1.saturating_add(1);
+        }
+    }
+
+    let mut ranked = stats
+        .into_iter()
+        .map(|(id, (ts, count))| (id, ts, count))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    let top_anchors = ranked
+        .iter()
+        .take(3)
+        .map(|(id, _, _)| id.clone())
+        .collect::<Vec<_>>();
+    let where_id = top_anchors
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    json!({ "where": where_id, "top_anchors": top_anchors })
+}
 
 impl McpServer {
     pub(crate) fn tool_tasks_resume_super(&mut self, args: Value) -> Value {
@@ -132,7 +315,6 @@ impl McpServer {
                 focus_step_tag: focus_step_tag.clone(),
                 focus_task_id: focus_step_path.as_ref().map(|_| target_id.clone()),
                 focus_step_path: focus_step_path.clone(),
-                agent_id: args.agent_id.clone(),
                 view: focus_view,
                 read_only: args.read_only,
             },
@@ -252,7 +434,7 @@ impl McpServer {
                         {
                             obj.insert(
                                 "lease".to_string(),
-                                serde_json::json!({
+                                json!({
                                     "holder_agent_id": lease.holder_agent_id,
                                     "acquired_seq": lease.acquired_seq,
                                     "expires_seq": lease.expires_seq,
@@ -308,11 +490,228 @@ impl McpServer {
             None
         };
 
+        let include_drafts = focus_view == args::ResumeSuperView::Audit;
+        let map_hud = if let Some(step_tag) = focus_step_tag.as_deref() {
+            // Robustness: derive the "where" compass from an explicit step-scoped query rather
+            // than relying on the relevance-selected memory slice to contain the latest step note.
+            let types = bm_core::think::SUPPORTED_THINK_CARD_TYPES
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>();
+            let step_slice = match graph_query_or_empty(
+                self,
+                &args.workspace,
+                &reasoning.branch,
+                &reasoning.graph_doc,
+                bm_storage::GraphQueryRequest {
+                    ids: None,
+                    types: Some(types),
+                    // Do not filter by status: step-scoped notes often omit `status`, but still
+                    // define the "where" anchor for the map HUD.
+                    status: None,
+                    tags_any: None,
+                    tags_all: Some(vec![step_tag.to_string()]),
+                    text: None,
+                    cursor: None,
+                    limit: 20,
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+                args.read_only,
+                &mut reasoning_branch_missing,
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            let step_cards = graph_nodes_to_cards(step_slice.nodes);
+            if step_cards.is_empty() {
+                build_meaning_map_hud(&memory.cards, include_drafts, Some(step_tag))
+            } else {
+                build_meaning_map_hud(&step_cards, include_drafts, Some(step_tag))
+            }
+        } else {
+            build_meaning_map_hud(&memory.cards, include_drafts, None)
+        };
+
         let omit_workspace = self
             .default_workspace
             .as_deref()
             .is_some_and(|v| v == args.workspace.as_str());
-        let capsule = capsule::build_handoff_capsule(capsule::HandoffCapsuleArgs {
+
+        // Delegation UX: surface at most one active job (RUNNING > QUEUED) for the focused task.
+        // This is a low-noise hint; detailed job history is available via explicit tools.
+        let active_job = if target_id.starts_with("TASK-") {
+            let running = match self.store.jobs_list(
+                &args.workspace,
+                bm_storage::JobsListRequest {
+                    status: Some("RUNNING".to_string()),
+                    task_id: Some(target_id.clone()),
+                    anchor_id: None,
+                    limit: 1,
+                },
+            ) {
+                Ok(v) => v,
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            if let Some(job) = running.jobs.into_iter().next() {
+                Some(job)
+            } else {
+                let queued = match self.store.jobs_list(
+                    &args.workspace,
+                    bm_storage::JobsListRequest {
+                        status: Some("QUEUED".to_string()),
+                        task_id: Some(target_id.clone()),
+                        anchor_id: None,
+                        limit: 1,
+                    },
+                ) {
+                    Ok(v) => v,
+                    Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                    Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+                };
+                queued.jobs.into_iter().next()
+            }
+        } else {
+            None
+        };
+
+        let active_job_open = if let Some(job) = active_job.as_ref() {
+            match self.store.job_open(
+                &args.workspace,
+                bm_storage::JobOpenRequest {
+                    id: job.id.clone(),
+                    include_prompt: false,
+                    include_events: true,
+                    include_meta: false,
+                    max_events: 20,
+                    before_seq: None,
+                },
+            ) {
+                Ok(v) => Some(v),
+                Err(StoreError::UnknownId) => None,
+                Err(StoreError::InvalidInput(_)) => None,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        } else {
+            None
+        };
+
+        const DEFAULT_TASK_STALE_AFTER_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+        let now_ms = crate::support::now_ms_i64();
+        let plan_horizon = if kind == TaskKind::Plan && target_id.starts_with("PLAN-") {
+            match self.store.plan_horizon_stats_for_plan(
+                &args.workspace,
+                &target_id,
+                now_ms,
+                DEFAULT_TASK_STALE_AFTER_MS,
+            ) {
+                Ok(stats) => {
+                    let active = stats.active.max(0) as u64;
+                    let backlog = stats.backlog.max(0) as u64;
+                    let parked = stats.parked.max(0) as u64;
+                    let stale = stats.stale.max(0) as u64;
+                    let done = stats.done.max(0) as u64;
+                    let total = stats.total.max(0) as u64;
+
+                    let mut horizon = json!({
+                        "active": active,
+                        "backlog": backlog,
+                        "parked": parked,
+                        "stale": stale,
+                        "done": done,
+                        "total": total,
+                        "active_limit": 3u64,
+                        "over_active_limit": active > 3
+                    });
+                    if let Some(wake) = stats.next_wake
+                        && let Some(obj) = horizon.as_object_mut()
+                    {
+                        obj.insert(
+                            "next_wake".to_string(),
+                            json!({
+                                "task": wake.task_id,
+                                "parked_until_ts_ms": wake.parked_until_ts_ms
+                            }),
+                        );
+                    }
+                    Some(horizon)
+                }
+                Err(StoreError::InvalidInput(_)) => None,
+                Err(StoreError::UnknownId) => None,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        } else {
+            None
+        };
+
+        // Delegation UX (glanceable): always provide an explicit inbox + runner liveness summary.
+        // This must be derived from persisted state (leases, job rows) — no heuristics.
+        let inbox_counts = match self.store.jobs_status_counts(&args.workspace) {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let inbox = json!({
+            "running": inbox_counts.running,
+            "queued": inbox_counts.queued
+        });
+
+        let runner_status = match self.store.runner_status_snapshot(&args.workspace, now_ms) {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let runner_is_offline = runner_status.status == "offline";
+        let runner_autostart_active = self.maybe_autostart_runner(
+            &args.workspace,
+            now_ms,
+            inbox_counts.queued as usize,
+            runner_is_offline,
+        );
+        let runner_status_json = json!({
+            "status": runner_status.status,
+            "live_count": runner_status.live_count as u64,
+            "idle_count": runner_status.idle_count as u64,
+            "offline_count": runner_status.offline_count as u64,
+            "runner_id": runner_status.runner_id,
+            "active_job_id": runner_status.active_job_id,
+            "lease_expires_at_ms": runner_status.lease_expires_at_ms
+        });
+
+        // When jobs are queued and no runner lease is active, provide a hunt-free copy/paste
+        // runner start hint (same as jobs_radar).
+        let runner_bootstrap = if inbox_counts.queued > 0
+            && !runner_autostart_active
+            && runner_status_json
+                .get("status")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s == "offline")
+        {
+            let storage_dir = self.store.storage_dir();
+            let storage_dir =
+                std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
+            let mcp_bin =
+                std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("bm_mcp"));
+            let runner_bin = mcp_bin
+                .parent()
+                .map(|dir| dir.join("bm_runner"))
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| std::path::PathBuf::from("bm_runner"));
+
+            let cmd = format!(
+                "\"{}\" --storage-dir \"{}\" --workspace \"{}\" --mcp-bin \"{}\"",
+                runner_bin.to_string_lossy(),
+                storage_dir.to_string_lossy(),
+                args.workspace.as_str(),
+                mcp_bin.to_string_lossy()
+            );
+            Some(json!({ "cmd": cmd }))
+        } else {
+            None
+        };
+
+        let mut capsule = capsule::build_handoff_capsule(capsule::HandoffCapsuleArgs {
             toolset: self.toolset,
             workspace: &args.workspace,
             omit_workspace,
@@ -325,6 +724,7 @@ impl McpServer {
             radar: &context.radar,
             steps_summary: context.steps.as_ref(),
             step_focus: step_focus.as_ref(),
+            map_hud,
             handoff: &handoff,
             timeline: &timeline,
             notes_count,
@@ -338,6 +738,37 @@ impl McpServer {
             evidence_total,
             graph_diff_payload: graph_diff_payload.as_ref(),
         });
+        if let Some(obj) = capsule.as_object_mut()
+            && let Some(where_obj) = obj.get_mut("where").and_then(|v| v.as_object_mut())
+        {
+            if let Some(horizon) = plan_horizon.as_ref() {
+                where_obj.insert("horizon".to_string(), horizon.clone());
+            }
+            where_obj.insert("inbox".to_string(), inbox);
+            where_obj.insert("runner_status".to_string(), runner_status_json);
+            if let Some(runner_bootstrap) = runner_bootstrap {
+                where_obj.insert("runner_bootstrap".to_string(), runner_bootstrap);
+            }
+            if let Some(opened) = active_job_open.as_ref() {
+                where_obj.insert("job".to_string(), job_open_to_capsule_job(opened));
+            } else if let Some(job) = active_job.as_ref() {
+                where_obj.insert("job".to_string(), job_row_to_capsule_job(job));
+            }
+
+            // Second-brain core: surface a stable mindpack ref (when present) so /compact or
+            // restarts always have a cheap “resume by meaning” handle.
+            if let Ok(Some(checkout)) = self.store.branch_checkout_get(&args.workspace)
+                && let Ok(slice) =
+                    self.store
+                        .doc_show_tail(&args.workspace, &checkout, "mindpack", None, 1)
+                && let Some(entry) = slice.entries.last()
+            {
+                where_obj.insert(
+                    "pack".to_string(),
+                    json!({ "ref": format!("mindpack@{}", entry.seq) }),
+                );
+            }
+        }
 
         let mut result = result::build_resume_super_result(result::ResumeSuperResultArgs {
             workspace: &args.workspace,

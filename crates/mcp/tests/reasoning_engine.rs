@@ -9,6 +9,81 @@ use std::thread::sleep;
 use std::time::Duration;
 
 #[test]
+fn reasoning_engine_receipts_parsing_handles_unicode_text() {
+    let mut server = Server::start_initialized("reasoning_engine_unicode_receipts");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "init", "arguments": { "workspace": "ws_re_unicode" } }
+    }));
+
+    let plan = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_re_unicode", "kind": "plan", "title": "Plan" } }
+    }));
+    let plan_id = extract_tool_text(&plan)
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("plan id")
+        .to_string();
+
+    let task = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_re_unicode", "kind": "task", "parent": plan_id, "title": "Task" } }
+    }));
+    let task_id = extract_tool_text(&task)
+        .get("result")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "think_card",
+            "arguments": {
+                "workspace": "ws_re_unicode",
+                "target": task_id.clone(),
+                "card": {
+                    "id": "E-RU",
+                    "type": "evidence",
+                    "title": "Evidence RU",
+                    "text": "Запрос пользователя без критериев/метрик/приоритетов; есть риск промахнуться по ожиданиям."
+                }
+            }
+        }
+    }));
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "think_pin", "arguments": { "workspace": "ws_re_unicode", "targets": ["E-RU"], "pinned": true } }
+    }));
+
+    let snapshot = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws_re_unicode", "task": task_id, "view": "smart" } }
+    }));
+    let text = extract_tool_text_str(&snapshot);
+    assert!(
+        !text.starts_with("ERROR:"),
+        "tasks_snapshot should not crash on unicode evidence receipts, got:\n{text}"
+    );
+}
+
+#[test]
 fn reasoning_engine_think_watch_bm4_blind_spot_emits_action() {
     let mut server = Server::start_initialized("reasoning_engine_think_watch_bm4");
 
@@ -86,12 +161,12 @@ fn reasoning_engine_lane_decision_suggests_publish_to_shared() {
             "name": "think_card",
             "arguments": {
                 "workspace": "ws_re_lane",
-                "agent_id": "alice",
                 "card": {
                     "id": "D1",
                     "type": "decision",
                     "title": "Decision in lane",
-                    "text": "We should publish this."
+                    "text": "We should publish this.",
+                    "tags": ["v:draft"]
                 }
             }
         }
@@ -105,7 +180,7 @@ fn reasoning_engine_lane_decision_suggests_publish_to_shared() {
             "name": "think_watch",
             "arguments": {
                 "workspace": "ws_re_lane",
-                "agent_id": "alice",
+                "all_lanes": true,
                 "engine_signals_limit": 20,
                 "engine_actions_limit": 20
             }
@@ -145,6 +220,193 @@ fn reasoning_engine_lane_decision_suggests_publish_to_shared() {
             .iter()
             .any(|c| c.get("target").and_then(|v| v.as_str()) == Some("think_publish")),
         "publish_decision must suggest think_publish"
+    );
+}
+
+#[test]
+fn reasoning_engine_daily_engine_calls_auto_disclose_full_for_hidden_targets() {
+    let mut server = Server::start_initialized_with_args(
+        "reasoning_engine_daily_engine_calls_auto_disclose_full_for_hidden_targets",
+        &["--toolset", "daily"],
+    );
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "init", "arguments": { "workspace": "ws_re_lane_daily" } }
+    }));
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "think_card",
+            "arguments": {
+                "workspace": "ws_re_lane_daily",
+                "card": {
+                    "id": "D1",
+                    "type": "decision",
+                    "title": "Decision in lane",
+                    "text": "We should publish this.",
+                    "tags": ["v:draft"]
+                }
+            }
+        }
+    }));
+
+    let watch = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "think_watch",
+            "arguments": {
+                "workspace": "ws_re_lane_daily",
+                "all_lanes": true,
+                "engine_signals_limit": 20,
+                "engine_actions_limit": 20
+            }
+        }
+    }));
+    let watch_text = extract_tool_text(&watch);
+    let engine = watch_text
+        .get("result")
+        .and_then(|v| v.get("engine"))
+        .expect("engine");
+
+    let actions = engine
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .expect("engine.actions");
+    let publish_action = actions
+        .iter()
+        .find(|a| a.get("kind").and_then(|v| v.as_str()) == Some("publish_decision"))
+        .expect("publish_decision action");
+    let calls = publish_action
+        .get("calls")
+        .and_then(|v| v.as_array())
+        .expect("calls");
+
+    assert!(
+        calls.iter().any(|c| {
+            c.get("action").and_then(|v| v.as_str()) == Some("call_method")
+                && c.get("method").and_then(|v| v.as_str()) == Some("tools/list")
+                && c.get("params")
+                    .and_then(|v| v.get("toolset"))
+                    .and_then(|v| v.as_str())
+                    == Some("full")
+        }),
+        "daily engine calls must disclose toolset=full before suggesting hidden tools"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.get("target").and_then(|v| v.as_str()) == Some("think_publish")),
+        "engine must still suggest think_publish after disclosure"
+    );
+}
+
+#[test]
+fn reasoning_engine_step_aware_calls_include_step() {
+    let mut server = Server::start_initialized("reasoning_engine_step_aware_calls_include_step");
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_bootstrap",
+            "arguments": {
+                "workspace": "ws_re_step_aware",
+                "plan_title": "Plan Step Aware",
+                "task_title": "Task Step Aware",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
+                ]
+            }
+        }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let step_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("step_id"))
+        .and_then(|v| v.as_str())
+        .expect("step id")
+        .to_string();
+
+    // Create a step-scoped hypothesis without tests so BM4 triggers.
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "tools/call",
+        "params": {
+            "name": "think_card",
+            "arguments": {
+                "workspace": "ws_re_step_aware",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "card": { "id": "H1", "type": "hypothesis", "title": "H1", "text": "No tests yet" }
+            }
+        }
+    }));
+
+    // In step-aware engine mode (tasks_resume_super), suggestions should include a step selector so
+    // following the suggestion actually resolves the step-scoped signal.
+    let resume = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 22,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_resume_super",
+            "arguments": {
+                "workspace": "ws_re_step_aware",
+                "task": task_id,
+                "view": "smart",
+                "engine_signals_limit": 50,
+                "engine_actions_limit": 50,
+                "max_chars": 12000
+            }
+        }
+    }));
+    let resume_text = extract_tool_text(&resume);
+    let engine = resume_text
+        .get("result")
+        .and_then(|v| v.get("engine"))
+        .expect("engine");
+    let actions = engine
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .expect("engine.actions");
+
+    let add_test = actions
+        .iter()
+        .find(|a| a.get("kind").and_then(|v| v.as_str()) == Some("add_test_stub"))
+        .expect("add_test_stub action");
+    let calls = add_test
+        .get("calls")
+        .and_then(|v| v.as_array())
+        .expect("action.calls");
+    let call = calls.first().expect("first call");
+    let call_step = call
+        .get("params")
+        .and_then(|v| v.get("step"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        call_step,
+        Some(step_id.as_str()),
+        "step-aware engine call should include step selector"
     );
 }
 

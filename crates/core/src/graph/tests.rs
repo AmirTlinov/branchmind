@@ -19,6 +19,13 @@ fn graph_node_id_validation() {
         GraphNodeIdError::ContainsControl
     );
     assert!(GraphNodeId::try_new("CARD-123").is_ok());
+
+    // v0.1.x: node ids are allowed up to 1024 chars (exclusive upper bound).
+    assert!(GraphNodeId::try_new("a".repeat(1024)).is_ok());
+    assert_eq!(
+        GraphNodeId::try_new("a".repeat(1025)).unwrap_err(),
+        GraphNodeIdError::TooLong
+    );
 }
 
 #[test]

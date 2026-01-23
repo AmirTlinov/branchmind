@@ -8,7 +8,7 @@ mod task;
 mod think;
 
 use crate::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 impl McpServer {
     pub(crate) fn tool_tasks_bootstrap(&mut self, args: Value) -> Value {
@@ -28,6 +28,7 @@ impl McpServer {
             description,
             steps,
             think,
+            reasoning_mode,
         } = args;
 
         let mut events = Vec::new();
@@ -52,23 +53,59 @@ impl McpServer {
             id: task_id,
             revision,
             steps: created_steps,
-        } = match task::create_task_with_steps(
-            self,
-            &workspace,
-            &parent_plan_id,
-            task::CreateTaskWithStepsRequest {
-                task_title,
-                description,
-                steps,
-                agent_id: agent_id.clone(),
-            },
-            &mut events,
-        ) {
+        } = match task::create_task_with_steps(task::CreateTaskWithStepsArgs {
+            server: self,
+            workspace: &workspace,
+            parent_plan_id: &parent_plan_id,
+            task_title,
+            description,
+            steps,
+            agent_id: agent_id.clone(),
+            events: &mut events,
+        }) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
 
         let mut warnings = Vec::new();
+        let mut revision = revision;
+
+        if let Some(mode) = reasoning_mode
+            && mode != "normal"
+        {
+            let payload = json!({
+                "kind": "task",
+                "patch": { "reasoning_mode": mode.clone() }
+            })
+            .to_string();
+            match self.store.edit_task(
+                &workspace,
+                bm_storage::TaskEditRequest {
+                    id: task_id.clone(),
+                    expected_revision: None,
+                    title: None,
+                    description: None,
+                    context: None,
+                    priority: None,
+                    domain: None,
+                    reasoning_mode: Some(mode),
+                    phase: None,
+                    component: None,
+                    assignee: None,
+                    tags: None,
+                    depends_on: None,
+                    event_type: "task_edited".to_string(),
+                    event_payload_json: payload,
+                },
+            ) {
+                Ok((new_revision, event)) => {
+                    revision = new_revision;
+                    events.push(events_to_json(vec![event]).remove(0));
+                }
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        }
+
         let think_pipeline = match think::maybe_run_think_pipeline(
             self,
             &workspace,

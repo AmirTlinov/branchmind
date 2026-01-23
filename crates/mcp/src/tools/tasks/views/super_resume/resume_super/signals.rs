@@ -33,25 +33,11 @@ pub(super) fn load_resume_super_signals(
         decisions_limit,
         evidence_limit,
         blockers_limit,
-        agent_id,
+        agent_id: _agent_id,
         all_lanes,
         read_only,
     } = args;
-
-    let lane_multiplier = if all_lanes {
-        1usize
-    } else if agent_id.is_some() {
-        2usize
-    } else {
-        1usize
-    };
-    let lane_allows = |tags: &[String]| {
-        if all_lanes {
-            true
-        } else {
-            lane_matches_tags(tags, agent_id.as_deref())
-        }
-    };
+    let include_drafts = all_lanes;
 
     let mut decisions = Vec::new();
     if decisions_limit > 0 {
@@ -68,7 +54,7 @@ pub(super) fn load_resume_super_signals(
                 tags_all: None,
                 text: None,
                 cursor: None,
-                limit: decisions_limit.saturating_mul(lane_multiplier),
+                limit: decisions_limit,
                 include_edges: false,
                 edges_limit: 0,
             },
@@ -78,7 +64,7 @@ pub(super) fn load_resume_super_signals(
         let mut filtered = slice
             .nodes
             .into_iter()
-            .filter(|n| lane_allows(&n.tags))
+            .filter(|n| tags_visibility_allows(&n.tags, include_drafts, None))
             .collect::<Vec<_>>();
         filtered.truncate(decisions_limit);
         decisions = graph_nodes_to_signal_cards(filtered);
@@ -99,7 +85,7 @@ pub(super) fn load_resume_super_signals(
                 tags_all: None,
                 text: None,
                 cursor: None,
-                limit: evidence_limit.saturating_mul(lane_multiplier),
+                limit: evidence_limit,
                 include_edges: false,
                 edges_limit: 0,
             },
@@ -109,7 +95,7 @@ pub(super) fn load_resume_super_signals(
         let mut filtered = slice
             .nodes
             .into_iter()
-            .filter(|n| lane_allows(&n.tags))
+            .filter(|n| tags_visibility_allows(&n.tags, include_drafts, None))
             .collect::<Vec<_>>();
         filtered.truncate(evidence_limit);
         evidence = graph_nodes_to_signal_cards(filtered);
@@ -130,7 +116,7 @@ pub(super) fn load_resume_super_signals(
                 tags_all: None,
                 text: None,
                 cursor: None,
-                limit: blockers_limit.saturating_mul(lane_multiplier),
+                limit: blockers_limit,
                 include_edges: false,
                 edges_limit: 0,
             },
@@ -140,7 +126,7 @@ pub(super) fn load_resume_super_signals(
         let mut filtered = slice
             .nodes
             .into_iter()
-            .filter(|n| lane_allows(&n.tags))
+            .filter(|n| tags_visibility_allows(&n.tags, include_drafts, None))
             .collect::<Vec<_>>();
         filtered.truncate(blockers_limit);
         blockers = graph_nodes_to_signal_cards(filtered);

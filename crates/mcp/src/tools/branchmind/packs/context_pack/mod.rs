@@ -61,7 +61,7 @@ impl McpServer {
             match crate::tools::branchmind::think::resolve_step_context_from_args(
                 self, &workspace, args_obj, step_raw,
             ) {
-                Ok(v) => Some(v),
+                Ok(v) => v,
                 Err(resp) => return resp,
             }
         } else {
@@ -176,7 +176,6 @@ impl McpServer {
             notes_doc: scope.notes_doc.as_str(),
             trace_doc: scope.trace_doc.as_str(),
             graph_doc: scope.graph_doc.as_str(),
-            agent_id: agent_id.as_deref(),
             all_lanes,
             step_ctx: step_ctx.as_ref(),
             engine: engine.as_ref(),

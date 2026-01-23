@@ -37,11 +37,9 @@ pub(super) fn parse(args_obj: &serde_json::Map<String, Value>) -> Result<WatchAr
     let warm_archive = view.warm_archive();
     let step = optional_string(args_obj, "step")?;
     let agent_id = optional_agent_id(args_obj, "agent_id")?;
-    let all_lanes = args_obj
-        .get("all_lanes")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let all_lanes = all_lanes || view.implies_all_lanes();
+    let include_drafts = optional_bool(args_obj, "include_drafts")?.unwrap_or(false);
+    let all_lanes = optional_bool(args_obj, "all_lanes")?.unwrap_or(false);
+    let all_lanes = all_lanes || include_drafts || view.implies_all_lanes();
     let limit_candidates = optional_usize(args_obj, "limit_candidates")?.unwrap_or(30);
     let limit_hypotheses = optional_usize(args_obj, "limit_hypotheses")?.unwrap_or(5);
     let limit_questions = optional_usize(args_obj, "limit_questions")?.unwrap_or(5);

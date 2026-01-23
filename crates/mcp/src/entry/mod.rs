@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod framing;
+pub(crate) mod poll;
 mod stdio;
 
 #[cfg(unix)]

@@ -9,6 +9,8 @@ pub(super) const SQL: &str = r#"
           parent_step_id TEXT,
           ordinal INTEGER NOT NULL,
           title TEXT NOT NULL,
+          next_action TEXT,
+          stop_criteria TEXT,
           completed INTEGER NOT NULL,
           completed_at_ms INTEGER,
           started_at_ms INTEGER,

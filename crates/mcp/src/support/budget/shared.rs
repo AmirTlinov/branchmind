@@ -37,7 +37,7 @@ pub(crate) fn clamp_budget_max(max_chars: usize) -> (usize, bool) {
         (max_chars, false)
     }
 }
-pub(super) fn truncate_string(value: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_string(value: &str, max_chars: usize) -> String {
     if value.len() <= max_chars {
         return value.to_string();
     }

@@ -112,6 +112,8 @@ pub(super) fn apply_focus_only_shaping(
     engine_max_cards: usize,
     keep_graph_diff: bool,
 ) {
+    let engine_max_cards = engine_max_cards.clamp(1, 20);
+
     // 1) Filter timeline to current step path (segment-safe prefix match).
     if let Some(path) = step_path {
         let nested_prefix = format!("{path}.");
@@ -176,7 +178,7 @@ pub(super) fn apply_focus_only_shaping(
                 open_ids.push(id.to_string());
             }
         }
-        for id in open_ids.into_iter().take(engine_max_cards.max(1)) {
+        for id in open_ids.into_iter().take(engine_max_cards) {
             keep_ids.insert(id);
         }
     }
@@ -214,9 +216,8 @@ pub(super) fn apply_focus_only_shaping(
                 keep_ids.contains(id)
             });
         }
-        let max_cards = engine_max_cards.clamp(1, 20);
-        if cards.len() > max_cards {
-            cards.truncate(max_cards);
+        if cards.len() > engine_max_cards {
+            cards.truncate(engine_max_cards);
         }
     }
     recompute_card_stats_at(result, &["memory", "cards"], &["memory", "stats"]);

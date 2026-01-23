@@ -66,6 +66,11 @@ fn tasks_macro_start_principal_templates_smoke() {
         .iter()
         .find(|t| t.get("title").and_then(|v| v.as_str()) == Some("Principal Task"))
         .expect("task entry");
+    let task_id = task
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
     let steps_count = task
         .get("steps_count")
         .and_then(|v| v.as_i64())
@@ -73,5 +78,22 @@ fn tasks_macro_start_principal_templates_smoke() {
     assert_eq!(
         steps_count, 5,
         "principal-task template should create 5 steps"
+    );
+
+    let radar = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_principal_tpl", "task": task_id, "max_chars": 2000 } }
+    }));
+    let radar_text = extract_tool_text(&radar);
+    assert_eq!(
+        radar_text
+            .get("result")
+            .and_then(|v| v.get("target"))
+            .and_then(|v| v.get("reasoning_mode"))
+            .and_then(|v| v.as_str()),
+        Some("strict"),
+        "principal-task should default to strict reasoning_mode"
     );
 }

@@ -15,7 +15,8 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
-        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+        let mut warnings = Vec::<Value>::new();
+        let _agent_id = match optional_agent_id(args_obj, "agent_id") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -143,8 +144,10 @@ impl McpServer {
             if let Some(status) = status_map.get(stage) {
                 parsed.status = status.clone();
             }
-            if let Err(resp) = apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
-                return resp;
+            match apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
+                Ok(Some(w)) => warnings.push(w),
+                Ok(None) => {}
+                Err(resp) => return resp,
             }
             if let Err(resp) = apply_lane_context_to_card(args_obj, &mut parsed) {
                 return resp;
@@ -201,7 +204,7 @@ impl McpServer {
             );
             meta.insert("card_id".to_string(), Value::String(card_id.clone()));
             meta.insert("stage".to_string(), Value::String("decision".to_string()));
-            meta.insert("lane".to_string(), lane_meta_value(agent_id.as_deref()));
+            meta.insert("lane".to_string(), lane_meta_value(None));
 
             let step_raw = match optional_string(args_obj, "step") {
                 Ok(v) => v,
@@ -214,14 +217,22 @@ impl McpServer {
                     Ok(v) => v,
                     Err(resp) => return resp,
                 };
-                meta.insert(
-                    "step".to_string(),
-                    json!({
-                        "task_id": step_ctx.task_id,
-                        "step_id": step_ctx.step.step_id,
-                        "path": step_ctx.step.path
-                    }),
-                );
+                if let Some(step_ctx) = step_ctx {
+                    meta.insert(
+                        "step".to_string(),
+                        json!({
+                            "task_id": step_ctx.task_id,
+                            "step_id": step_ctx.step.step_id,
+                            "path": step_ctx.step.path
+                        }),
+                    );
+                } else {
+                    warnings.push(warning(
+                        "STEP_CONTEXT_IGNORED",
+                        "step was ignored (no TASK focus/target)",
+                        "Set workspace focus to a TASK (tasks_focus_set) or pass target=TASK-... to bind step-scoped cards.",
+                    ));
+                }
             }
 
             let meta = Value::Object(meta).to_string();
@@ -250,7 +261,7 @@ impl McpServer {
             });
         }
 
-        ai_ok(
+        let response = ai_ok(
             "think_pipeline",
             json!({
                 "workspace": workspace.as_str(),
@@ -266,6 +277,13 @@ impl McpServer {
                 "last_seq": last_seq,
                 "decision_note": decision_note
             }),
-        )
+        );
+
+        if warnings.is_empty() {
+            response
+        } else {
+            let result = response.get("result").cloned().unwrap_or(Value::Null);
+            ai_ok_with_warnings("think_pipeline", result, warnings, Vec::new())
+        }
     }
 }

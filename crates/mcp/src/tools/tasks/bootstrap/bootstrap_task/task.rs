@@ -11,27 +11,30 @@ pub(super) struct CreatedTask {
     pub steps: Vec<bm_storage::StepRef>,
 }
 
-pub(super) struct CreateTaskWithStepsRequest {
-    pub task_title: String,
-    pub description: Option<String>,
-    pub steps: Vec<BootstrapStepInput>,
-    pub agent_id: Option<String>,
+pub(super) struct CreateTaskWithStepsArgs<'a> {
+    pub(super) server: &'a mut McpServer,
+    pub(super) workspace: &'a WorkspaceId,
+    pub(super) parent_plan_id: &'a str,
+    pub(super) task_title: String,
+    pub(super) description: Option<String>,
+    pub(super) steps: Vec<BootstrapStepInput>,
+    pub(super) agent_id: Option<String>,
+    pub(super) events: &'a mut Vec<Value>,
 }
 
 pub(super) fn create_task_with_steps(
-    server: &mut McpServer,
-    workspace: &WorkspaceId,
-    parent_plan_id: &str,
-    request: CreateTaskWithStepsRequest,
-    events: &mut Vec<Value>,
+    args: CreateTaskWithStepsArgs<'_>,
 ) -> Result<CreatedTask, Value> {
-    let CreateTaskWithStepsRequest {
+    let CreateTaskWithStepsArgs {
+        server,
+        workspace,
+        parent_plan_id,
         task_title,
         description,
         steps,
         agent_id,
-    } = request;
-
+        events,
+    } = args;
     let payload = json!({
         "kind": "task",
         "title": task_title,
@@ -90,6 +93,8 @@ pub(super) fn create_task_with_steps(
                     success_criteria: None,
                     tests: Some(step.tests.clone()),
                     blockers: Some(step.blockers.clone()),
+                    next_action: None,
+                    stop_criteria: None,
                     proof_tests_mode: (step.proof_tests_mode != bm_storage::ProofMode::Off)
                         .then_some(step.proof_tests_mode),
                     proof_security_mode: (step.proof_security_mode != bm_storage::ProofMode::Off)

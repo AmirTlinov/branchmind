@@ -12,6 +12,8 @@ mod export;
 mod memory;
 #[path = "branchmind_core/merge.rs"]
 mod merge;
+#[path = "branchmind_core/skill.rs"]
+mod skill;
 #[path = "branchmind_core/snapshot.rs"]
 mod snapshot;
 #[path = "branchmind_core/templates.rs"]

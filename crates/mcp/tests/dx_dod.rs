@@ -80,16 +80,32 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "daily start must be 2 lines (state + command)"
     );
     assert!(
-        start_lines[0].contains("focus TASK-") && start_lines[0].contains("| next gate"),
-        "start state line should include focus + next gate hint"
+        start_lines[0].contains("focus TASK-") && start_lines[0].contains("| next map"),
+        "when where=unknown, start state line should prefer next map hint"
     );
     assert!(
-        start_lines[1].starts_with("tasks_macro_close_step"),
-        "start should suggest the next action as a command"
+        start_lines[0].contains("| where="),
+        "start state line should include where=... (explicit, even when unknown)"
+    );
+    assert!(
+        start_lines[0].contains("| ref="),
+        "start state line should include ref=... for navigation"
+    );
+    assert!(
+        start_lines[1].starts_with("think_card"),
+        "when where=unknown, start should suggest a canonical anchor attach command"
     );
     assert!(
         !start_lines[1].contains("workspace="),
-        "when default workspace is configured, action commands should omit workspace"
+        "when default workspace is configured, map commands should omit workspace"
+    );
+    assert!(
+        start_lines[1].contains("v:canon"),
+        "anchor attach suggestion must be canonical (v:canon)"
+    );
+    assert!(
+        start_lines[0].contains("| backup tasks_macro_close_step"),
+        "start state line should preserve progress as a backup command"
     );
 
     let snapshot = server.request(json!( {
@@ -107,16 +123,32 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "daily snapshot must be 2 lines (state + command)"
     );
     assert!(
-        snap_lines[0].contains("focus TASK-") && snap_lines[0].contains("| next gate"),
-        "snapshot state line should include focus + next gate hint"
+        snap_lines[0].contains("focus TASK-") && snap_lines[0].contains("| next map"),
+        "when where=unknown, snapshot state line should prefer next map hint"
     );
     assert!(
-        snap_lines[1].starts_with("tasks_macro_close_step"),
-        "snapshot should suggest the next action as a command"
+        snap_lines[0].contains("| where="),
+        "snapshot state line should include where=... (explicit, even when unknown)"
+    );
+    assert!(
+        snap_lines[0].contains("| ref="),
+        "snapshot state line should include ref=... for navigation"
+    );
+    assert!(
+        snap_lines[1].starts_with("think_card"),
+        "when where=unknown, snapshot should suggest a canonical anchor attach command"
     );
     assert!(
         !snap_lines[1].contains("workspace="),
-        "when default workspace is configured, action commands should omit workspace"
+        "when default workspace is configured, map commands should omit workspace"
+    );
+    assert!(
+        snap_lines[1].contains("v:canon"),
+        "anchor attach suggestion must be canonical (v:canon)"
+    );
+    assert!(
+        snap_lines[0].contains("| backup tasks_macro_close_step"),
+        "snapshot state line should preserve progress as a backup command"
     );
 }
 
@@ -249,6 +281,11 @@ fn dx_dod_budget_warnings_remain_warnings_and_stay_small() {
     }));
     let text = extract_tool_text_str(&snapshot);
     assert_tag_light(&text);
+    let first = text.lines().next().unwrap_or("");
+    assert!(
+        first.contains("| ref="),
+        "snapshot must keep a stable ref=... handle in the state line under tight budgets, got:\n{text}"
+    );
     assert!(
         text.contains("WARNING: BUDGET_"),
         "budget truncation must be surfaced as WARNING lines"
@@ -259,8 +296,87 @@ fn dx_dod_budget_warnings_remain_warnings_and_stay_small() {
     );
     let line_count = text.lines().count();
     assert!(
-        line_count <= 4,
-        "budget warnings must remain small (<=4 lines), got {line_count}"
+        line_count <= 5,
+        "budget warnings must remain small (<=5 lines), got {line_count}"
+    );
+}
+
+#[test]
+fn dx_dod_prep_action_survives_budget_truncation_in_portal_lines() {
+    let mut server = Server::start_initialized_with_args(
+        "dx_dod_prep_action_survives_budget_truncation_in_portal_lines",
+        &["--toolset", "daily", "--workspace", "ws_dx_dod_prep_budget"],
+    );
+
+    let _ = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Budget Prep Task" } }
+    }));
+
+    // Make the meaning-map resolvable so the portal can focus on prep (not anchor attach).
+    let _ = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "think_card", "arguments": {
+            "workspace": "ws_dx_dod_prep_budget",
+            "step": "focus",
+            "card": {
+                "id": "CARD-ANCHOR-DX-PREP",
+                "type": "note",
+                "title": "Anchor attach (dx prep)",
+                "text": "Anchor attach note.",
+                "tags": ["a:storage", "v:canon"]
+            }
+        } }
+    }));
+
+    // Add a large note to force truncation while still keeping the capsule commands visible.
+    let _ = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_note",
+            "arguments": {
+                "workspace": "ws_dx_dod_prep_budget",
+                "path": "s:0",
+                "note": "x".repeat(6000)
+            }
+        }
+    }));
+
+    let snapshot = server.request(json!( {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000, "fmt": "lines" } }
+    }));
+    let text = extract_tool_text_str(&snapshot);
+    assert_tag_light(&text);
+    assert!(
+        text.contains("WARNING: BUDGET_"),
+        "expected truncation warning under constrained max_chars"
+    );
+    let state = text.lines().next().unwrap_or("");
+    assert!(
+        state.contains("where=a:storage"),
+        "after anchor attach, snapshot must include where=a:storage"
+    );
+    assert!(
+        state.contains("| backup "),
+        "portal state line must preserve a backup action under truncation"
+    );
+    assert!(
+        state.contains("skeptic"),
+        "prep backup should keep the skeptic loop hint (think before act)"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("tasks_macro_close_step")),
+        "portal lines must still include the progress macro command under truncation"
     );
 }
 
@@ -315,7 +431,11 @@ fn dx_dod_more_is_copy_paste_ready_when_no_action() {
     assert_tag_light(&text);
 
     let lines = text.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2, "continuation should stay 2 lines");
+    assert_eq!(
+        lines.len(),
+        2,
+        "continuation should stay 2 lines (state + command)"
+    );
     assert!(
         lines[1].starts_with("tasks_snapshot"),
         "continuation must be a copy/paste-ready snapshot command"

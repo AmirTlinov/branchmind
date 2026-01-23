@@ -33,13 +33,14 @@ separate explicit “full view” tool rather than teaching agents to switch for
 BM-L1 line protocol (tag-light):
 
 - Plain content line: stable, skimmable state (e.g. focus + next), **without a tag prefix**.
+  - The `status` state line may include `build=<fingerprint>` (version + git sha + profile) so agents can detect stale servers/daemons.
 - Untagged command lines: one or more copy/paste-ready next actions (tools/methods), placed after the state line.
   (We intentionally omit a `COMMAND:` prefix to avoid constant semantic noise.)
 - Tagged utility lines:
   - `ERROR:` error (typed, actionable, with a recovery hint)
   - `WARNING:` warning / heads-up (typed, actionable, with a recovery hint)
   - `MORE:` continuation marker (pagination cursor / “more available”)
-  - `REFERENCE:` reserved for rare anchors (external evidence, doc seq, ids) and should not appear by default.
+  - `REFERENCE:` reserved for rare navigation anchors (ids / doc seq). It may appear on delta outputs, on budget-truncated outputs, or when `refs=true` is requested; it should not appear by default.
 - `WATERMARK:` is reserved for future use; it does not appear in normal BM-L1 outputs.
 
 In BM-L1 mode, the server may intentionally leave `warnings[]` / `suggestions[]` empty because those are
@@ -96,7 +97,7 @@ A stable namespace for a project/workspace (IDE-provided).
 
 DX note (default workspace):
 
-- Portal tools may allow omitting `workspace` when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
+- When the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`), callers may omit `workspace` in tool calls and it will default to that workspace.
 - Explicit `workspace` always wins (no silent re-targeting).
 
 DX note (workspace lock, optional):
@@ -121,13 +122,47 @@ A short stable identifier for an agent instance when multiple agents work in the
 
 Lane convention (tags + meta):
 
-- `lane:shared` — shared lane (canonical anchors).
-- `lane:agent:<agent_id>` — agent-private lane (drafts).
+- `lane:shared` — shared lane (default).
+- `lane:agent:<agent_id>` — **legacy** draft marker (kept for backwards compatibility).
 
 DX note (default agent_id, optional):
 
 - The server may be configured with a default agent id (`--agent-id` / `BRANCHMIND_AGENT_ID`).
-- When configured, tool calls that support `agent_id` may treat omitted `agent_id` as the default.
+- The default agent id is intended for **concurrency semantics** (e.g. step leases) and audit metadata.
+- For meaning-mode memory tools, the server does **not** require an injected agent id; durable retrieval must not depend on it.
+  (Implementation note: the MCP adapter may inject the default agent id only for `tasks_*` calls.)
+- Durable memory must not depend on knowing a prior agent id:
+  - stable resume is meaning-first (anchors + canon/pins),
+  - draft expansion is an explicit opt-in for audit/sync (`include_drafts=true` / `all_lanes=true`; legacy lane tags are treated as drafts).
+
+### AnchorId (meaning map, v0.6)
+
+A stable semantic identifier for an architecture area (boundary/component/contract/etc).
+
+```json
+{
+  "type": "string",
+  "minLength": 3,
+  "maxLength": 66,
+  "pattern": "^a:[a-z0-9][a-z0-9-]{0,63}$"
+}
+```
+
+Notes:
+
+- No hierarchy in the id: use explicit relations instead.
+- IDs are stable across refactors (do not embed file paths).
+
+### Visibility tags (draft vs canon, v0.1)
+
+Visibility is expressed via plain tags (lowercased):
+
+- `v:canon` — canonical (shown in meaning-first anchor views).
+- `v:draft` — draft (hidden by default; available via explicit expansion).
+
+Legacy compatibility:
+
+- `lane:agent:*` is treated as draft unless pinned or explicitly `v:canon`.
 
 ### PlanId / TaskId
 
@@ -135,6 +170,14 @@ Human-readable identifiers.
 
 ```json
 { "type": "string", "pattern": "^(PLAN|TASK)-[0-9]{3,}$" }
+```
+
+### JobId
+
+Human-readable identifier for delegated work tracking.
+
+```json
+{ "type": "string", "pattern": "^JOB-[0-9]{3,}$" }
 ```
 
 ### QualifiedId
@@ -207,7 +250,15 @@ Graph merge conflicts are first-class entities with deterministic IDs.
 ### TaskStatus
 
 ```json
-{ "type": "string", "enum": ["TODO", "ACTIVE", "DONE"] }
+{ "type": "string", "enum": ["TODO", "ACTIVE", "PARKED", "DONE", "CANCELED"] }
+```
+
+### JobStatus
+
+Delegation lifecycle state.
+
+```json
+{ "type": "string", "enum": ["QUEUED", "RUNNING", "DONE", "FAILED", "CANCELED"] }
 ```
 
 ### Priority
@@ -221,6 +272,18 @@ Graph merge conflicts are first-class entities with deterministic IDs.
 ```json
 { "type": "array", "items": { "type": "string" } }
 ```
+
+Tag conventions (v0.6):
+
+- Pins:
+  - `pinned` — force-show in relevance-first views (low-noise resume surface).
+- Meaning map anchors:
+  - `a:<slug>` — attach an artifact to an AnchorId (see above).
+- Visibility (noise control without deleting):
+  - `v:canon` — durable, reusable knowledge (decisions/evidence/tests/anchor definitions).
+  - `v:draft` — exploratory notes (hidden by default in low-noise views; discoverable on demand).
+- Lanes (legacy / optional):
+  - `lane:shared`, `lane:agent:<agent_id>` — may be present on older artifacts or in explicit multi-agent workflows.
 
 ## Evidence artifacts (v0.2)
 

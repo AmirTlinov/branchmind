@@ -20,6 +20,22 @@ pub(super) fn apply_step_patch_snapshot_tx(
     let step_id = snapshot_required_str(snapshot, "step_id")?;
     let path = snapshot_required_str(snapshot, "path")?;
     let title = snapshot_required_str(snapshot, "title")?;
+    let next_action = match snapshot.get("next_action") {
+        None => None,
+        Some(JsonValue::Null) => Some(None),
+        Some(JsonValue::String(value)) => Some(Some(value.clone())),
+        _ => return Err(StoreError::InvalidInput("snapshot invalid string field")),
+    };
+    let stop_criteria = match snapshot.get("stop_criteria") {
+        None => None,
+        Some(JsonValue::Null) => Some(None),
+        Some(JsonValue::String(value)) => Some(Some(value.clone())),
+        _ => return Err(StoreError::InvalidInput("snapshot invalid string field")),
+    };
+    let proof_tests_mode = snapshot_optional_i64(snapshot, "proof_tests_mode")?;
+    let proof_security_mode = snapshot_optional_i64(snapshot, "proof_security_mode")?;
+    let proof_perf_mode = snapshot_optional_i64(snapshot, "proof_perf_mode")?;
+    let proof_docs_mode = snapshot_optional_i64(snapshot, "proof_docs_mode")?;
     let success_criteria = snapshot_required_vec(snapshot, "success_criteria")?;
     let tests = snapshot_required_vec(snapshot, "tests")?;
     let blockers = snapshot_required_vec(snapshot, "blockers")?;
@@ -35,14 +51,50 @@ pub(super) fn apply_step_patch_snapshot_tx(
 
     super::super::super::bump_task_revision_tx(tx, workspace.as_str(), &task_id, None, now_ms)?;
 
+    let (
+        current_next_action,
+        current_stop_criteria,
+        current_proof_tests_mode,
+        current_proof_security_mode,
+        current_proof_perf_mode,
+        current_proof_docs_mode,
+    ) = tx.query_row(
+        r#"
+        SELECT next_action, stop_criteria,
+               proof_tests_mode, proof_security_mode, proof_perf_mode, proof_docs_mode
+        FROM steps
+        WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+        "#,
+        params![workspace.as_str(), task_id, step_id],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        },
+    )?;
+
+    let next_action = next_action.unwrap_or(current_next_action);
+    let stop_criteria = stop_criteria.unwrap_or(current_stop_criteria);
+    let proof_tests_mode = proof_tests_mode.unwrap_or(current_proof_tests_mode);
+    let proof_security_mode = proof_security_mode.unwrap_or(current_proof_security_mode);
+    let proof_perf_mode = proof_perf_mode.unwrap_or(current_proof_perf_mode);
+    let proof_docs_mode = proof_docs_mode.unwrap_or(current_proof_docs_mode);
+
     if completed {
         if let Some(completed_at_ms) = completed_at_ms {
             let changed = tx.execute(
                 r#"
                 UPDATE steps
-                SET title=?4, criteria_confirmed=?5, tests_confirmed=?6, security_confirmed=?7,
-                    perf_confirmed=?8, docs_confirmed=?9, completed=?10, completed_at_ms=?11,
-                    blocked=?12, block_reason=?13, updated_at_ms=?14
+                SET title=?4, next_action=?5, stop_criteria=?6,
+                    proof_tests_mode=?7, proof_security_mode=?8, proof_perf_mode=?9, proof_docs_mode=?10,
+                    criteria_confirmed=?11, tests_confirmed=?12, security_confirmed=?13,
+                    perf_confirmed=?14, docs_confirmed=?15, completed=?16, completed_at_ms=?17,
+                    blocked=?18, block_reason=?19, updated_at_ms=?20
                 WHERE workspace=?1 AND task_id=?2 AND step_id=?3
                 "#,
                 params![
@@ -50,6 +102,12 @@ pub(super) fn apply_step_patch_snapshot_tx(
                     task_id,
                     step_id,
                     title,
+                    next_action,
+                    stop_criteria,
+                    proof_tests_mode,
+                    proof_security_mode,
+                    proof_perf_mode,
+                    proof_docs_mode,
                     if criteria_confirmed { 1i64 } else { 0i64 },
                     if tests_confirmed { 1i64 } else { 0i64 },
                     if security_confirmed { 1i64 } else { 0i64 },
@@ -69,9 +127,11 @@ pub(super) fn apply_step_patch_snapshot_tx(
             let changed = tx.execute(
                 r#"
                 UPDATE steps
-                SET title=?4, criteria_confirmed=?5, tests_confirmed=?6, security_confirmed=?7,
-                    perf_confirmed=?8, docs_confirmed=?9, completed=?10,
-                    blocked=?11, block_reason=?12, updated_at_ms=?13
+                SET title=?4, next_action=?5, stop_criteria=?6,
+                    proof_tests_mode=?7, proof_security_mode=?8, proof_perf_mode=?9, proof_docs_mode=?10,
+                    criteria_confirmed=?11, tests_confirmed=?12, security_confirmed=?13,
+                    perf_confirmed=?14, docs_confirmed=?15, completed=?16,
+                    blocked=?17, block_reason=?18, updated_at_ms=?19
                 WHERE workspace=?1 AND task_id=?2 AND step_id=?3
                 "#,
                 params![
@@ -79,6 +139,12 @@ pub(super) fn apply_step_patch_snapshot_tx(
                     task_id,
                     step_id,
                     title,
+                    next_action,
+                    stop_criteria,
+                    proof_tests_mode,
+                    proof_security_mode,
+                    proof_perf_mode,
+                    proof_docs_mode,
                     if criteria_confirmed { 1i64 } else { 0i64 },
                     if tests_confirmed { 1i64 } else { 0i64 },
                     if security_confirmed { 1i64 } else { 0i64 },
@@ -98,9 +164,11 @@ pub(super) fn apply_step_patch_snapshot_tx(
         let changed = tx.execute(
             r#"
             UPDATE steps
-            SET title=?4, criteria_confirmed=?5, tests_confirmed=?6, security_confirmed=?7,
-                perf_confirmed=?8, docs_confirmed=?9, completed=?10, completed_at_ms=NULL,
-                blocked=?11, block_reason=?12, updated_at_ms=?13
+            SET title=?4, next_action=?5, stop_criteria=?6,
+                proof_tests_mode=?7, proof_security_mode=?8, proof_perf_mode=?9, proof_docs_mode=?10,
+                criteria_confirmed=?11, tests_confirmed=?12, security_confirmed=?13,
+                perf_confirmed=?14, docs_confirmed=?15, completed=?16, completed_at_ms=NULL,
+                blocked=?17, block_reason=?18, updated_at_ms=?19
             WHERE workspace=?1 AND task_id=?2 AND step_id=?3
             "#,
             params![
@@ -108,6 +176,12 @@ pub(super) fn apply_step_patch_snapshot_tx(
                 task_id,
                 step_id,
                 title,
+                next_action,
+                stop_criteria,
+                proof_tests_mode,
+                proof_security_mode,
+                proof_perf_mode,
+                proof_docs_mode,
                 if criteria_confirmed { 1i64 } else { 0i64 },
                 if tests_confirmed { 1i64 } else { 0i64 },
                 if security_confirmed { 1i64 } else { 0i64 },

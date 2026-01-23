@@ -37,7 +37,9 @@ The output is intended to be embedded into an AI-first IDE and to remain usable 
 
 ### 5) Rust + MCP-only + performance
 
-- MCP-only server (stdio). **No GUI/TUI**. No human UI dependencies.
+- MCP-only **core** server (stdio). **No GUI/TUI** in the core.
+- Optional **local read-only HTTP viewer** (feature-flagged, loopback-only) for human situational awareness.
+- No outbound network calls; the viewer is local-only and strictly read-only.
 - Keep the core deterministic and fast; enforce budgets to avoid context blow-ups.
 - Prefer a **low-dependency** build and a small runtime footprint suitable for IDE integration.
 
@@ -61,4 +63,3 @@ The output is intended to be embedded into an AI-first IDE and to remain usable 
 - Property/unit tests for core invariants (IDs, revisions, checkpoints, conflict lifecycle).
 - Budget enforcement tests (truncation must be explicit and schema-stable).
 - No secret leakage via logs; artifacts only returned on explicit read tools.
-

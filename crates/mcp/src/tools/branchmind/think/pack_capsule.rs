@@ -9,7 +9,6 @@ pub(super) struct ThinkPackCapsuleArgs<'a> {
     pub(super) branch: &'a str,
     pub(super) graph_doc: &'a str,
     pub(super) trace_doc: &'a str,
-    pub(super) agent_id: Option<&'a str>,
     pub(super) all_lanes: bool,
     pub(super) step_ctx: Option<&'a ResolvedStepContext>,
     pub(super) engine: Option<&'a Value>,
@@ -55,7 +54,7 @@ pub(super) fn build_think_pack_capsule(args: ThinkPackCapsuleArgs<'_>) -> Value 
     let lane = if args.all_lanes {
         json!({ "kind": "all" })
     } else {
-        lane_meta_value(args.agent_id)
+        lane_meta_value(None)
     };
 
     json!({

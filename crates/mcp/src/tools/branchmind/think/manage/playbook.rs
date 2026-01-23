@@ -41,6 +41,38 @@ impl McpServer {
                     "decision: fix + verify"
                 ]
             }),
+            "strict" => json!({
+                "steps": [
+                    "frame: restate goal + constraints + non-goals (one paragraph)",
+                    "skeptic-loop: even if the idea looks good, write a counter-hypothesis → minimal falsifying test → stop criteria (time/budget/signal)",
+                    "counter: steelman the best alternative approach; name why it could win",
+                    "minimize: propose the simplest acceptable solution; delete needless complexity",
+                    "breakthrough-loop (optional): force one 10x lever → cheapest decisive test → stop criteria (time/budget/signal)",
+                    "evidence: define the smallest runnable probe and capture receipts (CMD + LINK)",
+                    "decision: commit the next step + rollback/stop rule + what would change your mind"
+                ]
+            }),
+            "skeptic" | "skeptic_loop" => json!({
+                "steps": [
+                    "frame: restate the claim/idea in one line",
+                    "counter-hypothesis: write the strongest opposite case (steelman)",
+                    "falsifier: define the cheapest test that could disprove you",
+                    "stop criteria: define when to stop debating and commit (time/budget/signal)",
+                    "decision: commit next step + what would change your mind"
+                ]
+            }),
+            "breakthrough" => json!({
+                "steps": [
+                    "frame: state the core tension (what is stuck and why it matters)",
+                    "inversion: design the opposite solution; write what it would optimize",
+                    "assumptions: list 5 hidden assumptions; replace 2 with alternatives",
+                    "extremes: solve under an extreme constraint (10x less budget / 10x more scale)",
+                    "analogy: import a pattern from another domain; map 3 correspondences",
+                    "lever: name the single 10x lever (architecture/data/algorithm/interface)",
+                    "test: design the cheapest decisive prototype that could validate the lever",
+                    "stop criteria: define when to stop exploring and commit (time/budget/signal)"
+                ]
+            }),
             "bisect" => json!({
                 "steps": [
                     "frame: define the failing signal (red) and success signal (green)",

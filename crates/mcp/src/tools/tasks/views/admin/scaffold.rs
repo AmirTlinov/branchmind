@@ -247,6 +247,8 @@ impl McpServer {
                                 success_criteria: None,
                                 tests: Some(step.tests.clone()),
                                 blockers: Some(step.blockers.clone()),
+                                next_action: None,
+                                stop_criteria: None,
                                 proof_tests_mode: (step.proof_tests_mode
                                     != bm_storage::ProofMode::Off)
                                     .then_some(step.proof_tests_mode),

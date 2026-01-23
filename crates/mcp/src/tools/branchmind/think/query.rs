@@ -17,14 +17,19 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+        let _agent_id = match optional_agent_id(args_obj, "agent_id") {
             Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let include_drafts = match optional_bool(args_obj, "include_drafts") {
+            Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
         let all_lanes = match optional_bool(args_obj, "all_lanes") {
             Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
+        let all_lanes = all_lanes || include_drafts;
         let ids = match optional_string_values(args_obj, "ids") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -41,6 +46,7 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let step_scoped = step.is_some();
         let tags_any = match optional_string_values(args_obj, "tags_any") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -78,12 +84,14 @@ impl McpServer {
                     Ok(v) => v,
                     Err(resp) => return resp,
                 };
-            let mut all = std::collections::BTreeSet::<String>::new();
-            if let Some(existing) = tags_all.take() {
-                all.extend(existing);
+            if let Some(step_ctx) = step_ctx {
+                let mut all = std::collections::BTreeSet::<String>::new();
+                if let Some(existing) = tags_all.take() {
+                    all.extend(existing);
+                }
+                all.insert(step_ctx.step_tag);
+                tags_all = Some(all.into_iter().collect());
             }
-            all.insert(step_ctx.step_tag);
-            tags_all = Some(all.into_iter().collect());
         }
 
         let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
@@ -91,15 +99,7 @@ impl McpServer {
             types.or_else(|| Some(supported.iter().map(|v| v.to_string()).collect::<Vec<_>>()));
 
         let raw_limit = limit;
-        let query_limit = if raw_limit == 0 {
-            0
-        } else {
-            raw_limit.saturating_mul(if !all_lanes && agent_id.is_some() {
-                2
-            } else {
-                1
-            })
-        };
+        let query_limit = raw_limit;
         let slice = match self.store.graph_query(
             &workspace,
             &branch,
@@ -136,9 +136,28 @@ impl McpServer {
         };
 
         let mut cards = graph_nodes_to_cards(slice.nodes);
-        let agent_id = agent_id.as_deref();
-        if !all_lanes {
-            cards.retain(|card| lane_matches_card_value(card, agent_id));
+        if !all_lanes && !step_scoped {
+            cards.retain(|card| {
+                let Some(tags) = card.get("tags").and_then(|v| v.as_array()) else {
+                    return true;
+                };
+                let mut pinned = false;
+                let mut draft = false;
+                for tag in tags {
+                    let Some(tag) = tag.as_str() else {
+                        continue;
+                    };
+                    let tag = tag.trim().to_ascii_lowercase();
+                    if tag == PIN_TAG {
+                        pinned = true;
+                        break;
+                    }
+                    if tag == VIS_TAG_DRAFT || tag.starts_with(LANE_TAG_AGENT_PREFIX) {
+                        draft = true;
+                    }
+                }
+                pinned || !draft
+            });
         }
         if raw_limit > 0 {
             cards.truncate(raw_limit);

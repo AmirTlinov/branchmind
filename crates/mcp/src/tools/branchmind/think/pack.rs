@@ -37,11 +37,15 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let all_lanes = args_obj
-            .get("all_lanes")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let all_lanes = all_lanes || view.implies_all_lanes();
+        let include_drafts = match optional_bool(args_obj, "include_drafts") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+        let all_lanes = match optional_bool(args_obj, "all_lanes") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+        let all_lanes = all_lanes || include_drafts || view.implies_all_lanes();
         let limit_candidates = match optional_usize(args_obj, "limit_candidates") {
             Ok(v) => v.unwrap_or(30),
             Err(resp) => return resp,
@@ -110,28 +114,20 @@ impl McpServer {
         let trace_doc = scope.trace_doc;
 
         let step_ctx = if let Some(step_raw) = step {
-            let ctx = match resolve_step_context_from_args(self, &workspace, args_obj, &step_raw) {
+            match resolve_step_context_from_args(self, &workspace, args_obj, &step_raw) {
                 Ok(v) => v,
                 Err(resp) => return resp,
-            };
-            Some(ctx)
+            }
         } else {
             None
         };
         let focus_step_tag = step_ctx.as_ref().map(|ctx| ctx.step_tag.as_str());
-        let lane_multiplier = if all_lanes {
-            1usize
-        } else if agent_id.is_some() {
-            2usize
-        } else {
-            1usize
-        };
         let candidates = match fetch_relevance_first_cards(
             self,
-            &workspace,
-            RelevanceFirstCardsRequest {
-                branch: &branch,
-                graph_doc: &graph_doc,
+            RelevanceFirstCardsArgs {
+                workspace: &workspace,
+                branch: branch.as_str(),
+                graph_doc: graph_doc.as_str(),
                 cards_limit: limit_candidates,
                 focus_step_tag,
                 agent_id: agent_id.as_deref(),
@@ -162,22 +158,24 @@ impl McpServer {
             &branch,
             &graph_doc,
             ThinkFrontierLimits {
-                hypotheses: limit_hypotheses.saturating_mul(lane_multiplier),
-                questions: limit_questions.saturating_mul(lane_multiplier),
-                subgoals: limit_subgoals.saturating_mul(lane_multiplier),
-                tests: limit_tests.saturating_mul(lane_multiplier),
+                hypotheses: limit_hypotheses,
+                questions: limit_questions,
+                subgoals: limit_subgoals,
+                tests: limit_tests,
             },
             focus_step_tag,
         ) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let agent_id = agent_id.as_deref();
         if !all_lanes {
-            frontier_hypotheses.retain(|card| lane_matches_card_value(card, agent_id));
-            frontier_questions.retain(|card| lane_matches_card_value(card, agent_id));
-            frontier_subgoals.retain(|card| lane_matches_card_value(card, agent_id));
-            frontier_tests.retain(|card| lane_matches_card_value(card, agent_id));
+            frontier_hypotheses
+                .retain(|card| card_value_visibility_allows(card, false, focus_step_tag));
+            frontier_questions
+                .retain(|card| card_value_visibility_allows(card, false, focus_step_tag));
+            frontier_subgoals
+                .retain(|card| card_value_visibility_allows(card, false, focus_step_tag));
+            frontier_tests.retain(|card| card_value_visibility_allows(card, false, focus_step_tag));
         }
         frontier_hypotheses.truncate(limit_hypotheses);
         frontier_questions.truncate(limit_questions);
@@ -282,7 +280,6 @@ impl McpServer {
             branch: branch.as_str(),
             graph_doc: graph_doc.as_str(),
             trace_doc: trace_doc.as_str(),
-            agent_id,
             all_lanes,
             step_ctx: step_ctx.as_ref(),
             engine: engine.as_ref(),

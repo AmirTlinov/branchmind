@@ -129,10 +129,10 @@ fn branchmind_macro_branch_note_can_append_without_creating_branch() {
 }
 
 #[test]
-fn branchmind_macro_branch_note_unknown_from_is_recoverable_in_daily() {
+fn branchmind_macro_branch_note_unknown_from_is_recoverable_in_full() {
     let mut server = Server::start_initialized_with_args(
-        "branchmind_note_unknown_from_is_recoverable_in_daily",
-        &["--toolset", "daily", "--workspace", "ws_note_unknown_from"],
+        "branchmind_note_unknown_from_is_recoverable_in_full",
+        &["--toolset", "full", "--workspace", "ws_note_unknown_from"],
     );
 
     // Ensure a checkout exists for the workspace.
@@ -169,7 +169,7 @@ fn branchmind_macro_branch_note_unknown_from_is_recoverable_in_daily() {
     );
     assert!(
         text.contains("checkout=\""),
-        "recovery should mention checkout to stay daily-usable"
+        "recovery should mention checkout to stay copy/paste-friendly"
     );
     assert!(
         !text.contains("tools/list") && !text.contains("branch_list"),
@@ -178,5 +178,68 @@ fn branchmind_macro_branch_note_unknown_from_is_recoverable_in_daily() {
     assert!(
         text.contains("macro_branch_note content=\"note-only with checkout switch smoke\""),
         "recovery must include a copy/paste-safe retry command (with quoting)"
+    );
+}
+
+#[test]
+fn branchmind_macro_branch_note_reuses_existing_branch_when_name_exists() {
+    let mut server = Server::start_initialized("branchmind_note_reuse_existing_branch");
+
+    let first = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "macro_branch_note",
+            "arguments": {
+                "workspace": "ws_note_reuse",
+                "name": "initiative/reuse",
+                "content": "first"
+            }
+        }
+    }));
+    assert!(
+        !extract_tool_text_str(&first).starts_with("ERROR:"),
+        "first macro_branch_note must succeed"
+    );
+    let first_text = extract_tool_text_str(&first);
+    assert!(
+        first_text
+            .lines()
+            .next()
+            .unwrap_or("")
+            .starts_with("branch initiative/reuse"),
+        "first call should create the branch (line protocol: starts with `branch ...`)"
+    );
+
+    let second = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "macro_branch_note",
+            "arguments": {
+                "workspace": "ws_note_reuse",
+                "name": "initiative/reuse",
+                "content": "second"
+            }
+        }
+    }));
+    assert!(
+        !extract_tool_text_str(&second).starts_with("ERROR:"),
+        "second macro_branch_note must succeed even when the branch already exists"
+    );
+    let second_text = extract_tool_text_str(&second);
+    assert!(
+        second_text.contains("note committed") && second_text.contains("initiative/reuse"),
+        "second call should append a note on the existing branch (no conflict)"
+    );
+    assert!(
+        !second_text
+            .lines()
+            .next()
+            .unwrap_or("")
+            .starts_with("branch "),
+        "second call must not claim it created a new branch"
     );
 }

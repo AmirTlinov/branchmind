@@ -39,11 +39,13 @@ impl GraphNodeIdError {
 }
 
 fn validate_node_id(value: &str) -> Result<(), GraphNodeIdError> {
+    const MAX_NODE_ID_CHARS: usize = 1024;
+
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(GraphNodeIdError::Empty);
     }
-    if trimmed.len() > 256 {
+    if trimmed.len() > MAX_NODE_ID_CHARS {
         return Err(GraphNodeIdError::TooLong);
     }
     if trimmed.contains('|') {

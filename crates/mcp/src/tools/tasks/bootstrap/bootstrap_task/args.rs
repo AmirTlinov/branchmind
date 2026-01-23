@@ -25,6 +25,7 @@ pub(super) struct TasksBootstrapArgs {
     pub description: Option<String>,
     pub steps: Vec<BootstrapStepInput>,
     pub think: Option<Value>,
+    pub reasoning_mode: Option<String>,
 }
 
 pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapArgs, Value> {
@@ -34,13 +35,17 @@ pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapAr
     let workspace = require_workspace(args_obj)?;
     let agent_id = optional_agent_id(args_obj, "agent_id")?;
 
-    let plan_id = args_obj
+    let mut plan_id = args_obj
         .get("plan")
         .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
-    let parent_id = args_obj
+    let mut parent_id = args_obj
         .get("parent")
         .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
     if plan_id.is_some() && parent_id.is_some() {
         return Err(ai_error(
@@ -49,7 +54,30 @@ pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapAr
         ));
     }
 
-    let plan_title = optional_string(args_obj, "plan_title")?;
+    let mut plan_title = optional_string(args_obj, "plan_title")?;
+    // UX recovery: LLMs sometimes put the plan title into the `plan`/`parent` field.
+    // Accept this in a deterministic, non-ambiguous way:
+    // - if the selector doesn't look like a plan id (`PLAN-...`), treat it as `plan_title`.
+    // - if both a non-id selector and `plan_title` are provided, ignore the selector.
+    if let Some(raw) = plan_id.as_deref()
+        && !raw.starts_with("PLAN-")
+    {
+        if plan_title.is_none() {
+            plan_title = plan_id.take();
+        } else {
+            plan_id = None;
+        }
+    }
+    if let Some(raw) = parent_id.as_deref()
+        && !raw.starts_with("PLAN-")
+    {
+        if plan_title.is_none() {
+            plan_title = parent_id.take();
+        } else {
+            parent_id = None;
+        }
+    }
+
     let plan_template = optional_string(args_obj, "plan_template")?;
     if plan_template.is_some() {
         if plan_title.is_none() {
@@ -67,6 +95,19 @@ pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapAr
     }
     let task_title = require_string(args_obj, "task_title")?;
     let description = optional_string(args_obj, "description")?;
+    let reasoning_mode = match optional_string(args_obj, "reasoning_mode")? {
+        None => None,
+        Some(raw) => {
+            let mode = raw.trim().to_ascii_lowercase();
+            if !matches!(mode.as_str(), "normal" | "deep" | "strict") {
+                return Err(ai_error(
+                    "INVALID_INPUT",
+                    "reasoning_mode must be one of: normal | deep | strict",
+                ));
+            }
+            Some(mode)
+        }
+    };
 
     let template_id = optional_string(args_obj, "template")?;
     let steps = match template_id {
@@ -137,6 +178,7 @@ pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapAr
         description,
         steps,
         think,
+        reasoning_mode,
     })
 }
 
@@ -186,25 +228,24 @@ fn parse_bootstrap_steps(
             normalize_required_string_list(criteria, "steps[].success_criteria")?
         };
 
-        let tests = {
-            let tests_value = obj.get("tests").cloned().unwrap_or(Value::Null);
-            let Some(tests_array) = tests_value.as_array() else {
-                return Err(ai_error("INVALID_INPUT", "steps[].tests must be an array"));
-            };
-            if tests_array.is_empty() {
-                return Err(ai_error("INVALID_INPUT", "steps[].tests must not be empty"));
-            }
-            let mut tests = Vec::with_capacity(tests_array.len());
-            for item in tests_array {
-                let Some(s) = item.as_str() else {
-                    return Err(ai_error(
-                        "INVALID_INPUT",
-                        "steps[].tests items must be strings",
-                    ));
+        let tests = match obj.get("tests") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(value) => {
+                let Some(tests_array) = value.as_array() else {
+                    return Err(ai_error("INVALID_INPUT", "steps[].tests must be an array"));
                 };
-                tests.push(s.to_string());
+                let mut tests = Vec::with_capacity(tests_array.len());
+                for item in tests_array {
+                    let Some(s) = item.as_str() else {
+                        return Err(ai_error(
+                            "INVALID_INPUT",
+                            "steps[].tests items must be strings",
+                        ));
+                    };
+                    tests.push(s.to_string());
+                }
+                normalize_optional_string_list(Some(tests)).unwrap_or_default()
             }
-            normalize_required_string_list(tests, "steps[].tests")?
         };
 
         let blockers = match optional_string_array(obj, "blockers") {

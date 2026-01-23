@@ -37,10 +37,19 @@ impl Server {
         } else {
             &["--toolset", "full"]
         };
+        let has_viewer_flag = extra_args
+            .iter()
+            .any(|arg| matches!(arg.trim(), "--viewer" | "--no-viewer"));
+        let default_viewer: &[&str] = if has_viewer_flag {
+            &[]
+        } else {
+            &["--no-viewer"]
+        };
         let mut child = Command::new(env!("CARGO_BIN_EXE_bm_mcp"))
             .arg("--storage-dir")
             .arg(&storage_dir)
             .args(default_toolset)
+            .args(default_viewer)
             .args(extra_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -156,4 +165,57 @@ pub(crate) fn assert_json_rpc_error(resp: &Value, expected_code: i64) {
         .and_then(|v| v.as_i64())
         .expect("error.code");
     assert_eq!(code, expected_code);
+}
+
+pub(crate) fn parse_open_command_line(line: &str) -> serde_json::Map<String, Value> {
+    let line = line.trim();
+    assert!(
+        line == "open" || line.starts_with("open "),
+        "expected an open command line, got: {line}"
+    );
+    let mut parts = line.split_whitespace();
+    let cmd = parts.next().unwrap_or("");
+    assert_eq!(cmd, "open", "expected open command");
+
+    let mut args = serde_json::Map::new();
+    for part in parts {
+        let Some((key, raw)) = part.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let raw = raw.trim();
+        if key.is_empty() || raw.is_empty() {
+            continue;
+        }
+
+        let value = if raw.starts_with('"') || raw.starts_with('[') || raw.starts_with('{') {
+            serde_json::from_str::<Value>(raw).unwrap_or(Value::String(raw.to_string()))
+        } else if raw == "true" || raw == "false" {
+            Value::Bool(raw == "true")
+        } else if let Ok(n) = raw.parse::<i64>() {
+            Value::Number(serde_json::Number::from(n))
+        } else {
+            Value::String(raw.to_string())
+        };
+
+        args.insert(key.to_string(), value);
+    }
+
+    args
+}
+
+pub(crate) fn parse_state_ref_id(state_line: &str) -> Option<String> {
+    let idx = state_line.find("ref=")?;
+    let after = &state_line[idx + "ref=".len()..];
+    let id = after
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches('|')
+        .trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
 }

@@ -33,17 +33,9 @@ impl McpServer {
                     Ok(v) => v,
                     Err(resp) => return resp,
                 };
-            Some(ctx.step_tag)
+            ctx.map(|ctx| ctx.step_tag)
         } else {
             None
-        };
-
-        let lane_multiplier = if args.all_lanes {
-            1usize
-        } else if args.agent_id.is_some() {
-            2usize
-        } else {
-            1usize
         };
 
         let ThinkFrontier {
@@ -56,10 +48,10 @@ impl McpServer {
             &branch,
             &graph_doc,
             ThinkFrontierLimits {
-                hypotheses: args.limit_hypotheses.saturating_mul(lane_multiplier),
-                questions: args.limit_questions.saturating_mul(lane_multiplier),
-                subgoals: args.limit_subgoals.saturating_mul(lane_multiplier),
-                tests: args.limit_tests.saturating_mul(lane_multiplier),
+                hypotheses: args.limit_hypotheses,
+                questions: args.limit_questions,
+                subgoals: args.limit_subgoals,
+                tests: args.limit_tests,
             },
             step_tag.as_deref(),
         ) {
@@ -67,12 +59,12 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let agent_id = args.agent_id.as_deref();
         if !args.all_lanes {
-            hypotheses.retain(|card| lane_matches_card_value(card, agent_id));
-            questions.retain(|card| lane_matches_card_value(card, agent_id));
-            subgoals.retain(|card| lane_matches_card_value(card, agent_id));
-            tests.retain(|card| lane_matches_card_value(card, agent_id));
+            hypotheses
+                .retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
+            questions.retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
+            subgoals.retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
+            tests.retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
         }
         hypotheses.truncate(args.limit_hypotheses);
         questions.truncate(args.limit_questions);

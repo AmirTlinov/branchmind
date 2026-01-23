@@ -2,6 +2,7 @@
 
 use super::super::support::*;
 
+use serde_json::Value;
 use serde_json::json;
 
 #[test]
@@ -74,6 +75,12 @@ fn tasks_evidence_checkpoint_requires_security_for_first_open_step() {
     }));
     let resume_text = extract_tool_text(&resume);
 
+    let first_open = resume_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.get("first_open"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let require_security = resume_text
         .get("result")
         .and_then(|v| v.get("steps"))
@@ -81,7 +88,10 @@ fn tasks_evidence_checkpoint_requires_security_for_first_open_step() {
         .and_then(|v| v.get("require_security"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    assert!(require_security, "first_open.require_security must be true");
+    assert!(
+        require_security,
+        "first_open.require_security must be true; first_open={first_open:?}"
+    );
 
     let action_checkpoints = resume_text
         .get("result")

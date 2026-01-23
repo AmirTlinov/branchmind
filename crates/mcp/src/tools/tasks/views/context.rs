@@ -132,7 +132,9 @@ impl McpServer {
             "by_status": {
                 "DONE": by_status.get("DONE").copied().unwrap_or(0),
                 "ACTIVE": by_status.get("ACTIVE").copied().unwrap_or(0),
-                "TODO": by_status.get("TODO").copied().unwrap_or(0)
+                "TODO": by_status.get("TODO").copied().unwrap_or(0),
+                "PARKED": by_status.get("PARKED").copied().unwrap_or(0),
+                "CANCELED": by_status.get("CANCELED").copied().unwrap_or(0)
             },
             "plans": plans_out,
             "tasks": tasks_out,

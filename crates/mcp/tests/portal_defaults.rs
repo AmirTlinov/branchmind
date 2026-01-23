@@ -35,6 +35,10 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "daily portal status should keep the primary readiness line"
     );
     assert!(
+        status_result.contains("version="),
+        "status line should include a semver-ish server version for quick diagnostics"
+    );
+    assert!(
         !status_result.trim_start().starts_with('{'),
         "daily portal status must not fall back to JSON envelopes"
     );

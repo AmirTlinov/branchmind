@@ -19,6 +19,7 @@ impl SqliteStore {
             context,
             priority,
             domain,
+            reasoning_mode,
             phase,
             component,
             assignee,
@@ -33,6 +34,7 @@ impl SqliteStore {
             && context.is_none()
             && priority.is_none()
             && domain.is_none()
+            && reasoning_mode.is_none()
             && phase.is_none()
             && component.is_none()
             && assignee.is_none()
@@ -48,7 +50,7 @@ impl SqliteStore {
         let row = tx
             .query_row(
                 r#"
-                SELECT revision, title, description, context, priority, domain, phase, component, assignee
+                SELECT revision, title, description, context, priority, domain, reasoning_mode, phase, component, assignee
                 FROM tasks
                 WHERE workspace = ?1 AND id = ?2
                 "#,
@@ -61,9 +63,10 @@ impl SqliteStore {
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
-                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, String>(6)?,
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
                     ))
                 },
             )
@@ -76,6 +79,7 @@ impl SqliteStore {
             current_context,
             current_priority,
             current_domain,
+            current_reasoning_mode,
             current_phase,
             current_component,
             current_assignee,
@@ -99,6 +103,7 @@ impl SqliteStore {
         let new_context = context.unwrap_or(current_context);
         let new_priority = priority.unwrap_or(current_priority);
         let new_domain = domain.unwrap_or(current_domain);
+        let new_reasoning_mode = reasoning_mode.unwrap_or(current_reasoning_mode);
         let new_phase = phase.unwrap_or(current_phase);
         let new_component = component.unwrap_or(current_component);
         let new_assignee = assignee.unwrap_or(current_assignee);
@@ -112,10 +117,11 @@ impl SqliteStore {
                 context = ?6,
                 priority = ?7,
                 domain = ?8,
-                phase = ?9,
-                component = ?10,
-                assignee = ?11,
-                updated_at_ms = ?12
+                reasoning_mode = ?9,
+                phase = ?10,
+                component = ?11,
+                assignee = ?12,
+                updated_at_ms = ?13
             WHERE workspace = ?1 AND id = ?2
             "#,
             params![
@@ -127,6 +133,7 @@ impl SqliteStore {
                 new_context,
                 new_priority,
                 new_domain,
+                new_reasoning_mode,
                 new_phase,
                 new_component,
                 new_assignee,

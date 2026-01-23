@@ -23,4 +23,13 @@ pub(super) const SQL: &str = r#"
         CREATE INDEX IF NOT EXISTS idx_task_items_entity ON task_items(workspace, entity_kind, entity_id, field);
         CREATE INDEX IF NOT EXISTS idx_task_nodes_parent ON task_nodes(workspace, task_id, parent_step_id, ordinal);
         CREATE INDEX IF NOT EXISTS idx_ops_history_task ON ops_history(workspace, task_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_anchors_workspace_kind ON anchors(workspace, kind, id);
+        CREATE INDEX IF NOT EXISTS idx_anchors_workspace_status ON anchors(workspace, status, id);
+        CREATE INDEX IF NOT EXISTS idx_anchor_aliases_anchor ON anchor_aliases(workspace, anchor_id, alias_id);
+        CREATE INDEX IF NOT EXISTS idx_anchor_links_lookup ON anchor_links(workspace, anchor_id, last_ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_anchor_links_card ON anchor_links(workspace, branch, graph_doc, card_id);
+        CREATE INDEX IF NOT EXISTS idx_jobs_status_updated ON jobs(workspace, status, updated_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_jobs_task_updated ON jobs(workspace, task_id, updated_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_jobs_anchor_updated ON jobs(workspace, anchor_id, updated_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_job_events_job_seq ON job_events(workspace, job_id, seq);
         "#;

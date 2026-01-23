@@ -3,24 +3,23 @@
 use crate::McpServer;
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::process::{Command, Stdio};
+use std::sync::atomic::Ordering;
 
 impl McpServer {
-    pub(crate) fn new(
-        store: bm_storage::SqliteStore,
-        toolset: crate::Toolset,
-        default_workspace: Option<String>,
-        workspace_lock: bool,
-        project_guard: Option<String>,
-        default_agent_id: Option<String>,
-    ) -> Self {
+    pub(crate) fn new(store: bm_storage::SqliteStore, cfg: crate::McpServerConfig) -> Self {
         Self {
             initialized: false,
             store,
-            toolset,
-            default_workspace,
-            workspace_lock,
-            project_guard,
-            default_agent_id,
+            toolset: cfg.toolset,
+            default_workspace: cfg.default_workspace,
+            workspace_lock: cfg.workspace_lock,
+            project_guard: cfg.project_guard,
+            project_guard_rebind_enabled: cfg.project_guard_rebind_enabled,
+            default_agent_id: cfg.default_agent_id,
+            runner_autostart_enabled: cfg.runner_autostart_enabled,
+            runner_autostart_dry_run: cfg.runner_autostart_dry_run,
+            runner_autostart: cfg.runner_autostart,
         }
     }
 
@@ -32,7 +31,10 @@ impl McpServer {
                 request.id,
                 json!( {
                     "protocolVersion": crate::MCP_VERSION,
-                    "serverInfo": { "name": crate::SERVER_NAME, "version": crate::SERVER_VERSION },
+                    "serverInfo": {
+                        "name": crate::SERVER_NAME,
+                        "version": crate::build_fingerprint()
+                    },
                     "capabilities": { "tools": {} }
                 }),
             ));
@@ -107,9 +109,29 @@ impl McpServer {
                 }
                 None => self.toolset,
             };
+            let mut tools = crate::tools::tool_definitions(toolset);
+            // Flagship DX: when the server is configured with a default workspace, treat
+            // `workspace` as optional in tool schemas so agents aren't forced to pick it.
+            // (Explicit workspace is still supported and may be locked by workspace_lock.)
+            if self.default_workspace.is_some() {
+                for tool in &mut tools {
+                    let Some(schema_obj) =
+                        tool.get_mut("inputSchema").and_then(|v| v.as_object_mut())
+                    else {
+                        continue;
+                    };
+                    let Some(required) = schema_obj
+                        .get_mut("required")
+                        .and_then(|v| v.as_array_mut())
+                    else {
+                        continue;
+                    };
+                    required.retain(|v| v.as_str() != Some("workspace"));
+                }
+            }
             return Some(crate::json_rpc_response(
                 request.id,
-                json!({ "tools": crate::tools::tool_definitions(toolset) }),
+                json!({ "tools": tools }),
             ));
         }
 
@@ -186,11 +208,7 @@ impl McpServer {
         args: &Value,
         resp: &Value,
     ) -> Option<(Value, Value)> {
-        // Safety: never rerun portal tools (fmt=lines + portal UX) and never override explicit budgets.
-        if is_portal_tool(name) {
-            return None;
-        }
-
+        // Safety: never override explicit budgets.
         let original_obj = original_args.as_object()?;
         if original_obj.contains_key("max_chars") || original_obj.contains_key("context_budget") {
             return None;
@@ -215,7 +233,7 @@ impl McpServer {
         // Important: this must remain safe for tools that are internally "read-ish" but may
         // perform idempotent ensure-writes (e.g. workspace/doc refs). They must never append
         // user-visible history on reads.
-        const MAX_RETRIES: usize = 3;
+        const MAX_RETRIES: usize = 6;
         let cap = auto_budget_escalation_cap_chars(name);
 
         let mut current_args = args.clone();
@@ -250,9 +268,6 @@ impl McpServer {
             let Some(args_obj) = next_args.as_object_mut() else {
                 break;
             };
-            if crate::is_lines_fmt(args_obj.get("fmt").and_then(|v| v.as_str())) {
-                break;
-            }
             apply_auto_escalated_budget(args_obj, next_max_chars);
 
             let Some(next_resp) = crate::tools::dispatch_tool(self, name, next_args.clone()) else {
@@ -277,9 +292,13 @@ impl McpServer {
     fn preprocess_args(&mut self, name: &str, args: &mut Value) -> Option<Value> {
         let args_obj = args.as_object_mut()?;
 
+        // DX: when a default workspace is configured, treat it as the implicit workspace
+        // for all tool calls unless the caller explicitly provides `workspace`.
+        //
+        // This keeps daily usage cheap (no boilerplate) and makes BM-L1 "copy/paste" commands
+        // usable across restarts when the server is scoped to a single project.
         if let Some(default_workspace) = self.default_workspace.as_deref()
             && !args_obj.contains_key("workspace")
-            && is_portal_tool(name)
         {
             args_obj.insert(
                 "workspace".to_string(),
@@ -287,9 +306,14 @@ impl McpServer {
             );
         }
 
-        // Multi-agent DX: when a default agent_id is configured, implicitly apply it to tool calls
-        // unless the caller explicitly provides agent_id (including null to disable).
-        if let Some(default_agent_id) = self.default_agent_id.as_deref()
+        // Multi-agent / concurrency DX:
+        // When a default agent_id is configured, apply it to **tasks_* only** (step leases).
+        //
+        // Meaning-mode memory is shared-by-default and must not depend on an injected agent id.
+        // Callers can still pass agent_id explicitly for audit or explicit multi-agent semantics.
+        let tool_accepts_default_agent_id = name.starts_with("tasks_");
+        if tool_accepts_default_agent_id
+            && let Some(default_agent_id) = self.default_agent_id.as_deref()
             && !args_obj.contains_key("agent_id")
         {
             args_obj.insert(
@@ -326,6 +350,17 @@ impl McpServer {
             args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
         }
 
+        // Daily DX: treat jobs_radar as an inbox (BM-L1 lines) in reduced toolsets.
+        //
+        // NOTE: jobs_radar must *not* be a portal tool (portals always force fmt=lines) because
+        // some clients/automation may rely on JSON outputs in the full toolset.
+        if self.toolset != crate::Toolset::Full
+            && name == "tasks_jobs_radar"
+            && !args_obj.contains_key("fmt")
+        {
+            args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
+        }
+
         // Portal DX: keep the “advance progress” macro call nearly zero-syntax.
         // If checkpoints are omitted, default to "gate" (still enforces discipline).
         let checkpoints_missing = args_obj
@@ -336,10 +371,10 @@ impl McpServer {
             args_obj.insert("checkpoints".to_string(), Value::String("gate".to_string()));
         }
 
-        // Portal UX: in reduced toolsets, default JSON outputs to bounded payloads so agents don't
-        // need to keep repeating max_chars/resume_max_chars on every call. (fmt=lines replaces the
-        // JSON payload entirely, so budgets are opt-in there.)
-        if self.toolset != crate::Toolset::Full && is_portal_tool(name) {
+        // Portal UX: keep portal calls cheap by defaulting budgets when the caller didn't specify
+        // them explicitly. Even in fmt=lines mode the tool still builds a structured payload and
+        // may emit BUDGET_* warnings — defaults + auto-escalation remove “limit juggling”.
+        if is_portal_tool(name) {
             apply_portal_default_budgets(self.toolset, name, args_obj);
         }
 
@@ -386,6 +421,14 @@ impl McpServer {
         }
 
         if self.toolset != crate::Toolset::Full {
+            let advertised = advertised_tool_names(self.toolset);
+            let core_tools = advertised_tool_names(crate::Toolset::Core);
+            let daily_tools = advertised_tool_names(crate::Toolset::Daily);
+
+            if let Some(result) = resp_obj.get_mut("result") {
+                sanitize_engine_calls_in_value(result, &advertised, &core_tools, &daily_tools);
+            }
+
             let error_code = resp_obj
                 .get("error")
                 .and_then(|v| v.get("code"))
@@ -415,10 +458,6 @@ impl McpServer {
                 );
             }
             if !suggestions.is_empty() {
-                let advertised = advertised_tool_names(self.toolset);
-                let core_tools = advertised_tool_names(crate::Toolset::Core);
-                let daily_tools = advertised_tool_names(crate::Toolset::Daily);
-
                 let mut rebuilt = Vec::with_capacity(suggestions.len());
                 let mut hidden_targets = Vec::new();
 
@@ -548,6 +587,18 @@ impl McpServer {
         {
             Ok(()) => None,
             Err(crate::StoreError::ProjectGuardMismatch { expected, stored }) => {
+                if self.project_guard_rebind_enabled {
+                    if let Err(err) = self
+                        .store
+                        .workspace_project_guard_rebind(workspace, &expected)
+                    {
+                        return Some(crate::ai_error(
+                            "STORE_ERROR",
+                            &crate::format_store_error(err),
+                        ));
+                    }
+                    return None;
+                }
                 Some(crate::ai_error_with(
                     "PROJECT_GUARD_MISMATCH",
                     "Workspace belongs to a different project guard",
@@ -567,6 +618,108 @@ impl McpServer {
         }
     }
 
+    pub(crate) fn maybe_autostart_runner(
+        &mut self,
+        workspace: &crate::WorkspaceId,
+        now_ms: i64,
+        queued_jobs: usize,
+        runner_is_offline: bool,
+    ) -> bool {
+        if !self.runner_autostart_enabled.load(Ordering::Relaxed) {
+            return false;
+        }
+        if queued_jobs == 0 || !runner_is_offline {
+            return false;
+        }
+
+        // Per-workspace throttle: avoid spawning on every portal refresh.
+        let key = workspace.as_str().to_string();
+        {
+            let mut state = self
+                .runner_autostart
+                .lock()
+                .expect("runner_autostart mutex poisoned");
+            let entry =
+                state
+                    .entries
+                    .entry(key.clone())
+                    .or_insert_with(|| crate::RunnerAutostartEntry {
+                        last_attempt_ms: 0,
+                        last_attempt_ok: false,
+                        child: None,
+                    });
+
+            // Reap finished children to avoid zombies.
+            if let Some(child) = entry.child.as_mut() {
+                match child.try_wait() {
+                    Ok(Some(_)) => entry.child = None,
+                    Ok(None) => return true, // still running
+                    Err(_) => entry.child = None,
+                }
+            }
+
+            const BACKOFF_MS: i64 = 30_000;
+            if now_ms.saturating_sub(entry.last_attempt_ms) < BACKOFF_MS {
+                return entry.last_attempt_ok;
+            }
+        }
+
+        let spawn_result = self.spawn_runner_for_autostart(workspace);
+        let mut state = self
+            .runner_autostart
+            .lock()
+            .expect("runner_autostart mutex poisoned");
+        let entry = state
+            .entries
+            .get_mut(&key)
+            .expect("runner_autostart entry must exist");
+        entry.last_attempt_ms = now_ms;
+        match spawn_result {
+            Ok(child) => {
+                entry.child = Some(child);
+                entry.last_attempt_ok = true;
+                true
+            }
+            Err(_) => {
+                entry.last_attempt_ok = false;
+                false
+            }
+        }
+    }
+
+    fn spawn_runner_for_autostart(
+        &self,
+        workspace: &crate::WorkspaceId,
+    ) -> std::io::Result<std::process::Child> {
+        let storage_dir = self.store.storage_dir();
+        let storage_dir =
+            std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
+        let mcp_bin =
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("bm_mcp"));
+        let runner_bin = mcp_bin
+            .parent()
+            .map(|dir| dir.join("bm_runner"))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("bm_runner"));
+
+        let mut cmd = Command::new(runner_bin);
+        cmd.arg("--storage-dir")
+            .arg(storage_dir)
+            .arg("--workspace")
+            .arg(workspace.as_str())
+            .arg("--mcp-bin")
+            .arg(mcp_bin);
+
+        if self.runner_autostart_dry_run {
+            cmd.arg("--dry-run").arg("--once");
+        }
+
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd.spawn()
+    }
+
     pub(crate) fn tool_storage(&mut self, _args: Value) -> Value {
         crate::ai_ok(
             "storage",
@@ -582,7 +735,12 @@ fn is_portal_tool(name: &str) -> bool {
         name,
         "status"
             | "macro_branch_note"
+            | "anchors_list"
+            | "anchor_snapshot"
+            | "macro_anchor_note"
+            | "anchors_export"
             | "tasks_macro_start"
+            | "tasks_macro_delegate"
             | "tasks_macro_close_step"
             | "tasks_snapshot"
     )
@@ -593,27 +751,31 @@ fn apply_portal_default_budgets(
     name: &str,
     args_obj: &mut serde_json::Map<String, Value>,
 ) {
-    // Line protocol outputs always replace the JSON payload, so max_chars defaults are irrelevant
-    // and can introduce noisy BUDGET_* warnings. Keep budgets opt-in for fmt=lines.
-    let fmt = args_obj.get("fmt").and_then(|v| v.as_str());
-    if crate::is_lines_fmt(fmt) {
-        return;
-    }
-
+    // Portal defaults should make truncation warnings rare. If a portal still truncates, the
+    // server may auto-escalate budgets for read-ish portals (status/snapshot/anchors_*).
+    //
+    // Important: keep explicit caller budgets untouched (explicit wins).
     let default_status_max_chars = match toolset {
-        crate::Toolset::Core => 2000,
-        crate::Toolset::Daily => 2500,
-        crate::Toolset::Full => return,
+        crate::Toolset::Core => 20_000,
+        crate::Toolset::Daily => 40_000,
+        crate::Toolset::Full => 60_000,
     };
-    let default_snapshot_max_chars = match toolset {
-        crate::Toolset::Core => 6000,
-        crate::Toolset::Daily => 9000,
-        crate::Toolset::Full => return,
+    // NOTE: keep snapshot defaults in the "medium" tier so the capsule remains stable and
+    // continuation commands (e.g. notes_cursor) stay predictable in DX tests.
+    let default_snapshot_context_budget = match toolset {
+        crate::Toolset::Core => 6_000,
+        crate::Toolset::Daily => 9_000,
+        crate::Toolset::Full => 12_000,
     };
     let default_resume_max_chars = match toolset {
-        crate::Toolset::Core => 6000,
-        crate::Toolset::Daily => 9000,
-        crate::Toolset::Full => return,
+        crate::Toolset::Core => 20_000,
+        crate::Toolset::Daily => 40_000,
+        crate::Toolset::Full => 60_000,
+    };
+    let default_anchor_max_chars = match toolset {
+        crate::Toolset::Core => 30_000,
+        crate::Toolset::Daily => 60_000,
+        crate::Toolset::Full => 80_000,
     };
 
     match name {
@@ -626,18 +788,28 @@ fn apply_portal_default_budgets(
             }
         }
         "tasks_snapshot" => {
-            if !args_obj.contains_key("max_chars") {
+            if !args_obj.contains_key("context_budget") && !args_obj.contains_key("max_chars") {
                 args_obj.insert(
-                    "max_chars".to_string(),
-                    Value::Number(serde_json::Number::from(default_snapshot_max_chars as u64)),
+                    "context_budget".to_string(),
+                    Value::Number(serde_json::Number::from(
+                        default_snapshot_context_budget as u64,
+                    )),
                 );
             }
         }
-        "tasks_macro_start" | "tasks_macro_close_step" => {
+        "tasks_macro_start" | "tasks_macro_delegate" | "tasks_macro_close_step" => {
             if !args_obj.contains_key("resume_max_chars") {
                 args_obj.insert(
                     "resume_max_chars".to_string(),
                     Value::Number(serde_json::Number::from(default_resume_max_chars as u64)),
+                );
+            }
+        }
+        "anchors_list" | "anchor_snapshot" | "anchors_export" => {
+            if !args_obj.contains_key("max_chars") {
+                args_obj.insert(
+                    "max_chars".to_string(),
+                    Value::Number(serde_json::Number::from(default_anchor_max_chars as u64)),
                 );
             }
         }
@@ -846,6 +1018,7 @@ fn read_tool_accepts_budget(name: &str) -> bool {
             | "tasks_context_pack"
             | "tasks_resume_pack"
             | "tasks_resume_super"
+            | "tasks_mindpack"
             // Core reasoning reads / packs
             | "help"
             | "diagnostics"
@@ -917,7 +1090,15 @@ fn extract_budget_snapshot(resp: &Value) -> Option<(usize, Option<usize>)> {
 fn auto_budget_escalation_allowlist(name: &str) -> bool {
     matches!(
         name,
-        "tasks_context"
+        // Portal read tools (fmt=lines is enforced). These are safe to rerun because they are
+        // read-mostly and any internal "ensure" writes must remain idempotent and history-free.
+        "status"
+            | "tasks_snapshot"
+            | "anchors_list"
+            | "anchor_snapshot"
+            | "anchors_export"
+            // Read tools (JSON or lines depending on toolset).
+            | "tasks_context"
             | "tasks_resume_pack"
             | "tasks_resume_super"
             | "tasks_context_pack"
@@ -955,7 +1136,9 @@ fn auto_budget_escalation_allowlist(name: &str) -> bool {
 
 fn auto_budget_escalation_cap_chars(_name: &str) -> usize {
     // Hard cap to prevent runaway responses even under repeated retries.
-    200_000
+    //
+    // Goal: keep the “no limit juggling” experience while still bounding worst-case outputs.
+    1_000_000
 }
 
 fn apply_auto_escalated_budget(args_obj: &mut serde_json::Map<String, Value>, max_chars: usize) {
@@ -1009,6 +1192,100 @@ fn escalation_toolset_for_hidden(
         Some("daily")
     } else {
         None
+    }
+}
+
+fn sanitize_engine_calls_in_value(
+    value: &mut Value,
+    advertised: &HashSet<String>,
+    core_tools: &HashSet<String>,
+    daily_tools: &HashSet<String>,
+) {
+    match value {
+        Value::Object(obj) => {
+            for (key, child) in obj.iter_mut() {
+                if key == "engine" {
+                    sanitize_engine_calls_in_engine(child, advertised, core_tools, daily_tools);
+                } else {
+                    sanitize_engine_calls_in_value(child, advertised, core_tools, daily_tools);
+                }
+            }
+        }
+        Value::Array(arr) => {
+            for child in arr.iter_mut() {
+                sanitize_engine_calls_in_value(child, advertised, core_tools, daily_tools);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_engine_calls_in_engine(
+    engine: &mut Value,
+    advertised: &HashSet<String>,
+    core_tools: &HashSet<String>,
+    daily_tools: &HashSet<String>,
+) {
+    let Some(engine_obj) = engine.as_object_mut() else {
+        return;
+    };
+    let Some(actions) = engine_obj.get_mut("actions").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+
+    for action in actions.iter_mut() {
+        let Some(action_obj) = action.as_object_mut() else {
+            continue;
+        };
+        let Some(calls) = action_obj.get_mut("calls").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+
+        let mut hidden_targets = Vec::new();
+        for call in calls.iter() {
+            if call.get("action").and_then(|v| v.as_str()) != Some("call_tool") {
+                continue;
+            }
+            let target = call
+                .get("target")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if target.is_empty() {
+                continue;
+            }
+            if !advertised.contains(target) {
+                hidden_targets.push(target.to_string());
+            }
+        }
+
+        let Some(escalation_toolset) =
+            escalation_toolset_for_hidden(&hidden_targets, core_tools, daily_tools)
+        else {
+            continue;
+        };
+
+        let already_has_disclosure = calls.iter().any(|s| {
+            s.get("action").and_then(|v| v.as_str()) == Some("call_method")
+                && s.get("method").and_then(|v| v.as_str()) == Some("tools/list")
+        });
+        if !already_has_disclosure {
+            calls.insert(
+                0,
+                crate::suggest_method(
+                    "tools/list",
+                    "Reveal the next toolset tier for this engine action.",
+                    "high",
+                    json!({ "toolset": escalation_toolset }),
+                ),
+            );
+        }
+
+        let mut seen = HashSet::new();
+        calls.retain(|s| match serde_json::to_string(s) {
+            Ok(key) => seen.insert(key),
+            Err(_) => true,
+        });
     }
 }
 
@@ -1280,4 +1557,172 @@ fn extract_task_or_plan_from_args(args: &Value) -> Option<(&'static str, String)
         return Some(("plan", plan.to_string()));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use bm_storage::SqliteStore;
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("bm_project_guard_test_{nanos}"));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn project_guard_mismatch_errors_when_rebind_disabled() {
+        let dir = temp_dir();
+        let mut store = SqliteStore::open(&dir).unwrap();
+        let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+        store.workspace_init(&workspace).unwrap();
+        store
+            .workspace_project_guard_ensure(&workspace, "repo:aaaaaaaaaaaaaaaa")
+            .unwrap();
+
+        let runner_autostart_enabled =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runner_autostart_state =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::RunnerAutostartState::default()));
+        let mut server = crate::McpServer::new(
+            store,
+            crate::McpServerConfig {
+                toolset: crate::Toolset::Core,
+                default_workspace: Some("demo".to_string()),
+                workspace_lock: true,
+                project_guard: Some("repo:bbbbbbbbbbbbbbbb".to_string()),
+                project_guard_rebind_enabled: false,
+                default_agent_id: None,
+                runner_autostart_enabled,
+                runner_autostart_dry_run: false,
+                runner_autostart: runner_autostart_state,
+            },
+        );
+
+        let resp = server.enforce_project_guard(&workspace);
+        assert!(resp.is_some());
+        let code = resp
+            .and_then(|value| value.get("error").and_then(|err| err.get("code")).cloned())
+            .and_then(|value| value.as_str().map(|s| s.to_string()));
+        assert_eq!(code.as_deref(), Some("PROJECT_GUARD_MISMATCH"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn project_guard_mismatch_rebinds_when_enabled() {
+        let dir = temp_dir();
+        let mut store = SqliteStore::open(&dir).unwrap();
+        let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+        store.workspace_init(&workspace).unwrap();
+        store
+            .workspace_project_guard_ensure(&workspace, "repo:aaaaaaaaaaaaaaaa")
+            .unwrap();
+
+        let runner_autostart_enabled =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runner_autostart_state =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::RunnerAutostartState::default()));
+        let mut server = crate::McpServer::new(
+            store,
+            crate::McpServerConfig {
+                toolset: crate::Toolset::Core,
+                default_workspace: Some("demo".to_string()),
+                workspace_lock: true,
+                project_guard: Some("repo:bbbbbbbbbbbbbbbb".to_string()),
+                project_guard_rebind_enabled: true,
+                default_agent_id: None,
+                runner_autostart_enabled,
+                runner_autostart_dry_run: false,
+                runner_autostart: runner_autostart_state,
+            },
+        );
+
+        let resp = server.enforce_project_guard(&workspace);
+        assert!(resp.is_none());
+        let stored = server
+            .store
+            .workspace_project_guard_get(&workspace)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, "repo:bbbbbbbbbbbbbbbb");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn portal_auto_budget_escalation_removes_budget_warnings() {
+        // This is an "anti-truncation" regression test: portals should feel "limitless" in
+        // day-to-day usage. We keep outputs bounded, but the server should auto-escalate budgets
+        // for safe-to-rerun portal reads so users don't have to juggle max_chars/context_budget.
+        let dir = temp_dir();
+        let store = SqliteStore::open(&dir).unwrap();
+
+        let runner_autostart_enabled =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runner_autostart_state =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::RunnerAutostartState::default()));
+        let mut server = crate::McpServer::new(
+            store,
+            crate::McpServerConfig {
+                toolset: crate::Toolset::Daily,
+                default_workspace: Some("demo".to_string()),
+                workspace_lock: true,
+                project_guard: None,
+                project_guard_rebind_enabled: false,
+                default_agent_id: None,
+                runner_autostart_enabled,
+                runner_autostart_dry_run: false,
+                runner_autostart: runner_autostart_state,
+            },
+        );
+
+        let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+        server.store.workspace_init(&workspace).unwrap();
+
+        // Create enough anchors so a reasonable default max_chars will truncate the list.
+        let title = "T".repeat(120);
+        let desc = "x".repeat(280);
+        for i in 0..200 {
+            let id = format!("a:test-{i:03}");
+            server
+                .store
+                .anchor_upsert(
+                    &workspace,
+                    bm_storage::AnchorUpsertRequest {
+                        id,
+                        title: title.clone(),
+                        kind: "ops".to_string(),
+                        description: Some(desc.clone()),
+                        refs: Vec::new(),
+                        aliases: Vec::new(),
+                        parent_id: None,
+                        depends_on: Vec::new(),
+                        status: "active".to_string(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let resp = server.call_tool("anchors_list", json!({ "workspace": "demo", "limit": 200 }));
+        assert_eq!(
+            resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "expected anchors_list to succeed, got: {resp}"
+        );
+        let rendered = resp.get("result").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(
+            !rendered.contains("BUDGET_TRUNCATED") && !rendered.contains("BUDGET_MINIMAL"),
+            "expected budget warnings to be auto-escalated away, got:\n{rendered}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

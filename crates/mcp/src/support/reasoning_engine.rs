@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
+use crate::card_value_anchor_tags;
 use crate::support::ai::suggest_call;
 use crate::support::proof::looks_like_bare_url;
-use crate::{LANE_TAG_AGENT_PREFIX, LANE_TAG_SHARED, PIN_TAG};
+use crate::{LANE_TAG_AGENT_PREFIX, LANE_TAG_SHARED, PIN_TAG, VIS_TAG_DRAFT};
 use serde_json::{Value, json};
 
 pub(crate) const REASONING_ENGINE_VERSION: &str = "v0.5";
@@ -137,8 +138,12 @@ fn receipts_from_text(text: &str) -> EvidenceReceipts {
             continue;
         }
 
-        if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("CMD:") {
-            let rest = trimmed[4..].trim();
+        let bytes = trimmed.as_bytes();
+        if bytes
+            .get(0..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"CMD:"))
+        {
+            let rest = trimmed.get(4..).unwrap_or_default().trim();
             if looks_like_placeholder(rest) {
                 out.cmd_placeholder = true;
             } else if !rest.is_empty() {
@@ -146,8 +151,11 @@ fn receipts_from_text(text: &str) -> EvidenceReceipts {
             }
             continue;
         }
-        if trimmed.len() >= 5 && trimmed[..5].eq_ignore_ascii_case("LINK:") {
-            let rest = trimmed[5..].trim();
+        if bytes
+            .get(0..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"LINK:"))
+        {
+            let rest = trimmed.get(5..).unwrap_or_default().trim();
             if looks_like_placeholder(rest) {
                 out.link_placeholder = true;
             } else if !rest.is_empty() {
@@ -778,16 +786,16 @@ pub(crate) fn derive_reasoning_engine(
         evidence_scores.insert(id.to_string(), score);
     }
 
-    // ===== Lane hygiene: agent-lane decisions should be published into shared =====
-    // Motivation: lane-scoped drafts are intentionally isolated, but decisions are knowledge anchors
-    // and should not silently remain stuck in a private lane.
+    // ===== Draft hygiene: draft decisions should be promoted into canon =====
+    // Motivation: drafts are intentionally low-visibility, but decisions are knowledge anchors and
+    // should not silently remain stuck as `v:draft` forever.
     //
     // Deterministic: derived from the returned slice only (no extra store reads).
     let recent_window_ms = 14i64.saturating_mul(ms_per_day());
     let mut lane_decisions: Vec<&Value> = by_id
         .values()
         .filter(|card| card.get("type").and_then(|v| v.as_str()) == Some("decision"))
-        .filter(|card| card_is_agent_lane(card))
+        .filter(|card| card_is_draft_like(card))
         .copied()
         .collect();
     lane_decisions.sort_by(|a, b| {
@@ -829,7 +837,7 @@ pub(crate) fn derive_reasoning_engine(
         signals.push(signal_at(
             "BM_LANE_DECISION_NOT_PUBLISHED",
             "warning",
-            format!("Decision is lane-scoped (agent) and not published to shared: {label}"),
+            format!("Decision is draft-scoped (v:draft) and not promoted to canon: {label}"),
             vec![ref_card(decision_id)],
             decision_ts_ms,
         ));
@@ -837,15 +845,15 @@ pub(crate) fn derive_reasoning_engine(
         actions.push(action_at(
             "publish_decision",
             "medium",
-            format!("Publish decision to shared: {label}"),
+            format!("Promote decision to canon (pinned): {label}"),
             Some(
-                "Lane hygiene: shared anchors reduce cross-session drift and multi-agent knowledge loss."
+                "Draft hygiene: promote decisions so they become stable resume anchors across sessions."
                     .to_string(),
             ),
             vec![ref_card(decision_id)],
             vec![suggest_call(
                 "think_publish",
-                "Promote this decision into the shared lane (deterministic published copy).",
+                "Promote this decision into canon (deterministic published copy).",
                 "medium",
                 json!({
                     "workspace": scope.workspace,
@@ -864,12 +872,9 @@ pub(crate) fn derive_reasoning_engine(
     let mut hypotheses: Vec<&Value> = by_id
         .values()
         .filter(|card| card.get("type").and_then(|v| v.as_str()) == Some("hypothesis"))
-        .filter(|card| {
-            card.get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("open")
-                == "open"
-        })
+        // Treat hypotheses as active unless explicitly closed. This prevents bypassing
+        // discipline checks via status drift (e.g. "accepted", "done").
+        .filter(|card| card_status_is_active_for_discipline(card))
         .copied()
         .collect();
     hypotheses.sort_by(|a, b| {
@@ -1709,12 +1714,20 @@ pub(crate) fn derive_reasoning_engine(
                     .to_string(),
             ),
             Vec::new(),
-            vec![suggest_call(
-                "think_playbook",
-                "Get a deterministic debug playbook skeleton.",
-                "medium",
-                json!({ "workspace": scope.workspace, "name": "debug" }),
-            )],
+            vec![
+                suggest_call(
+                    "think_playbook",
+                    "Get a deterministic debug playbook skeleton.",
+                    "medium",
+                    json!({ "workspace": scope.workspace, "name": "debug" }),
+                ),
+                suggest_call(
+                    "think_playbook",
+                    "If you're looping, load the breakthrough playbook (inversion → 10x lever → decisive test).",
+                    "low",
+                    json!({ "workspace": scope.workspace, "name": "breakthrough" }),
+                ),
+            ],
             reference_ts_ms,
         ));
     }
@@ -1736,12 +1749,13 @@ pub(crate) fn derive_reasoning_engine(
         if !matches!(ty, "hypothesis" | "decision") {
             continue;
         }
-        if card
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("open")
-            != "open"
-        {
+        // Counter-hypotheses are themselves the "blocks" side of the dialectic. Requiring a
+        // counter-position for a counter-position leads to infinite regress, so we treat cards
+        // tagged as `counter` as exempt from BM10.
+        if card_has_tag(card, "counter") {
+            continue;
+        }
+        if !card_status_is_active_for_discipline(card) {
             continue;
         }
         let Some(id) = card.get("id").and_then(|v| v.as_str()) else {
@@ -1789,25 +1803,39 @@ pub(crate) fn derive_reasoning_engine(
                     .to_string(),
             ),
             vec![ref_card(target.id)],
-            vec![suggest_call(
-                "think_card",
-                "Write the strongest opposite hypothesis and a disconfirming test.",
-                "medium",
-                json!({
-                    "workspace": scope.workspace,
-                    "branch": scope.branch,
-                    "trace_doc": scope.trace_doc,
-                    "graph_doc": scope.graph_doc,
-                    "card": {
-                        "type": "hypothesis",
-                        "title": format!("Counter-hypothesis: {label}"),
-                        "text": "Steelman the opposite case; include 1 disconfirming test idea.",
-                        "status": "open",
-                        "tags": ["bm7", "counter"]
-                    },
-                    "blocks": [target.id]
-                }),
-            )],
+            {
+                let mut tags = vec!["bm7".to_string(), "counter".to_string()];
+                tags.extend(card_value_anchor_tags(target.card));
+                tags = bm_core::graph::normalize_tags(&tags).unwrap_or(tags);
+
+                vec![
+                    suggest_call(
+                        "think_playbook",
+                        "Load a short skeptic loop (counter-hypothesis → falsifier → stop criteria).",
+                        "low",
+                        json!({ "workspace": scope.workspace, "name": "skeptic" }),
+                    ),
+                    suggest_call(
+                        "think_card",
+                        "Write the strongest opposite hypothesis + cheapest falsifier + stop criteria.",
+                        "medium",
+                        json!({
+                            "workspace": scope.workspace,
+                            "branch": scope.branch,
+                            "trace_doc": scope.trace_doc,
+                            "graph_doc": scope.graph_doc,
+                            "card": {
+                                "type": "hypothesis",
+                                "title": format!("Counter-hypothesis: {label}"),
+                                "text": "Steelman the opposite case.\n- Minimal falsifying test: (what would disprove this quickly?)\n- Stop criteria (time/budget/signal): (when do we stop debating?)",
+                                "status": "open",
+                                "tags": tags
+                            },
+                            "blocks": [target.id]
+                        }),
+                    ),
+                ]
+            },
             target.ts_ms.max(reference_ts_ms),
         ));
     }
@@ -1897,39 +1925,49 @@ fn card_has_tag(card: &Value, tag: &str) -> bool {
     tags.iter().any(|t| t.as_str() == Some(tag))
 }
 
-fn card_is_agent_lane(card: &Value) -> bool {
+fn card_status_is_active_for_discipline(card: &Value) -> bool {
+    let status = card
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("open")
+        .trim();
+    !(status.eq_ignore_ascii_case("closed")
+        || status.eq_ignore_ascii_case("done")
+        || status.eq_ignore_ascii_case("resolved"))
+}
+
+fn card_is_draft_like(card: &Value) -> bool {
     let Some(tags) = card.get("tags").and_then(|v| v.as_array()) else {
-        // Legacy behavior: missing lane tag => treated as shared.
+        // Missing tags => treat as canon/shared by default.
         return false;
     };
 
-    let mut has_shared = false;
-    let mut has_agent = false;
+    let mut has_shared_lane = false;
+    let mut has_legacy_agent_lane = false;
+    let mut has_draft = false;
+
     for tag in tags {
         let Some(tag) = tag.as_str() else {
             continue;
         };
         let tag = tag.trim().to_ascii_lowercase();
-        if !tag.starts_with("lane:") {
-            continue;
+        if tag == VIS_TAG_DRAFT {
+            has_draft = true;
         }
         if tag == LANE_TAG_SHARED {
-            has_shared = true;
+            has_shared_lane = true;
         }
         if tag.starts_with(LANE_TAG_AGENT_PREFIX) {
-            has_agent = true;
+            has_legacy_agent_lane = true;
         }
     }
 
     // If lane tags are malformed (multiple lanes), prefer shared to reduce false positives.
-    if has_shared {
-        return false;
-    }
-    if has_agent {
-        return true;
+    if has_shared_lane {
+        has_legacy_agent_lane = false;
     }
 
-    false
+    has_draft || has_legacy_agent_lane
 }
 
 fn merge_engine_arrays(
@@ -1974,6 +2012,54 @@ fn action_key(item: &Value) -> Option<String> {
     let kind = item.get("kind").and_then(|v| v.as_str())?;
     let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
     Some(format!("{kind}\n{title}"))
+}
+
+fn step_selector_from_step_tag(step_tag: &str) -> Option<String> {
+    let step = step_tag
+        .strip_prefix("step:")
+        .unwrap_or(step_tag)
+        .trim()
+        .to_string();
+    if step.is_empty() {
+        return None;
+    }
+    Some(step.to_ascii_uppercase())
+}
+
+fn apply_step_scope_to_engine_calls(
+    engine_obj: &mut serde_json::Map<String, Value>,
+    step_tag: &str,
+) {
+    let Some(step_selector) = step_selector_from_step_tag(step_tag) else {
+        return;
+    };
+    let Some(actions) = engine_obj.get_mut("actions").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+
+    for action in actions {
+        let Some(action_obj) = action.as_object_mut() else {
+            continue;
+        };
+        let Some(calls) = action_obj.get_mut("calls").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        for call in calls {
+            let Some(call_obj) = call.as_object_mut() else {
+                continue;
+            };
+            let target = call_obj.get("target").and_then(|v| v.as_str());
+            if !matches!(target, Some("think_card" | "think_pipeline")) {
+                continue;
+            }
+            let Some(params) = call_obj.get_mut("params").and_then(|v| v.as_object_mut()) else {
+                continue;
+            };
+            params
+                .entry("step".to_string())
+                .or_insert_with(|| Value::String(step_selector.clone()));
+        }
+    }
 }
 
 pub(crate) fn derive_reasoning_engine_step_aware(
@@ -2078,6 +2164,7 @@ pub(crate) fn derive_reasoning_engine_step_aware(
     );
     global_obj.insert("mode".to_string(), Value::String("step_aware".to_string()));
     global_obj.insert("step_tag".to_string(), Value::String(step_tag.to_string()));
+    apply_step_scope_to_engine_calls(global_obj, step_tag);
 
     Some(Value::Object(global_obj.clone()))
 }
@@ -2086,59 +2173,16 @@ pub(crate) fn filter_engine_to_cards(engine: &mut Value, cards: &[Value]) {
     let Some(obj) = engine.as_object_mut() else {
         return;
     };
+    let _ = cards;
 
-    let mut ids = std::collections::BTreeSet::<String>::new();
-    for card in cards {
-        if let Some(id) = card.get("id").and_then(|v| v.as_str()) {
-            ids.insert(id.to_string());
-        }
-    }
-
-    let mut removed_any = false;
-    for key in ["signals", "actions"] {
-        let Some(arr) = obj.get_mut(key).and_then(|v| v.as_array_mut()) else {
-            continue;
-        };
-        let mut kept = Vec::with_capacity(arr.len());
-        for mut item in arr.drain(..) {
-            let Some(item_obj) = item.as_object_mut() else {
-                kept.push(item);
-                continue;
-            };
-
-            let had_refs = item_obj
-                .get("refs")
-                .and_then(|v| v.as_array())
-                .map(|arr| !arr.is_empty())
-                .unwrap_or(false);
-
-            if let Some(refs) = item_obj.get_mut("refs").and_then(|v| v.as_array_mut()) {
-                refs.retain(|r| {
-                    let Some(id) = r.get("id").and_then(|v| v.as_str()) else {
-                        return true;
-                    };
-                    ids.contains(id)
-                });
-            }
-
-            // Drop items that only referenced missing cards.
-            let has_any_refs = item_obj
-                .get("refs")
-                .and_then(|v| v.as_array())
-                .map(|arr| !arr.is_empty())
-                .unwrap_or(false);
-
-            if had_refs && !has_any_refs {
-                removed_any = true;
-                continue;
-            }
-
-            kept.push(item);
-        }
-        *arr = kept;
-    }
-
-    if removed_any {
-        obj.insert("truncated".to_string(), Value::Bool(true));
-    }
+    // Important: do NOT prune engine signals/actions based on the visible card slice.
+    //
+    // Rationale:
+    // - Meaning-mode hides drafts by default for low-noise UX, but the reasoning engine must still
+    //   surface “hidden-but-important” discipline signals (BM4/BM9, publish hygiene, etc.).
+    // - Strict gates and resume HUDs rely on these signals/actions even when the underlying cards
+    //   are not included in the current output slice due to visibility or budgeting.
+    //
+    // Keeping refs intact is intentional: callers can disclose/include_drafts or open by id.
+    let _ = obj;
 }

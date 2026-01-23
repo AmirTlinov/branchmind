@@ -39,6 +39,11 @@ impl SqliteStore {
             params![workspace.as_str(), task_id],
             |row| row.get(0),
         )?;
+        let open_steps_require_proof_tests: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2 AND completed=0 AND proof_tests_mode=2",
+            params![workspace.as_str(), task_id],
+            |row| row.get(0),
+        )?;
         let missing_criteria: i64 = tx.query_row(
             "SELECT COUNT(*) FROM steps WHERE workspace=?1 AND task_id=?2 AND completed=0 AND criteria_confirmed=0",
             params![workspace.as_str(), task_id],
@@ -203,12 +208,13 @@ impl SqliteStore {
         let first_open_row = tx
             .query_row(
                 r#"
-                SELECT step_id, title, completed, criteria_confirmed, tests_confirmed,
+                SELECT step_id, title, next_action, stop_criteria,
+                       completed, criteria_confirmed, tests_confirmed,
                        security_confirmed, perf_confirmed, docs_confirmed,
                        proof_tests_mode, proof_security_mode, proof_perf_mode, proof_docs_mode
                 FROM steps
                 WHERE workspace=?1 AND task_id=?2 AND completed=0
-                ORDER BY created_at_ms ASC
+                ORDER BY created_at_ms ASC, step_id ASC
                 LIMIT 1
                 "#,
                 params![workspace.as_str(), task_id],
@@ -216,8 +222,8 @@ impl SqliteStore {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, i64>(6)?,
@@ -226,6 +232,8 @@ impl SqliteStore {
                         row.get::<_, i64>(9)?,
                         row.get::<_, i64>(10)?,
                         row.get::<_, i64>(11)?,
+                        row.get::<_, i64>(12)?,
+                        row.get::<_, i64>(13)?,
                     ))
                 },
             )
@@ -234,6 +242,8 @@ impl SqliteStore {
         let first_open = if let Some((
             step_id,
             title,
+            next_action,
+            stop_criteria,
             completed,
             criteria,
             tests,
@@ -274,6 +284,8 @@ impl SqliteStore {
                 step_id,
                 path,
                 title,
+                next_action,
+                stop_criteria,
                 completed: completed != 0,
                 criteria_confirmed: criteria != 0,
                 tests_confirmed: tests != 0,
@@ -301,6 +313,7 @@ impl SqliteStore {
             total_steps,
             completed_steps,
             open_steps,
+            open_steps_require_proof_tests,
             missing_criteria,
             missing_tests,
             missing_security,
@@ -312,6 +325,62 @@ impl SqliteStore {
             missing_proof_docs,
             first_open,
         })
+    }
+
+    pub fn task_first_open_step_id_unconfirmed(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        checkpoint: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let tx = self.conn.transaction()?;
+
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM tasks WHERE workspace=?1 AND id=?2",
+                params![workspace.as_str(), task_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(StoreError::UnknownId);
+        }
+
+        let sql = match checkpoint {
+            "criteria" => {
+                r#"
+                SELECT step_id
+                FROM steps
+                WHERE workspace=?1 AND task_id=?2 AND completed=0 AND criteria_confirmed=0
+                ORDER BY created_at_ms ASC, step_id ASC
+                LIMIT 1
+            "#
+            }
+            "tests" => {
+                r#"
+                SELECT step_id
+                FROM steps
+                WHERE workspace=?1 AND task_id=?2 AND completed=0 AND tests_confirmed=0
+                ORDER BY created_at_ms ASC, step_id ASC
+                LIMIT 1
+            "#
+            }
+            _ => {
+                return Err(StoreError::InvalidInput(
+                    "checkpoint must be one of: criteria | tests",
+                ));
+            }
+        };
+
+        let step_id = tx
+            .query_row(sql, params![workspace.as_str(), task_id], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+
+        tx.commit()?;
+        Ok(step_id)
     }
 
     pub fn task_last_completed_step_id(
@@ -326,7 +395,7 @@ impl SqliteStore {
                 SELECT step_id
                 FROM steps
                 WHERE workspace=?1 AND task_id=?2 AND completed=1
-                ORDER BY completed_at_ms DESC, updated_at_ms DESC, created_at_ms DESC
+                ORDER BY completed_at_ms DESC, updated_at_ms DESC, created_at_ms DESC, step_id DESC
                 LIMIT 1
                 "#,
                 params![workspace.as_str(), task_id],

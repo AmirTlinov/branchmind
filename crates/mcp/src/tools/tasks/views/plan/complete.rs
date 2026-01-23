@@ -21,13 +21,71 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let status = args_obj
+        let status_raw = args_obj
             .get("status")
             .and_then(|v| v.as_str())
-            .unwrap_or("DONE")
-            .to_string();
+            .unwrap_or("DONE");
+        let status = status_raw.trim().to_ascii_uppercase();
+        if !matches!(
+            status.as_str(),
+            "TODO" | "ACTIVE" | "DONE" | "PARKED" | "CANCELED"
+        ) {
+            return ai_error(
+                "INVALID_INPUT",
+                "status must be one of TODO|ACTIVE|DONE|PARKED|CANCELED",
+            );
+        }
 
-        let payload = json!({ "status": status });
+        let parked_for_s = match optional_i64(args_obj, "parked_for_s") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let parked_until_ts_ms = match optional_i64(args_obj, "parked_until_ts_ms") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let (parked_until_ts_ms, payload) = if status == "PARKED" {
+            if task_id.starts_with("PLAN-")
+                && (parked_for_s.is_some() || parked_until_ts_ms.is_some())
+            {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "parked_for_s / parked_until_ts_ms are supported for tasks only",
+                );
+            }
+            if parked_for_s.is_some() && parked_until_ts_ms.is_some() {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "provide only one of parked_for_s or parked_until_ts_ms",
+                );
+            }
+            let now_ms = crate::support::now_ms_i64();
+            let parked_until_ts_ms = if let Some(for_s) = parked_for_s {
+                if for_s <= 0 {
+                    return ai_error("INVALID_INPUT", "parked_for_s must be > 0");
+                }
+                Some(now_ms.saturating_add(for_s.saturating_mul(1000)))
+            } else if let Some(until_ms) = parked_until_ts_ms {
+                if until_ms < 0 {
+                    return ai_error("INVALID_INPUT", "parked_until_ts_ms must be >= 0");
+                }
+                Some(until_ms)
+            } else {
+                None
+            };
+            (
+                parked_until_ts_ms,
+                json!({ "status": status, "parked_until_ts_ms": parked_until_ts_ms }),
+            )
+        } else {
+            if parked_for_s.is_some() || parked_until_ts_ms.is_some() {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "parked_for_s / parked_until_ts_ms require status=PARKED",
+                );
+            }
+            (None, json!({ "status": status }))
+        };
 
         if task_id.starts_with("PLAN-") {
             let result = self.store.set_plan_status(
@@ -95,6 +153,7 @@ impl McpServer {
                 id: task_id.clone(),
                 expected_revision,
                 status: status.clone(),
+                parked_until_ts_ms,
                 status_manual: true,
                 require_steps_completed,
                 event_type: "task_completed".to_string(),

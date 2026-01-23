@@ -5,6 +5,7 @@ mod create;
 mod definitions;
 mod dispatch;
 mod history;
+mod jobs;
 mod steps;
 mod views;
 

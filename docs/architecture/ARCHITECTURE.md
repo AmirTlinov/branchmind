@@ -41,8 +41,15 @@ Dependency direction is strict:
   - validates input schemas,
   - enforces output budgets,
   - maps domain errors → typed MCP errors with recovery suggestions.
+- **Optional viewer adapter (read-only):**
+  - serves a loopback-only HTTP UI for humans,
+  - reads through the storage adapter (no writes),
+  - must not change core behavior or requirements.
 
 Dependency direction is strict: MCP → core ← storage.
+
+The optional viewer adapter lives alongside the MCP adapter and depends only on storage + core
+types. It is feature-flagged and must never be required for correct MCP behavior.
 
 ## Consistency boundary (atomicity)
 

@@ -1,13 +1,21 @@
 #![forbid(unsafe_code)]
 //! Storage implementation (split-friendly module root).
 
+mod anchor_aliases;
+mod anchor_links;
+mod anchors;
+mod anchors_lint;
+mod anchors_merge;
 mod branches;
 mod docs;
 mod error;
 mod focus;
 mod graph;
+mod jobs;
 mod ops_history;
+mod portal_cursors;
 mod reasoning_ref;
+mod runners;
 mod steps;
 mod support;
 mod tasks;
@@ -16,7 +24,7 @@ mod types;
 mod vcs;
 
 use bm_core::ids::WorkspaceId;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_BRANCH: &str = "main";
@@ -48,6 +56,19 @@ impl SqliteStore {
         let store = Self { storage_dir, conn };
         store.migrate()?;
         Ok(store)
+    }
+
+    /// Open an existing store in read-only mode.
+    ///
+    /// Notes:
+    /// - This does not create directories or run migrations.
+    /// - Intended for passive read-only consumers (e.g. the local viewer when inspecting
+    ///   other projects via the registry).
+    pub fn open_read_only(storage_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let storage_dir = storage_dir.as_ref().to_path_buf();
+        let db_path = storage_dir.join("branchmind_rust.db");
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(Self { storage_dir, conn })
     }
 
     pub fn storage_dir(&self) -> &Path {
@@ -91,6 +112,31 @@ impl SqliteStore {
             )
             .optional()?
             .is_some())
+    }
+
+    pub fn list_workspaces(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WorkspaceRow>, StoreError> {
+        let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset_i64 = i64::try_from(offset).unwrap_or(0);
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace, created_at_ms, project_guard \
+             FROM workspaces \
+             ORDER BY created_at_ms DESC, workspace ASC \
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = stmt.query(params![limit_i64, offset_i64])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(WorkspaceRow {
+                workspace: row.get(0)?,
+                created_at_ms: row.get(1)?,
+                project_guard: row.get(2)?,
+            });
+        }
+        Ok(out)
     }
 
     pub fn workspace_project_guard_get(
@@ -149,6 +195,27 @@ impl SqliteStore {
                 Ok(())
             }
         }
+    }
+
+    pub fn workspace_project_guard_rebind(
+        &mut self,
+        workspace: &WorkspaceId,
+        expected_guard: &str,
+    ) -> Result<(), StoreError> {
+        let expected_guard = expected_guard.trim();
+        if expected_guard.is_empty() {
+            return Err(StoreError::InvalidInput("project_guard must not be empty"));
+        }
+
+        let now_ms = now_ms();
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+        tx.execute(
+            "UPDATE workspaces SET project_guard=?2 WHERE workspace=?1",
+            params![workspace.as_str(), expected_guard],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn workspace_last_event_head(

@@ -331,7 +331,7 @@ fn defaults_for_view(view: ResumeSuperView, max_chars: Option<usize>) -> ResumeS
                     notes_limit: if view == ResumeSuperView::Explore {
                         22
                     } else {
-                        16
+                        12
                     },
                     trace_limit: if view == ResumeSuperView::Explore {
                         48

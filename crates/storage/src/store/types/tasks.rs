@@ -15,6 +15,9 @@ pub struct TaskRow {
     pub domain: Option<String>,
     pub phase: Option<String>,
     pub component: Option<String>,
+    pub parked_until_ts_ms: Option<i64>,
+    pub stale_after_ms: Option<i64>,
+    pub reasoning_mode: String,
     pub context: Option<String>,
     pub criteria_confirmed: bool,
     pub tests_confirmed: bool,
@@ -48,6 +51,7 @@ pub struct TaskEditRequest {
     pub context: Option<Option<String>>,
     pub priority: Option<String>,
     pub domain: Option<Option<String>>,
+    pub reasoning_mode: Option<String>,
     pub phase: Option<Option<String>>,
     pub component: Option<Option<String>>,
     pub assignee: Option<Option<String>>,
@@ -62,10 +66,28 @@ pub struct SetTaskStatusRequest {
     pub id: String,
     pub expected_revision: Option<i64>,
     pub status: String,
+    pub parked_until_ts_ms: Option<i64>,
     pub status_manual: bool,
     pub require_steps_completed: bool,
     pub event_type: String,
     pub event_payload_json: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanHorizonWake {
+    pub task_id: String,
+    pub parked_until_ts_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanHorizonStats {
+    pub active: i64,
+    pub backlog: i64,
+    pub parked: i64,
+    pub done: i64,
+    pub total: i64,
+    pub stale: i64,
+    pub next_wake: Option<PlanHorizonWake>,
 }
 
 #[derive(Clone, Debug)]

@@ -49,6 +49,15 @@ pub struct StepSelector {
 }
 
 #[derive(Clone, Debug)]
+pub struct StepNoteRequest {
+    pub task_id: String,
+    pub expected_revision: Option<i64>,
+    pub agent_id: Option<String>,
+    pub selector: StepSelector,
+    pub note: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct StepOpResult {
     pub task_revision: i64,
     pub step: StepRef,
@@ -75,6 +84,8 @@ pub struct StepPatch {
     pub success_criteria: Option<Vec<String>>,
     pub tests: Option<Vec<String>>,
     pub blockers: Option<Vec<String>>,
+    pub next_action: Option<Option<String>>,
+    pub stop_criteria: Option<Option<String>>,
     pub proof_tests_mode: Option<ProofMode>,
     pub proof_security_mode: Option<ProofMode>,
     pub proof_perf_mode: Option<ProofMode>,
@@ -88,15 +99,6 @@ pub struct StepDefineRequest {
     pub agent_id: Option<String>,
     pub selector: StepSelector,
     pub patch: StepPatch,
-}
-
-#[derive(Clone, Debug)]
-pub struct StepNoteRequest {
-    pub task_id: String,
-    pub expected_revision: Option<i64>,
-    pub agent_id: Option<String>,
-    pub selector: StepSelector,
-    pub note: String,
 }
 
 #[derive(Clone, Debug)]
@@ -169,6 +171,8 @@ pub struct StepStatus {
     pub step_id: String,
     pub path: String,
     pub title: String,
+    pub next_action: Option<String>,
+    pub stop_criteria: Option<String>,
     pub criteria_confirmed: bool,
     pub tests_confirmed: bool,
     pub security_confirmed: bool,
@@ -193,6 +197,7 @@ pub struct TaskStepSummary {
     pub total_steps: i64,
     pub completed_steps: i64,
     pub open_steps: i64,
+    pub open_steps_require_proof_tests: i64,
     pub missing_criteria: i64,
     pub missing_tests: i64,
     pub missing_security: i64,
@@ -210,6 +215,12 @@ pub struct StepDetail {
     pub step_id: String,
     pub path: String,
     pub title: String,
+    pub next_action: Option<String>,
+    pub stop_criteria: Option<String>,
+    pub proof_tests_mode: ProofMode,
+    pub proof_security_mode: ProofMode,
+    pub proof_perf_mode: ProofMode,
+    pub proof_docs_mode: ProofMode,
     pub success_criteria: Vec<String>,
     pub tests: Vec<String>,
     pub blockers: Vec<String>,

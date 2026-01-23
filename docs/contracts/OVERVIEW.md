@@ -22,8 +22,12 @@ Many MCP clients require tool names to match `^[a-zA-Z0-9_-]+$`.
 - `TYPES.md` — common types, budgets, error model, response envelope
 - `TASKS.md` — task execution surface (`tasks_*`)
 - `MEMORY.md` — reasoning memory surface (branching, notes, graph, traces)
+- `ANCHORS.md` — meaning-map anchors surface (architecture-scoped memory)
+- `DELEGATION.md` — delegation jobs (runner protocol + tracking)
+- `SKILLS.md` — built-in behavior packs (`skill` tool)
 - `INTEGRATION.md` — how tasks and memory stay consistent (events, refs, conflicts)
 - `PARITY.md` — parity target with apply_task + branchmind tool surfaces
+- `VIEWER.md` — optional local read-only HTTP viewer (non-MCP surface)
 
 Related:
 

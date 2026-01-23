@@ -17,6 +17,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "view": { "type": "string", "description": "Relevance view: smart | explore | audit" },
                     "step": { "type": "string" },
                     "agent_id": { "type": "string" },
+                    "include_drafts": { "type": "boolean", "description": "Alias for all_lanes (disable draft filtering)." },
                     "all_lanes": { "type": "boolean" },
                     "limit_cards": { "type": "integer" },
                     "context_budget": { "type": "integer" },
@@ -37,6 +38,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "graph_doc": { "type": "string" },
                     "step": { "type": "string" },
                     "agent_id": { "type": "string" },
+                    "include_drafts": { "type": "boolean", "description": "Alias for all_lanes (disable draft filtering)." },
                     "all_lanes": { "type": "boolean" },
                     "ids": {
                         "anyOf": [
@@ -84,6 +86,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "view": { "type": "string", "description": "Relevance view: smart | explore | audit" },
                     "step": { "type": "string" },
                     "agent_id": { "type": "string" },
+                    "include_drafts": { "type": "boolean", "description": "Alias for all_lanes (disable draft filtering)." },
                     "all_lanes": { "type": "boolean" },
                     "limit_candidates": { "type": "integer" },
                     "limit_hypotheses": { "type": "integer" },
@@ -109,6 +112,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "view": { "type": "string", "description": "Relevance view: smart | explore | audit" },
                     "step": { "type": "string" },
                     "agent_id": { "type": "string" },
+                    "include_drafts": { "type": "boolean", "description": "Alias for all_lanes (disable draft filtering)." },
                     "all_lanes": { "type": "boolean" },
                     "limit_hypotheses": { "type": "integer" },
                     "limit_questions": { "type": "integer" },
@@ -133,6 +137,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "view": { "type": "string", "description": "Relevance view: smart | explore | audit" },
                     "step": { "type": "string" },
                     "agent_id": { "type": "string" },
+                    "include_drafts": { "type": "boolean", "description": "Alias for all_lanes (disable draft filtering)." },
                     "all_lanes": { "type": "boolean" },
                     "context_budget": { "type": "integer" },
                     "max_chars": { "type": "integer" }

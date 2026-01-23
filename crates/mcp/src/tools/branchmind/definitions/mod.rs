@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+mod anchors;
 mod branches;
 mod core;
 mod docs;
@@ -15,6 +16,7 @@ mod transcripts;
 pub(crate) fn branchmind_tool_definitions() -> Vec<Value> {
     let mut out = Vec::new();
     out.extend(core::core_definitions());
+    out.extend(anchors::anchors_definitions());
     out.extend(branches::branches_definitions());
     out.extend(notes_vcs::notes_vcs_definitions());
     out.extend(docs::docs_definitions());

@@ -106,7 +106,7 @@ pub(crate) fn built_in_task_templates() -> Vec<TaskTemplate> {
             id: "principal-task",
             kind: TaskKind::Task,
             title: "Principal delivery task",
-            description: "Principal-grade loop: frame → design → implement → verify → ship, with explicit proofs.",
+            description: "Principal-grade loop: frame → design → implement → verify → ship, with explicit proofs (defaults to strict reasoning discipline).",
             plan_steps: Vec::new(),
             task_steps: vec![
                 template_step(

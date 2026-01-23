@@ -7,17 +7,44 @@ use crate::entry::framing::{
 };
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
+#[cfg(unix)]
+use std::os::unix::io::AsFd;
+#[cfg(unix)]
+use std::time::Duration;
 
-pub(crate) fn run_stdio(server: &mut McpServer) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_stdio(
+    server: &mut McpServer,
+    hot_reload_enabled: bool,
+    hot_reload_poll_ms: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let mut stdout = std::io::stdout().lock();
+
+    let hot_reload = crate::HotReload::start(
+        hot_reload_enabled,
+        std::time::Duration::from_millis(hot_reload_poll_ms),
+    );
 
     // Auto-detect framing once per process. This keeps responses consistent and avoids
     // interleaving different framing styles on the same transport.
     let mut mode: Option<TransportMode> = None;
 
     loop {
+        // Safe-point for hot reload: only when BufReader has no pre-fetched bytes.
+        let _ = hot_reload.maybe_exec_if_requested_and_safe(reader.buffer().is_empty());
+        // Avoid blocking indefinitely on stdin: poll with a timeout so hot reload can trigger even
+        // when the MCP client is idle.
+        #[cfg(unix)]
+        if reader.buffer().is_empty()
+            && !crate::entry::poll::wait_fd_readable(
+                reader.get_ref().as_fd(),
+                Duration::from_millis(100),
+            )
+        {
+            continue;
+        }
+
         let effective_mode = match mode {
             Some(v) => v,
             None => {

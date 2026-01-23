@@ -98,6 +98,19 @@ impl SqliteStore {
             }
         }
 
+        if let Some(next_action) = patch.next_action {
+            tx.execute(
+                "UPDATE steps SET next_action=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, next_action, now_ms],
+            )?;
+        }
+        if let Some(stop_criteria) = patch.stop_criteria {
+            tx.execute(
+                "UPDATE steps SET stop_criteria=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, stop_criteria, now_ms],
+            )?;
+        }
+
         if let Some(mode) = patch.proof_tests_mode {
             tx.execute(
                 "UPDATE steps SET proof_tests_mode=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",

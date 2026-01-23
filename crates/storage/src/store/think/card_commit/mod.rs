@@ -23,7 +23,7 @@ impl SqliteStore {
             return Err(StoreError::UnknownBranch);
         }
 
-        let inserted = trace::insert_trace_entry_if_needed_tx(
+        let (inserted, trace_seq) = trace::insert_trace_entry_if_needed_tx(
             &tx,
             workspace.as_str(),
             validated.branch.as_str(),
@@ -49,12 +49,28 @@ impl SqliteStore {
             },
         )?;
 
+        // Meaning map: keep a cheap, queryable index from anchors → cards across graphs.
+        // Best-effort: invalid anchor tags are ignored (no hard failure).
+        let _ = crate::store::anchor_links::upsert_anchor_links_for_card_tx(
+            &tx,
+            workspace.as_str(),
+            crate::store::anchor_links::UpsertAnchorLinksForCardTxArgs {
+                branch: validated.branch.as_str(),
+                graph_doc: validated.graph_doc.as_str(),
+                card_id: validated.card_id.as_str(),
+                card_type: validated.card_type.as_str(),
+                tags: &validated.tags,
+                now_ms,
+            },
+        )?;
+
         tx.commit()?;
 
         Ok(ThinkCardCommitResult {
             inserted,
             nodes_upserted: graph_result.nodes_upserted,
             edges_upserted: graph_result.edges_upserted,
+            trace_seq,
             last_seq: graph_result.last_seq,
         })
     }

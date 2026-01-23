@@ -115,7 +115,7 @@ The MCP adapter must keep recovery **cognitively cheap**:
 The number of tools is part of the UX.
 
 - Provide a **curated “daily driver” toolset** that covers the common workflow with a *tiny* subset of tools.
-- Target: **≤ 5 tools** for daily usage (portal tools), with progressive disclosure for everything else.
+- Target: **≤ 7 tools** for daily usage (portal tools), with progressive disclosure for everything else.
 - Keep the full parity surface available, but allow MCP clients to opt into a smaller `tools/list` set to reduce
   token waste and command-selection confusion.
 - Prefer fewer high-leverage tools + composable macros over many “one-off” wrappers.
@@ -123,9 +123,10 @@ The number of tools is part of the UX.
 Progressive disclosure mechanism:
 
 - `tools/list` accepts optional `{ "toolset": "full|daily|core" }` params to override the server default for that call.
-- To reduce boilerplate, portal tools may accept omitted `workspace` when the server is configured with a default
+- To reduce boilerplate, tool calls may accept omitted `workspace` when the server is configured with a default
   workspace (`--workspace` / `BRANCHMIND_WORKSPACE`). Explicit `workspace` always wins.
 - When a default workspace is configured, portal outputs should avoid repeating it in “next action” args (keep actions copy/paste-ready but minimal).
+  - Note: when a default workspace is configured, the server may also treat it as the implicit `workspace` for non-portal tools (DX optimization).
 
 ## 5) Budgets everywhere
 
@@ -157,7 +158,8 @@ The goal is for agents to never spend tokens figuring out “where am I” or �
 - **workspace** = the world / project boundary (hard wall).
 - **task focus** = the current mission inside a workspace.
 - **step focus (“room”)** = the default working set (usually the first open step of the focused task).
-- **lane** = parallel work isolation (`shared` + per-agent lanes).
+- **anchors** = meaning coordinates (`a:*`) for architecture areas (survive refactors; enable resume-by-meaning).
+- **visibility** = anti-noise control (`v:canon` / `v:draft` + pins; drafts are hidden by default).
 
 ### 8.2 Lifecycle (prevent the dump)
 
@@ -174,7 +176,7 @@ Default “smart” views must bias toward frontier + anchors and keep archive c
 Every portal-style response that is meant to be read by an agent (snapshot/resume/watch)
 must keep a small stable block that never disappears under budgets:
 
-- **where**: workspace + target + step focus + lane
+- **where**: workspace + target + step focus (+ optional meaning anchor)
 - **now**: what we’re trying to achieve right now (1–2 lines)
 - **why**: top signals (bounded)
 - **next**: exactly 1 primary action + 1 backup action (bounded)
@@ -182,17 +184,16 @@ must keep a small stable block that never disappears under budgets:
 
 This is the critical trick: agents learn to “think after reading where/now/next”.
 
-## 9) Multi-agent concurrency (lanes + publish)
+## 9) Multi-agent concurrency (leases + audit)
 
-Parallel agents should not flood each other with drafts.
+The tool does not assume “many agents editing the same thing” is a good workflow.
+Still, the server must protect users from accidental overlap.
 
 Rules:
 
-- Writes may be stamped into an agent lane by default (noise isolation).
-- Default reads for smart portals should include: `shared` + “my lane”.
-- Prefer a server-level stable default lane identity (`--agent-id <id>` or `BRANCHMIND_AGENT_ID=<id>`). For single-agent usage, `--agent-id auto` eliminates “forgot agent_id” drift across restarts.
-- **Publish** is explicit: an agent promotes a card/note from its lane into `shared` when it becomes a durable anchor.
-- “Shared anchors” are expected to be pinned/published and discoverable across lanes.
+- Durable memory is **shared-by-default**. Noise control is via `v:draft` and pins, not via per-agent lanes.
+- `agent_id` exists primarily for **concurrency semantics** (step leases) and best-effort audit metadata.
+- Legacy `lane:agent:*` artifacts may exist in older stores and are treated as draft markers unless promoted (`v:canon`).
 
 ## 10) Anti-drift (don’t cross projects)
 

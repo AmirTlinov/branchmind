@@ -14,7 +14,7 @@ pub(crate) fn resolve_step_context_from_args(
     workspace: &WorkspaceId,
     args_obj: &serde_json::Map<String, Value>,
     step_raw: &str,
-) -> Result<ResolvedStepContext, Value> {
+) -> Result<Option<ResolvedStepContext>, Value> {
     let step_raw = step_raw.trim();
     if step_raw.is_empty() {
         return Err(ai_error("INVALID_INPUT", "step must not be empty"));
@@ -37,9 +37,13 @@ pub(crate) fn resolve_step_context_from_args(
         || doc_override.is_some();
 
     if overrides_present {
-        return Err(ai_error(
+        return Err(ai_error_with(
             "INVALID_INPUT",
             "step cannot be used with explicit branch/doc overrides; use target/focus scope",
+            Some(
+                "Remove branch/ref/doc/notes_doc/graph_doc/trace_doc overrides (or omit step). For step-scoped cards, use target=TASK-... (or workspace focus) + step=focus/STEP-.../s:0.",
+            ),
+            Vec::new(),
         ));
     }
 
@@ -48,17 +52,13 @@ pub(crate) fn resolve_step_context_from_args(
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let explicit_target_present = explicit_target.is_some();
 
     let target_id = match explicit_target {
         Some(id) => id,
         None => match server.store.focus_get(workspace) {
             Ok(Some(focus)) => focus,
-            Ok(None) => {
-                return Err(ai_error(
-                    "INVALID_INPUT",
-                    "step requires a TASK target (or a workspace focus set to a TASK)",
-                ));
-            }
+            Ok(None) => return Ok(None),
             Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
         },
     };
@@ -66,16 +66,22 @@ pub(crate) fn resolve_step_context_from_args(
     match parse_plan_or_task_kind(&target_id) {
         Some(TaskKind::Task) => {}
         Some(TaskKind::Plan) => {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "step is only supported for TASK-* targets (plans have no steps table)",
-            ));
+            if explicit_target_present {
+                return Err(ai_error(
+                    "INVALID_INPUT",
+                    "step is only supported for TASK-* targets (plans have no steps table)",
+                ));
+            }
+            return Ok(None);
         }
         None => {
-            return Err(ai_error(
-                "INVALID_INPUT",
-                "target must start with TASK- when step is provided",
-            ));
+            if explicit_target_present {
+                return Err(ai_error(
+                    "INVALID_INPUT",
+                    "target must start with TASK- when step is provided",
+                ));
+            }
+            return Ok(None);
         }
     }
 
@@ -101,6 +107,20 @@ pub(crate) fn resolve_step_context_from_args(
             path: first_open.path,
         }
     } else {
+        if step_raw.starts_with("TASK-")
+            || step_raw.starts_with("PLAN-")
+            || step_raw.starts_with("JOB-")
+            || step_raw.starts_with("CARD-")
+        {
+            return Err(ai_error_with(
+                "INVALID_INPUT",
+                "step: expected STEP-... id or StepPath (s:0...), not a task/plan id",
+                Some(
+                    "If you meant to scope to a task, put the id into target=TASK-... and use step=focus (or step=STEP-... / s:0).",
+                ),
+                Vec::new(),
+            ));
+        }
         let (step_id, step_path) = if step_raw.starts_with("STEP-") {
             (Some(step_raw.to_string()), None)
         } else {
@@ -133,11 +153,11 @@ pub(crate) fn resolve_step_context_from_args(
         }
     };
 
-    Ok(ResolvedStepContext {
+    Ok(Some(ResolvedStepContext {
         task_id: target_id,
         step_tag: step_tag_for(&step.step_id),
         step,
-    })
+    }))
 }
 
 pub(super) fn apply_step_context_to_card(
@@ -145,17 +165,25 @@ pub(super) fn apply_step_context_to_card(
     workspace: &WorkspaceId,
     args_obj: &serde_json::Map<String, Value>,
     parsed: &mut ParsedThinkCard,
-) -> Result<(), Value> {
+) -> Result<Option<Value>, Value> {
     let step_raw = optional_string(args_obj, "step")?;
     let Some(step_raw) = step_raw else {
-        return Ok(());
+        return Ok(None);
     };
 
-    let ResolvedStepContext {
+    let step_ctx = resolve_step_context_from_args(server, workspace, args_obj, &step_raw)?;
+    let Some(ResolvedStepContext {
         task_id,
         step,
         step_tag,
-    } = resolve_step_context_from_args(server, workspace, args_obj, &step_raw)?;
+    }) = step_ctx
+    else {
+        return Ok(Some(warning(
+            "STEP_CONTEXT_IGNORED",
+            "step was ignored (no TASK focus/target)",
+            "Set workspace focus to a TASK (tasks_focus_set) or pass target=TASK-... to bind step-scoped cards.",
+        )));
+    };
 
     // Attach a canonical tag for graph querying and an explicit meta.step reference for introspection.
     {
@@ -177,5 +205,5 @@ pub(super) fn apply_step_context_to_card(
         );
     }
 
-    Ok(())
+    Ok(None)
 }

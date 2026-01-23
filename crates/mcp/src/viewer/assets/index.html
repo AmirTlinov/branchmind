@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BranchMind Viewer</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <header class="top">
+          <div class="brand">
+            <div class="kicker">BranchMind</div>
+            <h1>Project Pulse</h1>
+            <p class="lede">A calm, read-only view of goals, plans, and tasks.</p>
+          </div>
+          <div class="brand-project">
+            <div class="brand-project-label">Project</div>
+            <select
+              id="workspace"
+              class="meta-select brand-project-select"
+              aria-label="Project"
+            ></select>
+          </div>
+        </header>
+
+        <main>
+          <section class="summary">
+            <div class="summary-card">
+              <div class="summary-label">Focus</div>
+              <div id="focus" class="summary-value">-</div>
+              <div id="focus-sub" class="summary-sub">-</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Plans</div>
+              <div id="plan-count" class="summary-value">-</div>
+              <div id="plan-breakdown" class="summary-sub">-</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">Tasks</div>
+              <div id="task-count" class="summary-value">-</div>
+              <div id="task-breakdown" class="summary-sub">-</div>
+            </div>
+          </section>
+
+          <section class="columns">
+            <div class="column">
+              <div class="section-head">
+                <h2>Goals</h2>
+                <p>Active plans at a glance.</p>
+              </div>
+              <div id="goal-list" class="list"></div>
+            </div>
+
+            <div class="column">
+              <div class="section-head">
+                <h2>Plan</h2>
+                <p>Selected goal checklist.</p>
+              </div>
+              <div id="plan-checklist" class="list list-tight"></div>
+            </div>
+
+            <div class="column">
+              <div class="section-head">
+                <h2>Tasks</h2>
+                <p>Workstream for the selected goal.</p>
+              </div>
+              <div id="task-list" class="list"></div>
+            </div>
+          </section>
+        </main>
+
+        <footer class="footer">
+          <span>Local-only / Read-only / BranchMind Viewer</span>
+        </footer>
+      </aside>
+
+      <section class="main">
+        <header class="topbar" aria-label="Workspace status">
+          <div class="meta">
+            <div class="meta-item">
+              <span class="meta-label">Repo</span>
+              <select id="project" class="meta-select" aria-label="Repo"></select>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Updated</span>
+              <span id="updated" class="meta-value">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Runner</span>
+              <span id="runner-status" class="meta-value">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Jobs</span>
+              <span id="runner-jobs" class="meta-value">-</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Autostart</span>
+              <label class="toggle" title="Autostart runner locally (runtime only)">
+                <input id="runner-autostart" type="checkbox" />
+                <span class="toggle-ui" aria-hidden="true"></span>
+              </label>
+            </div>
+          </div>
+        </header>
+
+        <div class="graph-shell">
+          <canvas id="graph" aria-hidden="true"></canvas>
+        </div>
+      </section>
+    </div>
+    <aside id="detail-panel" class="detail-panel" aria-live="polite" aria-hidden="true">
+      <div class="detail-head">
+        <div>
+          <div id="detail-kicker" class="detail-kicker">Selection</div>
+          <div id="detail-title" class="detail-title">Select a node</div>
+        </div>
+        <button id="detail-close" class="detail-close" type="button">Close</button>
+      </div>
+      <div id="detail-meta" class="detail-meta"></div>
+      <div id="detail-body" class="detail-body"></div>
+    </aside>
+
+    <noscript>
+      <div class="noscript">Enable JavaScript to view the snapshot.</div>
+    </noscript>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

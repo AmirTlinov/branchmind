@@ -35,3 +35,6 @@ If “0 deps strict” is required, replace these with in-house minimal implemen
 - `serde`: typed request parsing for MCP JSON-RPC envelopes.
 - `serde_json`: JSON values + construction for tool inputs/outputs.
 - `time`: RFC3339 timestamps in agent-facing payloads.
+- `nix` (unix-only): poll/select wrappers used to poll stdin with a timeout so hot reload can
+  trigger even when the MCP client is idle (no manual restarts).
+- Local HTTP viewer (optional) uses `std::net` only (no additional dependencies).

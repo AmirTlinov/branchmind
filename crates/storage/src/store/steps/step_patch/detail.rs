@@ -14,7 +14,9 @@ pub(super) fn load_step_detail_tx(
     let row = tx
         .query_row(
             r#"
-            SELECT title, criteria_confirmed, tests_confirmed, security_confirmed,
+            SELECT title, next_action, stop_criteria,
+                   proof_tests_mode, proof_security_mode, proof_perf_mode, proof_docs_mode,
+                   criteria_confirmed, tests_confirmed, security_confirmed,
                    perf_confirmed, docs_confirmed, completed, completed_at_ms, blocked, block_reason
             FROM steps
             WHERE workspace=?1 AND task_id=?2 AND step_id=?3
@@ -23,15 +25,21 @@ pub(super) fn load_step_detail_tx(
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, i64>(6)?,
-                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
-                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, Option<i64>>(13)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, Option<String>>(15)?,
                 ))
             },
         )
@@ -39,6 +47,12 @@ pub(super) fn load_step_detail_tx(
 
     let Some((
         title,
+        next_action,
+        stop_criteria,
+        proof_tests_mode_raw,
+        proof_security_mode_raw,
+        proof_perf_mode_raw,
+        proof_docs_mode_raw,
         criteria,
         tests,
         security,
@@ -57,6 +71,12 @@ pub(super) fn load_step_detail_tx(
         step_id: step_id.to_string(),
         path: path.to_string(),
         title,
+        next_action,
+        stop_criteria,
+        proof_tests_mode: ProofMode::from_i64(proof_tests_mode_raw),
+        proof_security_mode: ProofMode::from_i64(proof_security_mode_raw),
+        proof_perf_mode: ProofMode::from_i64(proof_perf_mode_raw),
+        proof_docs_mode: ProofMode::from_i64(proof_docs_mode_raw),
         success_criteria: step_items_list_tx(tx, workspace, step_id, "step_criteria")?,
         tests: step_items_list_tx(tx, workspace, step_id, "step_tests")?,
         blockers: step_items_list_tx(tx, workspace, step_id, "step_blockers")?,
@@ -83,6 +103,12 @@ pub(super) fn step_detail_snapshot_json(
         "step_id": detail.step_id,
         "path": detail.path,
         "title": detail.title,
+        "next_action": detail.next_action,
+        "stop_criteria": detail.stop_criteria,
+        "proof_tests_mode": detail.proof_tests_mode.as_i64(),
+        "proof_security_mode": detail.proof_security_mode.as_i64(),
+        "proof_perf_mode": detail.proof_perf_mode.as_i64(),
+        "proof_docs_mode": detail.proof_docs_mode.as_i64(),
         "success_criteria": detail.success_criteria,
         "tests": detail.tests,
         "blockers": detail.blockers,

@@ -59,7 +59,7 @@ fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
     }));
 
     // Call without max_chars/context_budget. Server injects default max_chars, sees budget truncation,
-    // and retries a small, bounded number of times (still capped).
+    // and retries a bounded number of times until truncation disappears (still capped).
     let show = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
@@ -76,20 +76,19 @@ fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
         .and_then(|v| v.as_u64())
         .expect("budget.max_chars");
 
-    assert_eq!(
-        max, 128_000,
-        "auto-escalation should retry multiple times (16k -> 32k -> 64k -> 128k) when default budgets truncate"
-    );
-
     let warnings = show_text
         .get("warnings")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let has_budget_warning = warnings.iter().any(|w| {
+        matches!(
+            w.get("code").and_then(|v| v.as_str()),
+            Some("BUDGET_TRUNCATED") | Some("BUDGET_MINIMAL")
+        )
+    });
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.get("code").and_then(|v| v.as_str()) == Some("BUDGET_TRUNCATED")),
-        "huge note content should still trigger BUDGET_TRUNCATED even after a single auto-escalation pass"
+        !has_budget_warning,
+        "auto-escalation should remove BUDGET_* warnings for large-but-reasonable payloads (max_chars={max}), got: {warnings:?}"
     );
 }

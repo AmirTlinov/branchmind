@@ -23,7 +23,7 @@ fn think_watch_filters_other_agents_by_default() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_watch",
             "agent_id": "agent-a",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -33,7 +33,7 @@ fn think_watch_filters_other_agents_by_default() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_watch",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -59,7 +59,7 @@ fn think_watch_filters_other_agents_by_default() {
         .and_then(|v| v.get("kind"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    assert_eq!(lane_kind, "agent");
+    assert_eq!(lane_kind, "shared");
     let frontier_hypotheses = watch_a_text
         .get("result")
         .and_then(|v| v.get("frontier"))
@@ -70,13 +70,13 @@ fn think_watch_filters_other_agents_by_default() {
         frontier_hypotheses
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "agent-a should see its own lane card"
+        "default watch should include non-draft cards"
     );
     assert!(
         frontier_hypotheses
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "agent-a should not see agent-b lane cards"
+        "default watch should exclude drafts"
     );
 }
 
@@ -98,7 +98,7 @@ fn think_watch_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_watch_all",
             "agent_id": "agent-a",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -108,7 +108,7 @@ fn think_watch_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_watch_all",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -132,24 +132,6 @@ fn think_watch_all_lanes_is_explicit_opt_in() {
         "all-lanes mode must be explicit in capsule"
     );
 
-    let lane_summary = watch_all_text
-        .get("result")
-        .and_then(|v| v.get("lane_summary"))
-        .expect("lane_summary");
-    let lanes = lane_summary
-        .get("lanes")
-        .and_then(|v| v.as_array())
-        .expect("lane_summary.lanes");
-    assert!(
-        lanes.iter().any(|lane| {
-            lane.get("lane")
-                .and_then(|v| v.get("agent_id"))
-                .and_then(|v| v.as_str())
-                == Some("agent-b")
-        }),
-        "lane_summary should include agent-b lane"
-    );
-
     let frontier_hypotheses = watch_all_text
         .get("result")
         .and_then(|v| v.get("frontier"))
@@ -160,7 +142,7 @@ fn think_watch_all_lanes_is_explicit_opt_in() {
         frontier_hypotheses
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "all_lanes=true should include other agent lanes"
+        "all_lanes=true should include drafts"
     );
 }
 
@@ -202,7 +184,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
             "workspace": "ws_lanes_tasks",
             "target": task_id.clone(),
             "agent_id": "agent-a",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -213,7 +195,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
             "workspace": "ws_lanes_tasks",
             "target": task_id.clone(),
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -236,7 +218,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
             "workspace": "ws_lanes_tasks",
             "target": task_id.clone(),
             "agent_id": "agent-b",
-            "card": { "id": "DEC-B", "type": "decision", "title": "B decision", "text": "from agent b" }
+            "card": { "id": "DEC-B", "type": "decision", "title": "B decision", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -269,13 +251,13 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "smart view should include agent-a lane cards"
+        "smart view should include non-draft cards"
     );
     assert!(
         cards
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "smart view should exclude other agent lanes"
+        "smart view should exclude drafts"
     );
 
     let decisions = resume_text
@@ -288,16 +270,16 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         decisions
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("DEC-A")),
-        "smart view should include agent-a lane decisions"
+        "smart view should include non-draft decisions"
     );
     assert!(
         decisions
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("DEC-B")),
-        "smart view should exclude other agent lanes from signals"
+        "smart view should exclude draft decisions from signals"
     );
 
-    // Audit view is explicit opt-in: it should include all lanes (shared + all agent lanes).
+    // Audit view is explicit opt-in: it should include drafts.
     let audit = server.request(json!({
         "jsonrpc": "2.0",
         "id": 8,
@@ -326,24 +308,6 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         .unwrap_or("");
     assert_eq!(lane_kind, "all", "audit view must advertise all lanes");
 
-    let lane_summary = audit_text
-        .get("result")
-        .and_then(|v| v.get("lane_summary"))
-        .expect("lane_summary");
-    let lanes = lane_summary
-        .get("lanes")
-        .and_then(|v| v.as_array())
-        .expect("lane_summary.lanes");
-    assert!(
-        lanes.iter().any(|lane| {
-            lane.get("lane")
-                .and_then(|v| v.get("agent_id"))
-                .and_then(|v| v.as_str())
-                == Some("agent-b")
-        }),
-        "audit lane_summary should include agent-b lane"
-    );
-
     let audit_cards = audit_text
         .get("result")
         .and_then(|v| v.get("memory"))
@@ -354,7 +318,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         audit_cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "audit view should include other agent lanes"
+        "audit view should include drafts"
     );
 
     let audit_decisions = audit_text
@@ -367,7 +331,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         audit_decisions
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("DEC-B")),
-        "audit view should include other agent lane decisions in signals"
+        "audit view should include draft decisions in signals"
     );
 }
 
@@ -445,7 +409,7 @@ fn think_pack_and_query_filter_other_agent_lanes() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_pack",
             "agent_id": "agent-a",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -455,7 +419,7 @@ fn think_pack_and_query_filter_other_agent_lanes() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_pack",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -481,13 +445,13 @@ fn think_pack_and_query_filter_other_agent_lanes() {
         candidates
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "think_pack should include agent-a lane candidates"
+        "think_pack should include non-draft candidates"
     );
     assert!(
         candidates
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "think_pack should exclude other agent lanes"
+        "think_pack should exclude drafts by default"
     );
 
     let query_a = server.request(json!({
@@ -512,13 +476,13 @@ fn think_pack_and_query_filter_other_agent_lanes() {
         cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "think_query should include agent-a lane cards"
+        "think_query should include non-draft cards"
     );
     assert!(
         cards
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "think_query should exclude other agent lanes"
+        "think_query should exclude drafts by default"
     );
 }
 
@@ -550,7 +514,7 @@ fn think_pack_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_pack_all",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -570,25 +534,7 @@ fn think_pack_all_lanes_is_explicit_opt_in() {
         candidates
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "think_pack all_lanes=true should include other agent lanes"
-    );
-
-    let lane_summary = pack_all_text
-        .get("result")
-        .and_then(|v| v.get("lane_summary"))
-        .expect("lane_summary");
-    let lanes = lane_summary
-        .get("lanes")
-        .and_then(|v| v.as_array())
-        .expect("lane_summary.lanes");
-    assert!(
-        lanes.iter().any(|lane| {
-            lane.get("lane")
-                .and_then(|v| v.get("agent_id"))
-                .and_then(|v| v.as_str())
-                == Some("agent-b")
-        }),
-        "lane_summary should include agent-b lane"
+        "think_pack all_lanes=true should include drafts"
     );
 }
 
@@ -620,7 +566,7 @@ fn context_pack_filters_other_agent_lanes_in_graph_slices() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_context_pack",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "decision", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "decision", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -647,13 +593,13 @@ fn context_pack_filters_other_agent_lanes_in_graph_slices() {
         cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "context_pack should include agent-a lane cards"
+        "context_pack should include non-draft cards"
     );
     assert!(
         cards
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "context_pack should exclude other agent lanes"
+        "context_pack should exclude drafts by default"
     );
 
     let decisions = pack_text
@@ -666,13 +612,13 @@ fn context_pack_filters_other_agent_lanes_in_graph_slices() {
         decisions
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "context_pack signals should include agent-a lane decisions"
+        "context_pack signals should include non-draft decisions"
     );
     assert!(
         decisions
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "context_pack signals should exclude other agent lanes"
+        "context_pack signals should exclude draft decisions by default"
     );
 }
 
@@ -694,7 +640,7 @@ fn think_context_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_think_context_all",
             "agent_id": "agent-a",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -704,7 +650,7 @@ fn think_context_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_think_context_all",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -729,13 +675,13 @@ fn think_context_all_lanes_is_explicit_opt_in() {
         cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "think_context should include agent-a lane cards"
+        "think_context should include non-draft cards"
     );
     assert!(
         cards
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "think_context should exclude other lanes by default"
+        "think_context should exclude drafts by default"
     );
 
     let all = server.request(json!({
@@ -760,7 +706,7 @@ fn think_context_all_lanes_is_explicit_opt_in() {
         cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "think_context all_lanes=true should include other agent lanes"
+        "think_context all_lanes=true should include drafts"
     );
 }
 
@@ -782,7 +728,7 @@ fn think_frontier_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_think_frontier_all",
             "agent_id": "agent-a",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -792,7 +738,7 @@ fn think_frontier_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_think_frontier_all",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -818,13 +764,13 @@ fn think_frontier_all_lanes_is_explicit_opt_in() {
         hypotheses
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "think_frontier should include agent-a lane cards"
+        "think_frontier should include non-draft cards"
     );
     assert!(
         hypotheses
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "think_frontier should exclude other lanes by default"
+        "think_frontier should exclude drafts by default"
     );
 
     let all = server.request(json!({
@@ -850,7 +796,7 @@ fn think_frontier_all_lanes_is_explicit_opt_in() {
         hypotheses
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "think_frontier all_lanes=true should include other agent lanes"
+        "think_frontier all_lanes=true should include drafts"
     );
 }
 
@@ -872,7 +818,7 @@ fn think_next_all_lanes_can_select_other_lane_candidate() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_think_next_all",
             "agent_id": "agent-a",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -882,7 +828,7 @@ fn think_next_all_lanes_can_select_other_lane_candidate() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_think_next_all",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -905,7 +851,7 @@ fn think_next_all_lanes_can_select_other_lane_candidate() {
         .unwrap_or("");
     assert_eq!(
         candidate, "CARD-A",
-        "default think_next should filter lanes"
+        "default think_next should avoid drafts"
     );
 
     let all = server.request(json!({
@@ -928,7 +874,7 @@ fn think_next_all_lanes_can_select_other_lane_candidate() {
         .unwrap_or("");
     assert_eq!(
         candidate, "CARD-B",
-        "all_lanes=true should allow selection from other lanes"
+        "all_lanes=true should allow selection from drafts"
     );
 }
 
@@ -960,7 +906,7 @@ fn think_query_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_think_query_all",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -986,7 +932,7 @@ fn think_query_all_lanes_is_explicit_opt_in() {
         cards
             .iter()
             .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "think_query should exclude other lanes by default"
+        "think_query should exclude drafts by default"
     );
 
     let all = server.request(json!({
@@ -1012,7 +958,7 @@ fn think_query_all_lanes_is_explicit_opt_in() {
         cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "think_query all_lanes=true should include other lanes"
+        "think_query all_lanes=true should include drafts"
     );
 }
 
@@ -1044,7 +990,7 @@ fn context_pack_all_lanes_is_explicit_opt_in() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_lanes_context_pack_all",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "decision", "title": "B", "text": "from agent b" }
+            "card": { "id": "CARD-B", "type": "decision", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
         } }
     }));
 
@@ -1072,7 +1018,7 @@ fn context_pack_all_lanes_is_explicit_opt_in() {
         cards
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "context_pack all_lanes=true should include other agent lanes in cards"
+        "context_pack all_lanes=true should include drafts in cards"
     );
 
     let decisions = pack_text
@@ -1085,7 +1031,7 @@ fn context_pack_all_lanes_is_explicit_opt_in() {
         decisions
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
-        "context_pack all_lanes=true should include other agent lanes in signals"
+        "context_pack all_lanes=true should include drafts in signals"
     );
 }
 
@@ -1109,7 +1055,7 @@ fn default_agent_id_is_injected_when_configured() {
         "method": "tools/call",
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_default_agent",
-            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "default lane" }
+            "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "default lane", "tags": ["v:canon"] }
         } }
     }));
     let _shared = server.request(json!({
@@ -1119,7 +1065,7 @@ fn default_agent_id_is_injected_when_configured() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_default_agent",
             "agent_id": null,
-            "card": { "id": "CARD-S", "type": "hypothesis", "title": "S", "text": "shared lane" }
+            "card": { "id": "CARD-S", "type": "hypothesis", "title": "S", "text": "shared lane", "tags": ["v:canon"] }
         } }
     }));
     let _b = server.request(json!({
@@ -1129,11 +1075,11 @@ fn default_agent_id_is_injected_when_configured() {
         "params": { "name": "think_card", "arguments": {
             "workspace": "ws_default_agent",
             "agent_id": "agent-b",
-            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "other lane" }
+            "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "other lane", "tags": ["v:canon"] }
         } }
     }));
 
-    // agent_id omitted: should behave as agent-a.
+    // agent_id omitted: default agent id must not partition durable memory.
     let watch_default = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
@@ -1150,18 +1096,18 @@ fn default_agent_id_is_injected_when_configured() {
         candidates
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-A")),
-        "default agent id should include agent-a lane cards"
+        "default agent id should include cards created with agent_id omitted"
     );
     assert!(
         candidates
             .iter()
             .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-S")),
-        "default agent id should still include shared lane cards"
+        "explicit agent_id=null should still be visible"
     );
     assert!(
         candidates
             .iter()
-            .all(|c| c.get("id").and_then(|v| v.as_str()) != Some("CARD-B")),
-        "default agent id should filter out other agent lanes"
+            .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-B")),
+        "default agent id must not filter out other writers"
     );
 }

@@ -29,12 +29,10 @@ impl McpServer {
             };
 
         let step_ctx = if let Some(step_raw) = args.step.as_deref() {
-            let ctx =
-                match resolve_step_context_from_args(self, &args.workspace, args_obj, step_raw) {
-                    Ok(v) => v,
-                    Err(resp) => return resp,
-                };
-            Some(ctx)
+            match resolve_step_context_from_args(self, &args.workspace, args_obj, step_raw) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            }
         } else {
             None
         };
@@ -74,14 +72,49 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        // Multi-agent lanes (anti-noise): default reads include shared + "my lane" only.
-        // Legacy cards without a lane tag are treated as shared.
+        let trace = match trace::fetch(
+            self,
+            trace::TraceTailArgs {
+                workspace: &args.workspace,
+                branch: branch.as_str(),
+                trace_doc: trace_doc.as_str(),
+                trace_limit_steps: args.trace_limit_steps,
+                trace_statement_max_bytes: args.trace_statement_max_bytes,
+                agent_id: args.agent_id.as_deref(),
+                all_lanes: args.all_lanes,
+                focus_task_id: step_ctx.as_ref().map(|ctx| ctx.task_id.as_str()),
+                focus_step_path: step_ctx.as_ref().map(|ctx| ctx.step.path.as_str()),
+            },
+        ) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let sequential = derive_trace_sequential_graph(&trace.entries);
+
+        // Derive the engine over the raw slice so it can surface “hidden-but-important” hygiene
+        // signals (e.g., draft decisions that should be promoted), without forcing all_lanes=true.
+        let engine = derive_reasoning_engine(
+            EngineScope {
+                workspace: args.workspace.as_str(),
+                branch: branch.as_str(),
+                graph_doc: graph_doc.as_str(),
+                trace_doc: trace_doc.as_str(),
+            },
+            &candidates.cards,
+            &candidates.edges,
+            &trace.entries,
+            EngineLimits {
+                signals_limit: args.engine_signals_limit,
+                actions_limit: args.engine_actions_limit,
+            },
+        );
+
+        // Meaning-mode visibility: drafts are hidden by default (unless all_lanes=true).
         let mut candidates = candidates;
         if !args.all_lanes {
-            let agent_id = args.agent_id.as_deref();
             candidates
                 .cards
-                .retain(|card| lane_matches_card_value(card, agent_id));
+                .retain(|card| card_value_visibility_allows(card, false, step_tag));
 
             let mut kept = std::collections::BTreeSet::<String>::new();
             for card in &candidates.cards {
@@ -99,47 +132,11 @@ impl McpServer {
             });
         }
 
-        let trace = match trace::fetch(
-            self,
-            &args.workspace,
-            trace::TraceFetchRequest {
-                branch: &branch,
-                trace_doc: &trace_doc,
-                trace_limit_steps: args.trace_limit_steps,
-                trace_statement_max_bytes: args.trace_statement_max_bytes,
-                agent_id: args.agent_id.as_deref(),
-                all_lanes: args.all_lanes,
-                focus_task_id: step_ctx.as_ref().map(|ctx| ctx.task_id.as_str()),
-                focus_step_path: step_ctx.as_ref().map(|ctx| ctx.step.path.as_str()),
-            },
-        ) {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        };
-        let sequential = derive_trace_sequential_graph(&trace.entries);
-
-        let engine = derive_reasoning_engine(
-            EngineScope {
-                workspace: args.workspace.as_str(),
-                branch: branch.as_str(),
-                graph_doc: graph_doc.as_str(),
-                trace_doc: trace_doc.as_str(),
-            },
-            &candidates.cards,
-            &candidates.edges,
-            &trace.entries,
-            EngineLimits {
-                signals_limit: args.engine_signals_limit,
-                actions_limit: args.engine_actions_limit,
-            },
-        );
-
         if !args.all_lanes {
-            let agent_id = args.agent_id.as_deref();
-            frontier_hypotheses.retain(|card| lane_matches_card_value(card, agent_id));
-            frontier_questions.retain(|card| lane_matches_card_value(card, agent_id));
-            frontier_subgoals.retain(|card| lane_matches_card_value(card, agent_id));
-            frontier_tests.retain(|card| lane_matches_card_value(card, agent_id));
+            frontier_hypotheses.retain(|card| card_value_visibility_allows(card, false, step_tag));
+            frontier_questions.retain(|card| card_value_visibility_allows(card, false, step_tag));
+            frontier_subgoals.retain(|card| card_value_visibility_allows(card, false, step_tag));
+            frontier_tests.retain(|card| card_value_visibility_allows(card, false, step_tag));
         }
 
         let candidates_total = candidates.cards.len();
@@ -167,7 +164,6 @@ impl McpServer {
             branch: branch.as_str(),
             graph_doc: graph_doc.as_str(),
             trace_doc: trace_doc.as_str(),
-            agent_id: args.agent_id.as_deref(),
             all_lanes: args.all_lanes,
             step_ctx: step_ctx.as_ref(),
             engine: engine.as_ref(),

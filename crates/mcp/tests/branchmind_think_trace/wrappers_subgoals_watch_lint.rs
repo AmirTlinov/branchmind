@@ -87,6 +87,94 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         Some(true)
     );
 
+    let playbook_strict = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 161,
+        "method": "tools/call",
+        "params": { "name": "think_playbook", "arguments": { "workspace": "ws_think_wrap", "name": "strict" } }
+    }));
+    let playbook_strict_text = extract_tool_text(&playbook_strict);
+    assert_eq!(
+        playbook_strict_text
+            .get("success")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let strict_steps = playbook_strict_text
+        .get("result")
+        .and_then(|v| v.get("template"))
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .expect("strict playbook steps");
+    assert!(
+        strict_steps.iter().any(|s| {
+            s.as_str()
+                .is_some_and(|t| t.to_ascii_lowercase().contains("skeptic"))
+        }),
+        "strict playbook should include a skeptic step"
+    );
+    assert!(
+        strict_steps.iter().any(|s| {
+            s.as_str().is_some_and(|t| {
+                let t = t.to_ascii_lowercase();
+                t.contains("counter-hypothesis") && t.contains("stop criteria")
+            })
+        }),
+        "strict playbook should include a counter-hypothesis + stop criteria loop"
+    );
+    assert!(
+        strict_steps.iter().any(|s| {
+            s.as_str().is_some_and(|t| {
+                let t = t.to_ascii_lowercase();
+                t.contains("breakthrough") || t.contains("10x") || t.contains("lever")
+            })
+        }),
+        "strict playbook should include an optional breakthrough lever loop"
+    );
+
+    let playbook_breakthrough = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 162,
+        "method": "tools/call",
+        "params": { "name": "think_playbook", "arguments": { "workspace": "ws_think_wrap", "name": "breakthrough" } }
+    }));
+    let playbook_breakthrough_text = extract_tool_text(&playbook_breakthrough);
+    assert_eq!(
+        playbook_breakthrough_text
+            .get("success")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let breakthrough_steps = playbook_breakthrough_text
+        .get("result")
+        .and_then(|v| v.get("template"))
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .expect("breakthrough playbook steps");
+    assert!(
+        breakthrough_steps.iter().any(|s| {
+            s.as_str()
+                .is_some_and(|t| t.to_ascii_lowercase().contains("inversion"))
+        }),
+        "breakthrough playbook should include inversion"
+    );
+    assert!(
+        breakthrough_steps.iter().any(|s| {
+            s.as_str().is_some_and(|t| {
+                let t = t.to_ascii_lowercase();
+                t.contains("10x") || t.contains("lever")
+            })
+        }),
+        "breakthrough playbook should include a 10x/lever step"
+    );
+    assert!(
+        breakthrough_steps.iter().any(|s| {
+            s.as_str()
+                .is_some_and(|t| t.to_ascii_lowercase().contains("stop criteria"))
+        }),
+        "breakthrough playbook should include stop criteria"
+    );
+
     let subgoal_open = server.request(json!({
         "jsonrpc": "2.0",
         "id": 17,

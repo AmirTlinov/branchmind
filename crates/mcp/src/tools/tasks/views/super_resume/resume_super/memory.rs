@@ -24,7 +24,6 @@ pub(super) struct ResumeSuperMemoryLoadArgs {
     pub(super) focus_step_tag: Option<String>,
     pub(super) focus_task_id: Option<String>,
     pub(super) focus_step_path: Option<String>,
-    pub(super) agent_id: Option<String>,
     pub(super) view: ResumeSuperView,
     pub(super) read_only: bool,
 }
@@ -59,7 +58,6 @@ pub(super) fn load_resume_super_memory(
         focus_step_tag,
         focus_task_id,
         focus_step_path,
-        agent_id,
         view,
         read_only,
     } = args;
@@ -119,26 +117,6 @@ pub(super) fn load_resume_super_memory(
     let mut notes_entries = doc_entries_to_json(notes_entries_raw);
     let mut trace_entries = doc_entries_to_json(trace_entries_raw);
 
-    // Multi-agent lanes (anti-noise): default reads include shared + "my lane" only.
-    // Legacy notes without a lane stamp are treated as shared.
-    if !all_lanes {
-        let agent_id = agent_id.as_deref();
-        notes_entries.retain(|entry| {
-            if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
-                return true;
-            }
-            let meta = entry.get("meta").unwrap_or(&Value::Null);
-            lane_matches_meta(meta, agent_id)
-        });
-        trace_entries.retain(|entry| {
-            if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
-                return true;
-            }
-            let meta = entry.get("meta").unwrap_or(&Value::Null);
-            lane_matches_meta(meta, agent_id)
-        });
-    }
-
     // Step-aware focus: in smart views, minimize trace noise by keeping only entries scoped to
     // the current open step (notes via meta.step; events via task_id+path).
     if matches!(view, ResumeSuperView::Smart | ResumeSuperView::FocusOnly)
@@ -165,6 +143,28 @@ pub(super) fn load_resume_super_memory(
                 _ => true,
             }
         });
+    }
+
+    // Meaning-mode visibility: drafts are hidden by default outside the focused step.
+    if !all_lanes {
+        let focus_task_id = focus_task_id.as_deref();
+        let focus_step_path = focus_step_path.as_deref();
+
+        let mut keep_note = |entry: &Value| {
+            if entry.get("kind").and_then(|v| v.as_str()) != Some("note") {
+                return true;
+            }
+            let meta = entry.get("meta").unwrap_or(&Value::Null);
+            if let (Some(task_id), Some(step_path)) = (focus_task_id, focus_step_path)
+                && step_meta_matches(meta, task_id, step_path)
+            {
+                return true;
+            }
+            !meta_is_draft(meta)
+        };
+
+        notes_entries.retain(&mut keep_note);
+        trace_entries.retain(&mut keep_note);
     }
 
     let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
@@ -204,22 +204,24 @@ pub(super) fn load_resume_super_memory(
         ResumeSuperView::FocusOnly
         | ResumeSuperView::Smart
         | ResumeSuperView::Explore
-        | ResumeSuperView::Audit => fetch_relevance_first_cards(
-            server,
-            workspace,
-            FetchRelevanceFirstCardsArgs {
-                branch: &reasoning.branch,
-                graph_doc: &reasoning.graph_doc,
-                cursor: cards_cursor,
-                cards_limit,
-                focus_step_tag: focus_step_tag.as_deref(),
-                agent_id: agent_id.as_deref(),
-                warm_archive,
-                all_lanes,
-                read_only,
-            },
-            reasoning_branch_missing,
-        )?,
+        | ResumeSuperView::Audit => {
+            let slice = fetch_relevance_first_cards(
+                server,
+                RelevanceFirstCardsArgs {
+                    workspace,
+                    branch: reasoning.branch.as_str(),
+                    graph_doc: reasoning.graph_doc.as_str(),
+                    cursor: cards_cursor,
+                    cards_limit,
+                    focus_step_tag: focus_step_tag.as_deref(),
+                    warm_archive,
+                    all_lanes,
+                    read_only,
+                    reasoning_branch_missing,
+                },
+            )?;
+            (slice.cards, slice.edges, slice.next_cursor, slice.has_more)
+        }
     };
 
     let mut by_type = std::collections::BTreeMap::<String, u64>::new();
@@ -250,40 +252,49 @@ pub(super) fn load_resume_super_memory(
     })
 }
 
-type RelevanceFirstCardsFetchResult = (Vec<Value>, Vec<Value>, Option<i64>, bool);
-
-struct FetchRelevanceFirstCardsArgs<'a> {
+struct RelevanceFirstCardsArgs<'a> {
+    workspace: &'a WorkspaceId,
     branch: &'a str,
     graph_doc: &'a str,
     cursor: Option<i64>,
     cards_limit: usize,
     focus_step_tag: Option<&'a str>,
-    agent_id: Option<&'a str>,
     warm_archive: bool,
     all_lanes: bool,
     read_only: bool,
+    reasoning_branch_missing: &'a mut bool,
+}
+
+struct RelevanceFirstCardsSlice {
+    cards: Vec<Value>,
+    edges: Vec<Value>,
+    next_cursor: Option<i64>,
+    has_more: bool,
 }
 
 fn fetch_relevance_first_cards(
     server: &mut McpServer,
-    workspace: &WorkspaceId,
-    args: FetchRelevanceFirstCardsArgs<'_>,
-    reasoning_branch_missing: &mut bool,
-) -> Result<RelevanceFirstCardsFetchResult, Value> {
-    let FetchRelevanceFirstCardsArgs {
+    args: RelevanceFirstCardsArgs<'_>,
+) -> Result<RelevanceFirstCardsSlice, Value> {
+    let RelevanceFirstCardsArgs {
+        workspace,
         branch,
         graph_doc,
         cursor,
         cards_limit,
         focus_step_tag,
-        agent_id,
         warm_archive,
         all_lanes,
         read_only,
+        reasoning_branch_missing,
     } = args;
-
     if cards_limit == 0 {
-        return Ok((Vec::new(), Vec::new(), None, false));
+        return Ok(RelevanceFirstCardsSlice {
+            cards: Vec::new(),
+            edges: Vec::new(),
+            next_cursor: None,
+            has_more: false,
+        });
     }
 
     let supported = bm_core::think::SUPPORTED_THINK_CARD_TYPES;
@@ -293,24 +304,10 @@ fn fetch_relevance_first_cards(
         .filter(|t| !matches!(t.as_str(), "note"))
         .cloned()
         .collect::<Vec<_>>();
-    let lane_multiplier = if all_lanes {
-        1usize
-    } else if agent_id.is_some() {
-        2usize
-    } else {
-        1usize
-    };
-
-    let lane_allows = |tags: &[String]| {
-        if all_lanes {
-            true
-        } else {
-            lane_matches_tags(tags, agent_id)
-        }
-    };
+    let include_drafts = all_lanes;
 
     // 1) Priority candidates (pins + open frontier).
-    let pins_limit = cards_limit.min(8).saturating_mul(lane_multiplier);
+    let pins_limit = cards_limit.min(8);
     let mut ordered_ids = Vec::<String>::new();
     let mut seen = std::collections::BTreeSet::<String>::new();
 
@@ -338,7 +335,7 @@ fn fetch_relevance_first_cards(
         if seen.len() >= cards_limit {
             break;
         }
-        if !lane_allows(&node.tags) {
+        if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
             continue;
         }
         if seen.insert(node.id.clone()) {
@@ -350,7 +347,7 @@ fn fetch_relevance_first_cards(
     if let Some(step_tag) = focus_step_tag {
         let tags_all = Some(vec![step_tag.to_string()]);
 
-        let step_open_limit = cards_limit.clamp(1, 6).saturating_mul(lane_multiplier);
+        let step_open_limit = cards_limit.clamp(1, 6);
         let step_open_slice = graph_query_or_empty(
             server,
             workspace,
@@ -375,7 +372,7 @@ fn fetch_relevance_first_cards(
             if seen.len() >= cards_limit {
                 break;
             }
-            if !lane_allows(&node.tags) {
+            if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
                 continue;
             }
             if seen.insert(node.id.clone()) {
@@ -384,7 +381,7 @@ fn fetch_relevance_first_cards(
         }
 
         if seen.len() < cards_limit {
-            let step_any_limit = cards_limit.clamp(1, 4).saturating_mul(lane_multiplier);
+            let step_any_limit = cards_limit.clamp(1, 4);
             let step_any_slice = graph_query_or_empty(
                 server,
                 workspace,
@@ -409,7 +406,7 @@ fn fetch_relevance_first_cards(
                 if seen.len() >= cards_limit {
                     break;
                 }
-                if !lane_allows(&node.tags) {
+                if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
                     continue;
                 }
                 if seen.insert(node.id.clone()) {
@@ -420,7 +417,7 @@ fn fetch_relevance_first_cards(
     }
 
     // Open core types (most agents care about the frontier more than the archive).
-    let open_each_limit = cards_limit.clamp(1, 6).saturating_mul(lane_multiplier);
+    let open_each_limit = cards_limit.clamp(1, 6);
     for req in [
         bm_storage::GraphQueryRequest {
             ids: None,
@@ -487,7 +484,7 @@ fn fetch_relevance_first_cards(
             if seen.len() >= cards_limit {
                 break;
             }
-            if !lane_allows(&node.tags) {
+            if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
                 continue;
             }
             if seen.insert(node.id.clone()) {
@@ -502,10 +499,7 @@ fn fetch_relevance_first_cards(
     if seen.len() < cards_limit {
         let remaining = cards_limit.saturating_sub(seen.len());
         let padding = remaining.min(8);
-        let recent_limit = remaining
-            .saturating_add(padding)
-            .saturating_mul(lane_multiplier)
-            .max(1);
+        let recent_limit = remaining.saturating_add(padding).max(1);
         let recent_status = if warm_archive {
             None
         } else {
@@ -539,7 +533,7 @@ fn fetch_relevance_first_cards(
             if seen.len() >= cards_limit {
                 break;
             }
-            if !lane_allows(&node.tags) {
+            if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
                 continue;
             }
             if !seen.insert(node.id.clone()) {
@@ -564,7 +558,12 @@ fn fetch_relevance_first_cards(
     }
 
     if ordered_ids.is_empty() {
-        return Ok((Vec::new(), Vec::new(), next_cursor, has_more));
+        return Ok(RelevanceFirstCardsSlice {
+            cards: Vec::new(),
+            edges: Vec::new(),
+            next_cursor,
+            has_more,
+        });
     }
 
     // 3) Materialize a connected subgraph for the selected ids.
@@ -592,7 +591,12 @@ fn fetch_relevance_first_cards(
     let cards = reorder_cards_by_id(graph_nodes_to_cards(graph_slice.nodes), &ordered_ids);
     let edges = graph_edges_to_json(graph_slice.edges);
 
-    Ok((cards, edges, next_cursor, has_more))
+    Ok(RelevanceFirstCardsSlice {
+        cards,
+        edges,
+        next_cursor,
+        has_more,
+    })
 }
 
 fn reorder_cards_by_id(mut cards: Vec<Value>, ordered_ids: &[String]) -> Vec<Value> {

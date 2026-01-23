@@ -43,15 +43,19 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let agent_id = match optional_agent_id(args_obj, "agent_id") {
+        let _agent_id = match optional_agent_id(args_obj, "agent_id") {
             Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let include_drafts = match optional_bool(args_obj, "include_drafts") {
+            Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
         let all_lanes = match optional_bool(args_obj, "all_lanes") {
             Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
-        let all_lanes = all_lanes || view.implies_all_lanes();
+        let all_lanes = all_lanes || include_drafts || view.implies_all_lanes();
         let (branch, graph_doc) = match self.resolve_think_graph_scope(&workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -61,18 +65,11 @@ impl McpServer {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };
-            Some(ctx.step_tag)
+            ctx.map(|ctx| ctx.step_tag)
         } else {
             None
         };
 
-        let lane_multiplier = if all_lanes {
-            1usize
-        } else if agent_id.is_some() {
-            2usize
-        } else {
-            1usize
-        };
         let ThinkFrontier {
             mut hypotheses,
             mut questions,
@@ -83,10 +80,10 @@ impl McpServer {
             &branch,
             &graph_doc,
             ThinkFrontierLimits {
-                hypotheses: 5usize.saturating_mul(lane_multiplier),
-                questions: 5usize.saturating_mul(lane_multiplier),
-                subgoals: 5usize.saturating_mul(lane_multiplier),
-                tests: 5usize.saturating_mul(lane_multiplier),
+                hypotheses: 5,
+                questions: 5,
+                subgoals: 5,
+                tests: 5,
             },
             step_tag.as_deref(),
         ) {
@@ -94,12 +91,12 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let agent_id = agent_id.as_deref();
         if !all_lanes {
-            hypotheses.retain(|card| lane_matches_card_value(card, agent_id));
-            questions.retain(|card| lane_matches_card_value(card, agent_id));
-            subgoals.retain(|card| lane_matches_card_value(card, agent_id));
-            tests.retain(|card| lane_matches_card_value(card, agent_id));
+            hypotheses
+                .retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
+            questions.retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
+            subgoals.retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
+            tests.retain(|card| card_value_visibility_allows(card, false, step_tag.as_deref()));
         }
 
         let mut best: Option<Value> = None;

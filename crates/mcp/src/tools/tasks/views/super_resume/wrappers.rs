@@ -3,18 +3,79 @@
 use crate::*;
 use serde_json::{Value, json};
 
+fn delta_summary_one_line(title: Option<&str>, text: Option<&str>, max_len: usize) -> String {
+    let title = title.unwrap_or("").trim();
+    if !title.is_empty() {
+        return truncate_string(&redact_text(title), max_len);
+    }
+    let text = text.unwrap_or("").trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or(text);
+    truncate_string(&redact_text(first.trim()), max_len)
+}
+
+fn lane_key_for_snapshot(_view: Option<&str>, _agent_id: Option<&str>) -> String {
+    // Meaning-mode: delta baselines must be stable across restarts and must not depend on
+    // any lane-like partitioning (agent_id, view, etc).
+    "global".to_string()
+}
+
 impl McpServer {
     pub(crate) fn tool_tasks_snapshot(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
         };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+
+        // Snapshot Navigation Guarantee v1 (line protocol): keep at least one stable navigation
+        // handle available even when `max_chars` is so tight that the resume payload degrades to a
+        // minimal signal (capsule dropped).
+        //
+        // We compute the focused target id up-front and stash it in the tool response so the
+        // line renderer can still emit `REFERENCE: TASK-*` even under BUDGET_MINIMAL.
+        let snapshot_target_id = resolve_target_id(&mut self.store, &workspace, args_obj)
+            .ok()
+            .map(|(id, _kind, _focus)| id);
         let mut patched = args_obj.clone();
+
+        let delta = patched
+            .get("delta")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let delta_limit = patched
+            .get("delta_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(5);
 
         // Portal UX: tasks_snapshot is a read-mostly view; default to the relevance-first
         // smart view so the capsule/HUD can safely surface step_focus and multi-agent signals
         // (leases/lanes) without requiring manual view selection.
         if !patched.contains_key("view") {
             patched.insert("view".to_string(), Value::String("smart".to_string()));
+        }
+
+        // Portal DX: even in fmt=lines mode, keep snapshot reads deterministically bounded so
+        // the portal stays fast (no giant JSON payloads that are later discarded).
+        let wants_lines = crate::is_lines_fmt(patched.get("fmt").and_then(|v| v.as_str()));
+        if wants_lines
+            && !patched.contains_key("context_budget")
+            && !patched.contains_key("max_chars")
+        {
+            let default_budget = match self.toolset {
+                crate::Toolset::Core => 6000usize,
+                crate::Toolset::Daily => 9000usize,
+                crate::Toolset::Full => 12_000usize,
+            };
+            patched.insert(
+                "context_budget".to_string(),
+                Value::Number(serde_json::Number::from(default_budget as u64)),
+            );
         }
 
         let relevance_view = patched
@@ -35,8 +96,343 @@ impl McpServer {
         }
 
         let mut response = self.tool_tasks_resume_super(Value::Object(patched));
+        if let Some(snapshot_target_id) = snapshot_target_id
+            && let Some(obj) = response.as_object_mut()
+        {
+            obj.insert(
+                "snapshot_target_id".to_string(),
+                Value::String(snapshot_target_id),
+            );
+        }
         if let Some(obj) = response.as_object_mut() {
             obj.insert("intent".to_string(), Value::String("snapshot".to_string()));
+        }
+
+        // Second-brain core: ensure a mindpack exists (deduped) and surface a stable ref in the
+        // capsule so the portal state line can show `pack=mindpack@<seq>` without extra calls.
+        let read_only = args_obj
+            .get("read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !read_only {
+            match super::super::admin::mindpack::ensure_mindpack(
+                self,
+                &workspace,
+                true,
+                Some("snapshot".to_string()),
+                false,
+            ) {
+                Ok(pack) => {
+                    if let Some(pack_ref) = pack.ref_id
+                        && let Some(obj) =
+                            response.get_mut("result").and_then(|v| v.as_object_mut())
+                        && let Some(capsule) =
+                            obj.get_mut("capsule").and_then(|v| v.as_object_mut())
+                        && let Some(where_obj) =
+                            capsule.get_mut("where").and_then(|v| v.as_object_mut())
+                    {
+                        where_obj.insert("pack".to_string(), json!({ "ref": pack_ref }));
+                    }
+                }
+                Err(err) => {
+                    if let Some(obj) = response.as_object_mut() {
+                        let entry = warning(
+                            "MINDPACK_UNAVAILABLE",
+                            "mindpack update unavailable",
+                            &format_store_error(err),
+                        );
+                        match obj.get_mut("warnings") {
+                            Some(Value::Array(arr)) => arr.push(entry),
+                            Some(_) => {
+                                obj.insert("warnings".to_string(), Value::Array(vec![entry]));
+                            }
+                            None => {
+                                obj.insert("warnings".to_string(), Value::Array(vec![entry]));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if delta {
+            let view = args_obj.get("view").and_then(|v| v.as_str());
+            let include_drafts = view.unwrap_or("").trim().eq_ignore_ascii_case("audit");
+            let lane_key = lane_key_for_snapshot(view, None);
+
+            let read_only = args_obj
+                .get("read_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let until_seq = match self.store.workspace_last_doc_entry_head(&workspace) {
+                Ok(Some(head)) => head.seq,
+                Ok(None) => 0,
+                Err(err) => {
+                    if let Some(obj) = response.as_object_mut()
+                        && let Some(arr) = obj.get_mut("warnings").and_then(|v| v.as_array_mut())
+                    {
+                        arr.push(warning(
+                            "DELTA_UNAVAILABLE",
+                            "delta mode unavailable (failed to read workspace head)",
+                            &format_store_error(err),
+                        ));
+                    }
+                    return response;
+                }
+            };
+
+            let success = response
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !success {
+                return response;
+            }
+
+            let Some(result_obj) = response.get("result").and_then(|v| v.as_object()) else {
+                return response;
+            };
+            let Some(target_id) = result_obj
+                .get("target")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+            else {
+                return response;
+            };
+            let Some(reasoning) = result_obj.get("reasoning_ref").and_then(|v| v.as_object())
+            else {
+                return response;
+            };
+            let (Some(branch), Some(notes_doc), Some(graph_doc)) = (
+                reasoning
+                    .get("branch")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                reasoning
+                    .get("notes_doc")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                reasoning
+                    .get("graph_doc")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            ) else {
+                return response;
+            };
+
+            let mut delta_warnings = Vec::<Value>::new();
+            let since_seq = match self.store.portal_cursor_get(
+                &workspace,
+                "tasks_snapshot",
+                &target_id,
+                &lane_key,
+            ) {
+                Ok(Some(seq)) => seq,
+                Ok(None) => until_seq,
+                Err(err) => {
+                    delta_warnings.push(warning(
+                        "DELTA_UNAVAILABLE",
+                        "delta mode unavailable (failed to read stored baseline)",
+                        &format_store_error(err),
+                    ));
+                    if let Some(obj) = response.as_object_mut()
+                        && let Some(arr) = obj.get_mut("warnings").and_then(|v| v.as_array_mut())
+                    {
+                        arr.extend(delta_warnings);
+                    }
+                    return response;
+                }
+            };
+
+            // If there's no stored baseline, seed it and return an empty delta so the next call is meaningful.
+            if since_seq == until_seq {
+                if !read_only {
+                    let _ = self.store.portal_cursor_set(
+                        &workspace,
+                        "tasks_snapshot",
+                        &target_id,
+                        &lane_key,
+                        until_seq.max(0),
+                    );
+                }
+                let delta_value = json!({
+                    "mode": "since_last",
+                    "since_seq": since_seq,
+                    "until_seq": until_seq,
+                    "notes": { "count": 0, "items": [], "truncated": false, "dropped": 0 },
+                    "cards": { "count": 0, "items": [], "truncated": false, "dropped": 0 },
+                    "decisions": { "count": 0, "items": [], "truncated": false, "dropped": 0 },
+                    "evidence": { "count": 0, "items": [], "truncated": false, "dropped": 0 }
+                });
+                if let Some(result_obj) = response.get_mut("result").and_then(|v| v.as_object_mut())
+                {
+                    result_obj.insert("delta".to_string(), delta_value);
+                }
+                return response;
+            }
+
+            let scan_limit = delta_limit.saturating_mul(20).max(delta_limit + 5).min(200);
+
+            let notes_res = self.store.doc_entries_since(
+                &workspace,
+                bm_storage::DocEntriesSinceRequest {
+                    branch: branch.clone(),
+                    doc: notes_doc.clone(),
+                    since_seq,
+                    limit: scan_limit,
+                    kind: Some(bm_storage::DocEntryKind::Note),
+                },
+            );
+            let mut note_items = Vec::<Value>::new();
+            let mut note_truncated = false;
+            let mut note_dropped = 0usize;
+            if let Ok(res) = notes_res {
+                let mut visible = Vec::<bm_storage::DocEntryRow>::new();
+                for e in res.entries {
+                    if e.seq > until_seq {
+                        continue;
+                    }
+                    let meta_val = e
+                        .meta_json
+                        .as_ref()
+                        .map(|raw| parse_json_or_string(raw))
+                        .unwrap_or(Value::Null);
+                    if !include_drafts && meta_is_draft(&meta_val) {
+                        continue;
+                    }
+                    visible.push(e);
+                }
+                note_truncated = visible.len() > delta_limit || res.total > scan_limit;
+                note_dropped = visible.len().saturating_sub(delta_limit);
+                for e in visible.into_iter().take(delta_limit) {
+                    note_items.push(json!({
+                        "ref": format!("{}@{}", e.doc, e.seq),
+                        "seq": e.seq,
+                        "ts": ts_ms_to_rfc3339(e.ts_ms),
+                        "title": e.title,
+                        "summary": delta_summary_one_line(e.title.as_deref(), e.content.as_deref(), 140)
+                    }));
+                }
+            } else if let Err(err) = notes_res {
+                delta_warnings.push(warning(
+                    "DELTA_UNAVAILABLE",
+                    "delta notes unavailable",
+                    &format_store_error(err),
+                ));
+            }
+
+            let cards_res = self
+                .store
+                .graph_cards_since(&workspace, &branch, &graph_doc, since_seq, scan_limit);
+            let mut cards_visible = Vec::<bm_storage::GraphNodeRow>::new();
+            let mut decisions_visible = Vec::<bm_storage::GraphNodeRow>::new();
+            let mut evidence_visible = Vec::<bm_storage::GraphNodeRow>::new();
+            if let Ok((nodes, _total)) = cards_res {
+                let mut visible = Vec::<bm_storage::GraphNodeRow>::new();
+                for n in nodes {
+                    if n.last_seq > until_seq {
+                        continue;
+                    }
+                    if !tags_visibility_allows(&n.tags, include_drafts, None) {
+                        continue;
+                    }
+                    visible.push(n);
+                }
+                for n in visible {
+                    match n.node_type.as_str() {
+                        "decision" => decisions_visible.push(n),
+                        "evidence" => evidence_visible.push(n),
+                        _ => cards_visible.push(n),
+                    }
+                }
+            } else if let Err(err) = cards_res {
+                delta_warnings.push(warning(
+                    "DELTA_UNAVAILABLE",
+                    "delta cards unavailable",
+                    &format_store_error(err),
+                ));
+            }
+
+            let cards_truncated = cards_visible.len() > delta_limit;
+            let cards_dropped = cards_visible.len().saturating_sub(delta_limit);
+            let decisions_truncated = decisions_visible.len() > delta_limit;
+            let decisions_dropped = decisions_visible.len().saturating_sub(delta_limit);
+            let evidence_truncated = evidence_visible.len() > delta_limit;
+            let evidence_dropped = evidence_visible.len().saturating_sub(delta_limit);
+
+            let cards = cards_visible
+                .into_iter()
+                .take(delta_limit)
+                .map(|n| {
+                    json!({
+                        "id": n.id,
+                        "type": n.node_type,
+                        "seq": n.last_seq,
+                        "title": n.title,
+                        "summary": delta_summary_one_line(n.title.as_deref(), n.text.as_deref(), 140)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let decisions = decisions_visible
+                .into_iter()
+                .take(delta_limit)
+                .map(|n| {
+                    json!({
+                        "id": n.id,
+                        "type": n.node_type,
+                        "seq": n.last_seq,
+                        "title": n.title,
+                        "summary": delta_summary_one_line(n.title.as_deref(), n.text.as_deref(), 140)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let evidence = evidence_visible
+                .into_iter()
+                .take(delta_limit)
+                .map(|n| {
+                    json!({
+                        "id": n.id,
+                        "type": n.node_type,
+                        "seq": n.last_seq,
+                        "title": n.title,
+                        "summary": delta_summary_one_line(n.title.as_deref(), n.text.as_deref(), 140)
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            let delta_value = json!({
+                "mode": "since_last",
+                "since_seq": since_seq,
+                "until_seq": until_seq,
+                "notes": { "count": note_items.len(), "items": note_items, "truncated": note_truncated, "dropped": note_dropped },
+                "cards": { "count": cards.len(), "items": cards, "truncated": cards_truncated, "dropped": cards_dropped },
+                "decisions": { "count": decisions.len(), "items": decisions, "truncated": decisions_truncated, "dropped": decisions_dropped },
+                "evidence": { "count": evidence.len(), "items": evidence, "truncated": evidence_truncated, "dropped": evidence_dropped }
+            });
+
+            if let Some(result_obj) = response.get_mut("result").and_then(|v| v.as_object_mut()) {
+                result_obj.insert("delta".to_string(), delta_value);
+            }
+
+            if !delta_warnings.is_empty()
+                && let Some(obj) = response.as_object_mut()
+                && let Some(arr) = obj.get_mut("warnings").and_then(|v| v.as_array_mut())
+            {
+                arr.extend(delta_warnings);
+            }
+
+            if !read_only {
+                let _ = self.store.portal_cursor_set(
+                    &workspace,
+                    "tasks_snapshot",
+                    &target_id,
+                    &lane_key,
+                    until_seq.max(0),
+                );
+            }
         }
         response
     }

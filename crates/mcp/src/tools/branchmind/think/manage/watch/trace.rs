@@ -10,7 +10,8 @@ pub(super) struct TraceTail {
     pub(super) count: usize,
 }
 
-pub(super) struct TraceFetchRequest<'a> {
+pub(super) struct TraceTailArgs<'a> {
+    pub(super) workspace: &'a WorkspaceId,
     pub(super) branch: &'a str,
     pub(super) trace_doc: &'a str,
     pub(super) trace_limit_steps: usize,
@@ -21,22 +22,18 @@ pub(super) struct TraceFetchRequest<'a> {
     pub(super) focus_step_path: Option<&'a str>,
 }
 
-pub(super) fn fetch(
-    server: &mut McpServer,
-    workspace: &WorkspaceId,
-    request: TraceFetchRequest<'_>,
-) -> Result<TraceTail, Value> {
-    let TraceFetchRequest {
+pub(super) fn fetch(server: &mut McpServer, args: TraceTailArgs<'_>) -> Result<TraceTail, Value> {
+    let TraceTailArgs {
+        workspace,
         branch,
         trace_doc,
         trace_limit_steps,
         trace_statement_max_bytes,
-        agent_id,
+        agent_id: _agent_id,
         all_lanes,
         focus_task_id,
         focus_step_path,
-    } = request;
-
+    } = args;
     if trace_limit_steps == 0 {
         return Ok(TraceTail {
             entries: Vec::new(),
@@ -66,7 +63,7 @@ pub(super) fn fetch(
                     return true;
                 }
                 let meta = entry.get("meta").unwrap_or(&Value::Null);
-                lane_matches_meta(meta, agent_id)
+                !meta_is_draft(meta)
             });
         }
 
@@ -129,13 +126,7 @@ pub(super) fn fetch(
                 }
                 "note" => {
                     let meta = entry.get("meta").unwrap_or(&Value::Null);
-                    if !step_meta_matches(meta, focus_task_id, focus_step_path) {
-                        false
-                    } else if all_lanes {
-                        true
-                    } else {
-                        lane_matches_meta(meta, agent_id)
-                    }
+                    step_meta_matches(meta, focus_task_id, focus_step_path)
                 }
                 _ => false,
             };

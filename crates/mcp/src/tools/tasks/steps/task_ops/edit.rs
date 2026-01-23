@@ -46,6 +46,23 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let reasoning_mode = match optional_string(args_obj, "reasoning_mode") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let reasoning_mode = match reasoning_mode {
+            None => None,
+            Some(raw) => {
+                let mode = raw.trim().to_ascii_lowercase();
+                if !matches!(mode.as_str(), "normal" | "deep" | "strict") {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "reasoning_mode must be one of: normal | deep | strict",
+                    );
+                }
+                Some(mode)
+            }
+        };
         let tags = match optional_string_array(args_obj, "tags") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -71,6 +88,9 @@ impl McpServer {
                 if new_domain.is_some() {
                     return ai_error("INVALID_INPUT", "new_domain is not valid for kind=plan");
                 }
+                if reasoning_mode.is_some() {
+                    return ai_error("INVALID_INPUT", "reasoning_mode is not valid for kind=plan");
+                }
                 if title.is_none()
                     && description.is_none()
                     && context.is_none()
@@ -95,6 +115,7 @@ impl McpServer {
                     && context.is_none()
                     && priority.is_none()
                     && new_domain.is_none()
+                    && reasoning_mode.is_none()
                     && tags.is_none()
                     && depends_on.is_none()
                 {
@@ -193,6 +214,9 @@ impl McpServer {
                         },
                     );
                 }
+                if let Some(ref value) = reasoning_mode {
+                    patch.insert("reasoning_mode".to_string(), Value::String(value.clone()));
+                }
                 if let Some(ref items) = tags {
                     patch.insert(
                         "tags".to_string(),
@@ -243,6 +267,7 @@ impl McpServer {
                     context,
                     priority,
                     domain: new_domain,
+                    reasoning_mode,
                     phase: None,
                     component: None,
                     assignee: None,

@@ -19,7 +19,9 @@ impl SqliteStore {
         let row = tx
             .query_row(
                 r#"
-                SELECT title, criteria_confirmed, tests_confirmed,
+                SELECT title, next_action, stop_criteria,
+                       proof_tests_mode, proof_security_mode, proof_perf_mode, proof_docs_mode,
+                       criteria_confirmed, tests_confirmed,
                        security_confirmed, perf_confirmed, docs_confirmed,
                        completed, blocked, block_reason
                 FROM steps
@@ -29,20 +31,41 @@ impl SqliteStore {
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, i64>(6)?,
                         row.get::<_, i64>(7)?,
-                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, i64>(12)?,
+                        row.get::<_, i64>(13)?,
+                        row.get::<_, Option<String>>(14)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((title, criteria, tests, security, perf, docs, completed, blocked, block_reason)) =
-            row
+        let Some((
+            title,
+            next_action,
+            stop_criteria,
+            proof_tests_mode_raw,
+            proof_security_mode_raw,
+            proof_perf_mode_raw,
+            proof_docs_mode_raw,
+            criteria,
+            tests,
+            security,
+            perf,
+            docs,
+            completed,
+            blocked,
+            block_reason,
+        )) = row
         else {
             return Err(StoreError::StepNotFound);
         };
@@ -57,6 +80,12 @@ impl SqliteStore {
             step_id,
             path,
             title,
+            next_action,
+            stop_criteria,
+            proof_tests_mode: ProofMode::from_i64(proof_tests_mode_raw),
+            proof_security_mode: ProofMode::from_i64(proof_security_mode_raw),
+            proof_perf_mode: ProofMode::from_i64(proof_perf_mode_raw),
+            proof_docs_mode: ProofMode::from_i64(proof_docs_mode_raw),
             success_criteria,
             tests: tests_list,
             blockers,

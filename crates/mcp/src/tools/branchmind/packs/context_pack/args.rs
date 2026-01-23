@@ -51,8 +51,9 @@ pub(super) fn parse_context_pack_args(
     let graph_doc = optional_string(args_obj, "graph_doc")?;
     let step = optional_string(args_obj, "step")?;
     let agent_id = optional_agent_id(args_obj, "agent_id")?;
+    let include_drafts = optional_bool(args_obj, "include_drafts")?.unwrap_or(false);
     let all_lanes = optional_bool(args_obj, "all_lanes")?.unwrap_or(false);
-    let all_lanes = all_lanes || view.implies_all_lanes();
+    let all_lanes = all_lanes || include_drafts || view.implies_all_lanes();
 
     ensure_nonempty_doc(&notes_doc, "notes_doc")?;
     ensure_nonempty_doc(&trace_doc, "trace_doc")?;

@@ -55,7 +55,7 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": { "workspace": "ws1", "target": task_id.clone(), "card": { "id": context_card_id, "type": "note", "title": "Context pack", "text": context_card_text } } }
+        "params": { "name": "think_card", "arguments": { "workspace": "ws1", "target": task_id.clone(), "card": { "id": context_card_id, "type": "decision", "title": "Context pack", "text": context_card_text } } }
     }));
     let think_card_text = extract_tool_text(&think_card);
     assert_eq!(

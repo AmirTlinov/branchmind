@@ -200,7 +200,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": { "workspace": "ws_think", "branch": canonical_branch, "graph_doc": graph_doc, "limit_cards": 10, "max_chars": 2000 } }
+        "params": { "name": "think_context", "arguments": { "workspace": "ws_think", "branch": canonical_branch, "graph_doc": graph_doc, "include_drafts": true, "limit_cards": 10, "max_chars": 2000 } }
     }));
     let ctx_text = extract_tool_text(&ctx);
     assert_eq!(

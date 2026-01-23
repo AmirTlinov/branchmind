@@ -20,6 +20,7 @@ impl McpServer {
             Ok(w) => w,
             Err(resp) => return resp,
         };
+        let mut warnings = Vec::<Value>::new();
         if !bm_core::think::is_supported_think_card_type(enforced_type) {
             return ai_error("INVALID_INPUT", "Unsupported card.type");
         }
@@ -38,8 +39,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
         parsed.card_type = enforced_type.to_string();
-        if let Err(resp) = apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
-            return resp;
+        match apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
+            Ok(Some(w)) => warnings.push(w),
+            Ok(None) => {}
+            Err(resp) => return resp,
         }
         if let Err(resp) = apply_lane_context_to_card(args_obj, &mut parsed) {
             return resp;
@@ -64,7 +67,7 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        ai_ok(
+        let response = ai_ok(
             tool_name,
             json!({
                 "workspace": workspace.as_str(),
@@ -79,7 +82,14 @@ impl McpServer {
                 },
                 "last_seq": result.last_seq
             }),
-        )
+        );
+
+        if warnings.is_empty() {
+            response
+        } else {
+            let result = response.get("result").cloned().unwrap_or(Value::Null);
+            ai_ok_with_warnings(tool_name, result, warnings, Vec::new())
+        }
     }
 
     pub(crate) fn tool_branchmind_think_add_hypothesis(&mut self, args: Value) -> Value {

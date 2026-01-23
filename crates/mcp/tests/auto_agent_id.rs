@@ -15,51 +15,99 @@ fn agent_id_auto_persists_across_restarts() {
         .as_millis();
     let storage_dir = base.join(format!("bm_mcp_auto_agent_id_{pid}_{nonce}"));
 
-    {
+    let (task_id, step_id, expected_holder) = {
         let mut server =
             Server::start_with_storage_dir(storage_dir.clone(), &["--agent-id", "auto"], false);
         server.initialize_default();
 
-        let _ = server.request(json!( {
+        let created_plan = server.request(json!({
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": { "name": "init", "arguments": { "workspace": "ws_auto_agent_id" } }
+            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_auto_agent_id", "kind": "plan", "title": "Plan A" } }
         }));
+        let created_plan_text = extract_tool_text(&created_plan);
+        let plan_id = created_plan_text
+            .get("result")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .expect("plan id")
+            .to_string();
 
-        let _ = server.request(json!( {
+        let created_task = server.request(json!({
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": { "name": "think_card", "arguments": {
-                "workspace": "ws_auto_agent_id",
-                "card": { "id": "CARD-AUTO", "type": "hypothesis", "title": "Auto", "text": "persisted lane" }
-            } }
+            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_auto_agent_id", "kind": "task", "parent": plan_id, "title": "Task A" } }
         }));
-    }
+        let created_task_text = extract_tool_text(&created_task);
+        let task_id = created_task_text
+            .get("result")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .expect("task id")
+            .to_string();
+
+        let decompose = server.request(json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_auto_agent_id", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+        }));
+        let decompose_text = extract_tool_text(&decompose);
+        let step_id = decompose_text
+            .get("result")
+            .and_then(|v| v.get("steps"))
+            .and_then(|v| v.as_array())
+            .and_then(|v| v.first())
+            .and_then(|v| v.get("step_id"))
+            .and_then(|v| v.as_str())
+            .expect("step id")
+            .to_string();
+
+        // agent_id is required by the step lease tool, but should be injected automatically
+        // when the server is configured with `--agent-id auto`.
+        let claim = server.request(json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": { "name": "tasks_step_lease_claim", "arguments": { "workspace": "ws_auto_agent_id", "task": task_id.clone(), "step_id": step_id.clone() } }
+        }));
+        let claim_text = extract_tool_text(&claim);
+        let holder = claim_text
+            .get("result")
+            .and_then(|v| v.get("lease"))
+            .and_then(|v| v.get("holder_agent_id"))
+            .and_then(|v| v.as_str())
+            .expect("lease holder_agent_id")
+            .to_string();
+
+        (task_id, step_id, holder)
+    };
 
     {
         let mut server =
             Server::start_with_storage_dir(storage_dir.clone(), &["--agent-id", "auto"], true);
         server.initialize_default();
 
-        let watch = server.request(json!( {
+        let get = server.request(json!({
             "jsonrpc": "2.0",
-            "id": 4,
+            "id": 6,
             "method": "tools/call",
-            "params": { "name": "think_watch", "arguments": { "workspace": "ws_auto_agent_id", "limit_hypotheses": 10, "limit_candidates": 10 } }
+            "params": { "name": "tasks_step_lease_get", "arguments": { "workspace": "ws_auto_agent_id", "task": task_id, "step_id": step_id } }
         }));
-        let watch_text = extract_tool_text(&watch);
-        let candidates = watch_text
+        let get_text = extract_tool_text(&get);
+        let holder = get_text
             .get("result")
-            .and_then(|v| v.get("candidates"))
-            .and_then(|v| v.as_array())
-            .expect("candidates");
-        assert!(
-            candidates
-                .iter()
-                .any(|c| c.get("id").and_then(|v| v.as_str()) == Some("CARD-AUTO")),
-            "auto agent id should persist and keep lane-visible cards across restarts"
+            .and_then(|v| v.get("lease"))
+            .and_then(|v| v.get("holder_agent_id"))
+            .and_then(|v| v.as_str())
+            .expect("lease holder_agent_id")
+            .to_string();
+
+        assert_eq!(
+            holder, expected_holder,
+            "auto agent id should persist across restarts for step leases"
         );
     }
 }

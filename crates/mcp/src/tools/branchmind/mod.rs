@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod anchors;
 mod branches;
 mod core;
 mod definitions;

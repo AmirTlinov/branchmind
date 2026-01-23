@@ -14,7 +14,12 @@ pub(crate) fn step_path_matches(focus: &str, path: &str) -> bool {
 }
 
 pub(crate) fn step_meta_matches(meta: &Value, focus_task_id: &str, focus_step_path: &str) -> bool {
-    let Some(step) = meta.get("step").and_then(|v| v.as_object()) else {
+    // Best-effort: step scoping may live at `meta.step` (note tools) or `meta.meta.step`
+    // (think_card trace entries, where `meta` is a wrapper object).
+    let step = meta
+        .get("step")
+        .or_else(|| meta.get("meta").and_then(|v| v.get("step")));
+    let Some(step) = step.and_then(|v| v.as_object()) else {
         return false;
     };
 

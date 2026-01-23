@@ -18,6 +18,7 @@ pub struct ThinkCardCommitResult {
     pub inserted: bool,
     pub nodes_upserted: usize,
     pub edges_upserted: usize,
+    pub trace_seq: i64,
     pub last_seq: Option<i64>,
 }
 

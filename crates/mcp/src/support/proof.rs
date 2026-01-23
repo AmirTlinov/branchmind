@@ -276,3 +276,216 @@ pub(crate) fn normalize_proof_checks(checks: &[String]) -> Vec<String> {
     }
     out
 }
+
+pub(crate) fn extract_proof_checks_from_text(raw: &str) -> Vec<String> {
+    // Conservative salvage: extract only obvious receipt-like lines from arbitrary text
+    // (notes, runner reports, etc) to avoid turning normal prose into proof.
+    //
+    // Accepted candidates:
+    // - tagged receipts: CMD:/LINK: (or "CMD <...>", "LINK <...>")
+    // - bare URLs (http/https/file)
+    let mut checks = Vec::<String>::new();
+    for line in raw.lines() {
+        let trimmed = strip_markdown_prefixes(line).trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let cmd_tagged = trimmed
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("CMD:"))
+            || (trimmed
+                .get(..3)
+                .is_some_and(|p| p.eq_ignore_ascii_case("CMD"))
+                && trimmed
+                    .as_bytes()
+                    .get(3)
+                    .is_some_and(|b| b.is_ascii_whitespace()));
+        let link_tagged = trimmed
+            .get(..5)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LINK:"))
+            || (trimmed
+                .get(..4)
+                .is_some_and(|p| p.eq_ignore_ascii_case("LINK"))
+                && trimmed
+                    .as_bytes()
+                    .get(4)
+                    .is_some_and(|b| b.is_ascii_whitespace()));
+
+        let url_candidate = strip_wrapping_angle_brackets(trimmed);
+        let url_tagged = looks_like_bare_url(url_candidate);
+
+        if !(cmd_tagged || link_tagged || url_tagged) {
+            continue;
+        }
+
+        if let Some(coerced) = coerce_proof_check_line(line) {
+            checks.push(coerced);
+        }
+    }
+
+    normalize_proof_checks(&checks)
+}
+
+fn looks_like_shell_command_line(trimmed: &str) -> bool {
+    // Conservative heuristic: accept only strong shell-command-looking lines.
+    // This is used for "salvage" paths to reduce false proof-gate loops when
+    // agents put proof in free-text instead of refs/checks.
+    let s = trimmed.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let lower = s.to_ascii_lowercase();
+    let strong_prefixes = [
+        "cargo ",
+        "pytest ",
+        "go test",
+        "npm ",
+        "pnpm ",
+        "yarn ",
+        "bun ",
+        "make ",
+        "just ",
+        "git ",
+        "rg ",
+        "python ",
+        "python3 ",
+        "node ",
+        "deno ",
+        "docker ",
+        "kubectl ",
+        "helm ",
+        "terraform ",
+    ];
+    strong_prefixes
+        .into_iter()
+        .any(|p| lower == p.trim_end() || lower.starts_with(p))
+}
+
+fn push_unique_bounded(
+    out: &mut Vec<String>,
+    seen: &mut std::collections::BTreeSet<String>,
+    v: String,
+) {
+    let trimmed = v.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // Keep job event refs within storage bounds (defensive; storage also enforces).
+    // 128 chars matches MAX_EVENT_REFS_ITEM_LEN in storage.
+    let bounded: String = trimmed.chars().take(128).collect();
+    if bounded.trim().is_empty() {
+        return;
+    }
+    if seen.insert(bounded.clone()) {
+        out.push(bounded);
+    }
+}
+
+fn salvage_refs_from_text(text: &str) -> Vec<String> {
+    // Extract stable references from arbitrary text (notes, summaries).
+    // Goal: make "proof in text" usable without turning prose into fake proof.
+    //
+    // We salvage:
+    // - receipts: CMD:/LINK: lines + bare URLs (via extract_proof_checks_from_text)
+    // - strong shell-like bullet/inline commands (prefix allowlist)
+    // - embedded stable ids: CARD-/TASK-/PLAN-/JOB-/notes@ and anchors a:*
+    let mut out = Vec::<String>::new();
+    let mut seen = std::collections::BTreeSet::<String>::new();
+
+    for r in extract_proof_checks_from_text(text) {
+        push_unique_bounded(&mut out, &mut seen, r);
+        if out.len() >= 32 {
+            return out;
+        }
+    }
+
+    for line in text.lines() {
+        let trimmed = strip_markdown_prefixes(line).trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Agents often paste proof as "- cargo test -q" or "$ cargo test -q".
+        let mut candidate = trimmed;
+        if let Some(rest) = candidate.strip_prefix("$ ") {
+            candidate = rest.trim();
+        } else if let Some(rest) = candidate.strip_prefix("> ") {
+            candidate = rest.trim();
+        }
+        if !candidate.is_empty() && looks_like_shell_command_line(candidate) {
+            push_unique_bounded(&mut out, &mut seen, format!("CMD: {candidate}"));
+            if out.len() >= 32 {
+                return out;
+            }
+        }
+    }
+
+    // Tokenize on common separators; keep it deterministic and cheap.
+    for raw in text.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '"' | '\''
+            )
+    }) {
+        let token =
+            raw.trim_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '`'));
+        if token.is_empty() {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+
+        if looks_like_bare_url(token) {
+            push_unique_bounded(&mut out, &mut seen, format!("LINK: {token}"));
+        } else if lower.starts_with("card-")
+            || lower.starts_with("task-")
+            || lower.starts_with("plan-")
+            || lower.starts_with("job-")
+            || lower.starts_with("notes@")
+            || lower.starts_with("a:")
+        {
+            push_unique_bounded(&mut out, &mut seen, token.to_string());
+        }
+
+        if out.len() >= 32 {
+            return out;
+        }
+    }
+
+    out
+}
+
+pub(crate) fn salvage_job_completion_refs(
+    summary: &str,
+    job_id: &str,
+    explicit_refs: &[String],
+) -> Vec<String> {
+    // Proof-first DX: merge explicit refs with any salvageable refs found in free-form text.
+    // We never remove explicit refs; we only add stable refs that reduce needless proof-gate loops.
+    //
+    // Determinism: preserve explicit order first, then append salvaged refs in deterministic order.
+    let mut out = Vec::<String>::new();
+    let mut seen = std::collections::BTreeSet::<String>::new();
+
+    for r in explicit_refs.iter() {
+        push_unique_bounded(&mut out, &mut seen, r.clone());
+        if out.len() >= 32 {
+            return out;
+        }
+    }
+
+    if !summary.trim().is_empty() {
+        for r in salvage_refs_from_text(summary) {
+            push_unique_bounded(&mut out, &mut seen, r);
+            if out.len() >= 32 {
+                return out;
+            }
+        }
+    }
+
+    // Keep the thread navigable even when proof is missing.
+    if out.len() < 32 && !out.iter().any(|r| r == job_id) {
+        out.push(job_id.to_string());
+    }
+    out
+}

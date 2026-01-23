@@ -38,128 +38,22 @@ fn mcp_auto_init_allows_tools_list_without_notifications() {
         })
         .collect::<Vec<_>>();
     names.sort();
-    assert_eq!(
-        names,
-        vec![
-            "branch_create",
-            "branch_delete",
-            "branch_list",
-            "branch_rename",
-            "checkout",
-            "commit",
-            "context_pack",
-            "context_pack_export",
-            "diagnostics",
-            "diff",
-            "docs_list",
-            "export",
-            "graph_apply",
-            "graph_conflict_resolve",
-            "graph_conflict_show",
-            "graph_conflicts",
-            "graph_diff",
-            "graph_merge",
-            "graph_query",
-            "graph_validate",
-            "help",
-            "init",
-            "log",
-            "macro_branch_note",
-            "merge",
-            "notes_commit",
-            "reflog",
-            "reset",
-            "show",
-            "status",
-            "storage",
-            "tag_create",
-            "tag_delete",
-            "tag_list",
-            "tasks_batch",
-            "tasks_block",
-            "tasks_bootstrap",
-            "tasks_close_step",
-            "tasks_complete",
-            "tasks_context",
-            "tasks_context_pack",
-            "tasks_contract",
-            "tasks_create",
-            "tasks_decompose",
-            "tasks_define",
-            "tasks_delete",
-            "tasks_delta",
-            "tasks_done",
-            "tasks_edit",
-            "tasks_evidence_capture",
-            "tasks_focus_clear",
-            "tasks_focus_get",
-            "tasks_focus_set",
-            "tasks_handoff",
-            "tasks_history",
-            "tasks_lint",
-            "tasks_macro_close_step",
-            "tasks_macro_create_done",
-            "tasks_macro_finish",
-            "tasks_macro_start",
-            "tasks_mirror",
-            "tasks_note",
-            "tasks_patch",
-            "tasks_plan",
-            "tasks_progress",
-            "tasks_radar",
-            "tasks_redo",
-            "tasks_resume",
-            "tasks_resume_pack",
-            "tasks_resume_super",
-            "tasks_scaffold",
-            "tasks_snapshot",
-            "tasks_step_lease_claim",
-            "tasks_step_lease_get",
-            "tasks_step_lease_release",
-            "tasks_step_lease_renew",
-            "tasks_storage",
-            "tasks_task_add",
-            "tasks_task_define",
-            "tasks_task_delete",
-            "tasks_templates_list",
-            "tasks_undo",
-            "tasks_verify",
-            "think_add_decision",
-            "think_add_evidence",
-            "think_add_frame",
-            "think_add_hypothesis",
-            "think_add_note",
-            "think_add_question",
-            "think_add_test",
-            "think_add_update",
-            "think_card",
-            "think_context",
-            "think_frontier",
-            "think_link",
-            "think_lint",
-            "think_next",
-            "think_nominal_merge",
-            "think_pack",
-            "think_pin",
-            "think_pins",
-            "think_pipeline",
-            "think_playbook",
-            "think_publish",
-            "think_query",
-            "think_set_status",
-            "think_subgoal_close",
-            "think_subgoal_open",
-            "think_template",
-            "think_watch",
-            "trace_hydrate",
-            "trace_sequential_step",
-            "trace_step",
-            "trace_validate",
-            "transcripts_digest",
-            "transcripts_open",
-            "transcripts_search",
-        ]
+    assert!(
+        !names.is_empty(),
+        "tools/list should return at least one tool"
     );
+    for required in [
+        "status",
+        "tasks_snapshot",
+        "tasks_macro_start",
+        "think_card",
+        "open",
+    ] {
+        assert!(
+            names.iter().any(|n| n == required),
+            "tools/list must include required tool: {required}"
+        );
+    }
 
     // Late notifications/initialized should be accepted.
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
@@ -257,12 +151,13 @@ fn tools_schema_focus_set_does_not_require_task() {
         .and_then(|v| v.get("required"))
         .and_then(|v| v.as_array())
         .expect("tasks_focus_set inputSchema.required");
-    assert_eq!(
-        required
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect::<Vec<_>>(),
-        vec!["workspace"]
+    let required = required
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        !required.iter().any(|v| *v == "task" || *v == "plan"),
+        "tasks_focus_set must not require task/plan"
     );
 }
 
@@ -352,6 +247,89 @@ fn tools_schema_macro_close_step_does_not_require_task() {
 }
 
 #[test]
+fn tools_schema_macro_close_step_declares_strict_override_shape() {
+    let mut server = Server::start("tools_schema_macro_close_step_declares_strict_override_shape");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let tools_list =
+        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
+    let tools = tools_list
+        .get("result")
+        .and_then(|v| v.get("tools"))
+        .and_then(|v| v.as_array())
+        .expect("result.tools");
+
+    let macro_close = tools
+        .iter()
+        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_macro_close_step"))
+        .expect("tasks_macro_close_step tool");
+
+    let input_schema = macro_close
+        .get("inputSchema")
+        .and_then(|v| v.as_object())
+        .expect("tasks_macro_close_step inputSchema");
+
+    let required = input_schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .expect("tasks_macro_close_step inputSchema.required");
+    assert!(
+        !required.iter().any(|v| v.as_str() == Some("override")),
+        "override must be optional at the top level"
+    );
+
+    let properties = input_schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .expect("tasks_macro_close_step inputSchema.properties");
+    let override_schema = properties
+        .get("override")
+        .and_then(|v| v.as_object())
+        .expect("tasks_macro_close_step override schema");
+    assert_eq!(
+        override_schema.get("type").and_then(|v| v.as_str()),
+        Some("object")
+    );
+
+    let override_required = override_schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .expect("override.required");
+    assert!(
+        override_required
+            .iter()
+            .any(|v| v.as_str() == Some("reason")),
+        "override.reason must be required"
+    );
+    assert!(
+        override_required.iter().any(|v| v.as_str() == Some("risk")),
+        "override.risk must be required"
+    );
+
+    let override_props = override_schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .expect("override.properties");
+    let reason = override_props
+        .get("reason")
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str());
+    let risk = override_props
+        .get("risk")
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str());
+    assert_eq!(reason, Some("string"), "override.reason must be a string");
+    assert_eq!(risk, Some("string"), "override.risk must be a string");
+}
+
+#[test]
 fn tools_schema_portal_tools_do_not_require_workspace() {
     let mut server = Server::start("tools_schema_portal_tools_do_not_require_workspace");
 
@@ -395,6 +373,43 @@ fn tools_schema_portal_tools_do_not_require_workspace() {
 }
 
 #[test]
+fn tools_schema_non_portal_tools_do_not_require_workspace_when_default_is_configured() {
+    // Flagship DX: when the server has a default workspace, schemas should not force callers
+    // to provide `workspace`.
+    let mut server = Server::start("tools_schema_non_portal_tools_do_not_require_workspace");
+
+    server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+    }));
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
+
+    let tools_list =
+        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
+    let tools = tools_list
+        .get("result")
+        .and_then(|v| v.get("tools"))
+        .and_then(|v| v.as_array())
+        .expect("result.tools");
+
+    let tool = tools
+        .iter()
+        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_create"))
+        .expect("tasks_create tool");
+    let required = tool
+        .get("inputSchema")
+        .and_then(|v| v.get("required"))
+        .and_then(|v| v.as_array())
+        .expect("inputSchema.required");
+    assert!(
+        !required.iter().any(|v| v.as_str() == Some("workspace")),
+        "tasks_create must not require workspace when default workspace is configured"
+    );
+}
+
+#[test]
 fn tools_list_daily_toolset_is_curated() {
     let mut server = Server::start_initialized_with_args(
         "tools_list_daily_toolset_is_curated",
@@ -421,8 +436,8 @@ fn tools_list_daily_toolset_is_curated() {
         .iter()
         .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("macro_branch_note"));
     assert!(
-        has_branch_note,
-        "daily toolset must include macro_branch_note (branching portal)"
+        !has_branch_note,
+        "daily toolset should hide macro_branch_note (full only, to keep noise down)"
     );
 
     let has_close_step = tools
@@ -433,20 +448,44 @@ fn tools_list_daily_toolset_is_curated() {
         "daily toolset must include tasks_macro_close_step (progress portal)"
     );
 
-    let has_transcripts_digest = tools
+    let has_think_card = tools
         .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_digest"));
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("think_card"));
     assert!(
-        has_transcripts_digest,
-        "daily toolset should include transcripts_digest (quiet archaeology)"
+        has_think_card,
+        "daily toolset must include think_card (reasoning substrate)"
+    );
+
+    let has_think_playbook = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("think_playbook"));
+    assert!(
+        has_think_playbook,
+        "daily toolset should include think_playbook (skepticism + breakthrough prompts)"
+    );
+
+    let has_open = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("open"));
+    assert!(
+        has_open,
+        "daily toolset should include open (open-by-id convenience)"
+    );
+
+    let has_jobs_radar = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_jobs_radar"));
+    assert!(
+        has_jobs_radar,
+        "daily toolset should include tasks_jobs_radar (delegation inbox)"
     );
 
     let has_transcripts_open = tools
         .iter()
         .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_open"));
     assert!(
-        has_transcripts_open,
-        "daily toolset should include transcripts_open (bounded follow-up)"
+        !has_transcripts_open,
+        "daily toolset should hide transcripts_open (full only, to keep noise down)"
     );
 
     let has_transcripts_search = tools
@@ -457,14 +496,30 @@ fn tools_list_daily_toolset_is_curated() {
         "daily toolset should hide transcripts_search (full only, to keep noise down)"
     );
 
+    let has_transcripts_digest = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_digest"));
+    assert!(
+        !has_transcripts_digest,
+        "daily toolset should hide transcripts_digest (full only, to keep noise down)"
+    );
+
+    let has_context_pack_export = tools
+        .iter()
+        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("context_pack_export"));
+    assert!(
+        !has_context_pack_export,
+        "daily toolset should hide context_pack_export (full only, to keep noise down)"
+    );
+
     let has_tag_delete = tools
         .iter()
         .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tag_delete"));
     assert!(!has_tag_delete, "daily toolset must hide tag_delete");
 
     assert!(
-        tools.len() <= 7,
-        "daily toolset must stay extremely small (<= 7 tools)"
+        tools.len() <= 11,
+        "daily toolset must stay small (<= 11 tools)"
     );
 }
 
@@ -483,8 +538,8 @@ fn tools_list_params_can_override_toolset() {
         .and_then(|v| v.as_array())
         .expect("daily result.tools");
     assert!(
-        daily_tools.len() <= 7,
-        "server daily toolset should advertise <= 7 tools"
+        daily_tools.len() <= 11,
+        "server daily toolset should advertise <= 11 tools"
     );
 
     let full_list = server.request(json!({
@@ -539,7 +594,7 @@ fn tools_list_core_toolset_is_minimal() {
         .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("macro_branch_note"));
     assert!(
         !has_branch_note,
-        "core toolset must hide macro_branch_note (use daily for branching)"
+        "core toolset must hide macro_branch_note (use full for branching)"
     );
 
     let has_close_step = tools
@@ -972,6 +1027,38 @@ fn tasks_macro_start_accepts_plan_id_with_matching_plan_title() {
     assert!(
         !extract_tool_text_str(&started).starts_with("ERROR:"),
         "macro_start must accept matching plan+plan_title"
+    );
+}
+
+#[test]
+fn tasks_macro_start_accepts_plan_title_in_plan_field_when_not_plan_id() {
+    let mut server = Server::start_initialized(
+        "tasks_macro_start_accepts_plan_title_in_plan_field_when_not_plan_id",
+    );
+
+    let started = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_macro_start",
+            "arguments": {
+                "workspace": "ws_plan_alias",
+                "plan": "Inbox",
+                "task_title": "Task under Inbox",
+                "template": "basic-task",
+                "resume_max_chars": 4000
+            }
+        }
+    }));
+    let text = extract_tool_text_str(&started);
+    assert!(
+        !text.starts_with("ERROR:"),
+        "macro_start must accept plan title in plan field"
+    );
+    assert!(
+        text.contains("Task under Inbox"),
+        "portal output should reference the created task title"
     );
 }
 

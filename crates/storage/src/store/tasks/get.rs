@@ -84,10 +84,10 @@ impl SqliteStore {
                 r#"
                 SELECT id, revision, parent_plan_id, title, description,
                        status, status_manual, priority, blocked,
-                       assignee, domain, phase, component, context,
+                       assignee, domain, phase, component, reasoning_mode, context,
                        criteria_confirmed, tests_confirmed, criteria_auto_confirmed, tests_auto_confirmed,
                        security_confirmed, perf_confirmed, docs_confirmed,
-                       created_at_ms, updated_at_ms
+                       created_at_ms, updated_at_ms, parked_until_ts_ms, stale_after_ms
                 FROM tasks
                 WHERE workspace = ?1 AND id = ?2
                 "#,
@@ -107,16 +107,19 @@ impl SqliteStore {
                         domain: row.get(10)?,
                         phase: row.get(11)?,
                         component: row.get(12)?,
-                        context: row.get(13)?,
-                        criteria_confirmed: row.get::<_, i64>(14)? != 0,
-                        tests_confirmed: row.get::<_, i64>(15)? != 0,
-                        criteria_auto_confirmed: row.get::<_, i64>(16)? != 0,
-                        tests_auto_confirmed: row.get::<_, i64>(17)? != 0,
-                        security_confirmed: row.get::<_, i64>(18)? != 0,
-                        perf_confirmed: row.get::<_, i64>(19)? != 0,
-                        docs_confirmed: row.get::<_, i64>(20)? != 0,
-                        created_at_ms: row.get(21)?,
-                        updated_at_ms: row.get(22)?,
+                        reasoning_mode: row.get::<_, String>(13)?,
+                        context: row.get(14)?,
+                        criteria_confirmed: row.get::<_, i64>(15)? != 0,
+                        tests_confirmed: row.get::<_, i64>(16)? != 0,
+                        criteria_auto_confirmed: row.get::<_, i64>(17)? != 0,
+                        tests_auto_confirmed: row.get::<_, i64>(18)? != 0,
+                        security_confirmed: row.get::<_, i64>(19)? != 0,
+                        perf_confirmed: row.get::<_, i64>(20)? != 0,
+                        docs_confirmed: row.get::<_, i64>(21)? != 0,
+                        created_at_ms: row.get(22)?,
+                        updated_at_ms: row.get(23)?,
+                        parked_until_ts_ms: row.get(24)?,
+                        stale_after_ms: row.get(25)?,
                     })
                 },
             )

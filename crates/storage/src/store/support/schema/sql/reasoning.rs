@@ -48,6 +48,16 @@ pub(super) const SQL: &str = r#"
           payload_json TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS portal_cursors (
+          workspace TEXT NOT NULL,
+          tool TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          lane TEXT NOT NULL,
+          last_seq INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (workspace, tool, target_id, lane)
+        );
+
         CREATE TABLE IF NOT EXISTS vcs_refs (
           workspace TEXT NOT NULL,
           ref TEXT NOT NULL,

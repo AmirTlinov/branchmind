@@ -14,7 +14,12 @@ where
 {
     let mut used = payload_len_chars(value);
     if used > max_chars {
-        for _ in 0..6 {
+        // Ultra-tight budgets may require multiple "drop one more field" passes to preserve a
+        // stable capsule/navigation handle (instead of falling all the way down to `{}`).
+        //
+        // Keep the loop deterministic and bounded, but allow more passes when max_chars is tiny.
+        let max_passes = if max_chars <= 200 { 24 } else { 6 };
+        for _ in 0..max_passes {
             if !fallback(value) {
                 break;
             }

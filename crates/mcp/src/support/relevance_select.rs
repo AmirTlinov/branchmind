@@ -8,7 +8,8 @@ pub(crate) struct RelevanceFirstCards {
     pub(crate) cards: Vec<Value>,
 }
 
-pub(crate) struct RelevanceFirstCardsRequest<'a> {
+pub(crate) struct RelevanceFirstCardsArgs<'a> {
+    pub(crate) workspace: &'a WorkspaceId,
     pub(crate) branch: &'a str,
     pub(crate) graph_doc: &'a str,
     pub(crate) cards_limit: usize,
@@ -67,20 +68,19 @@ fn node_to_card(node: GraphNode) -> Value {
 
 pub(crate) fn fetch_relevance_first_cards(
     server: &mut McpServer,
-    workspace: &WorkspaceId,
-    request: RelevanceFirstCardsRequest<'_>,
+    args: RelevanceFirstCardsArgs<'_>,
 ) -> Result<RelevanceFirstCards, Value> {
-    let RelevanceFirstCardsRequest {
+    let RelevanceFirstCardsArgs {
+        workspace,
         branch,
         graph_doc,
         cards_limit,
         focus_step_tag,
-        agent_id,
+        agent_id: _agent_id,
         warm_archive,
         all_lanes,
         read_only,
-    } = request;
-
+    } = args;
     if cards_limit == 0 {
         return Ok(RelevanceFirstCards { cards: Vec::new() });
     }
@@ -91,25 +91,11 @@ pub(crate) fn fetch_relevance_first_cards(
 
     let focus_step_tag = focus_step_tag.map(str::trim).filter(|t| !t.is_empty());
     let tags_all = focus_step_tag.map(|t| vec![t.to_string()]);
-    let pins_tags_all = Some(match focus_step_tag {
-        None => vec![PIN_TAG.to_string()],
-        Some(step_tag) => vec![PIN_TAG.to_string(), step_tag.to_string()],
-    });
+    // Pinned cards are global anchors: they must remain visible even when a step focus tag is
+    // present (e.g., a task cockpit seeded by tasks_macro_delegate is pinned but not step-scoped).
+    let pins_tags_all = Some(vec![PIN_TAG.to_string()]);
 
-    let lane_multiplier = if all_lanes {
-        1usize
-    } else if agent_id.is_some() {
-        2usize
-    } else {
-        1usize
-    };
-    let lane_allows = |tags: &[String]| {
-        if all_lanes {
-            true
-        } else {
-            lane_matches_tags(tags, agent_id)
-        }
-    };
+    let include_drafts = all_lanes;
 
     // Relevance-first selection:
     // 1) pinned cards (anchors),
@@ -120,7 +106,7 @@ pub(crate) fn fetch_relevance_first_cards(
     let mut seen = std::collections::BTreeSet::<String>::new();
     let mut nodes_by_id = std::collections::BTreeMap::<String, GraphNode>::new();
 
-    let pins_limit = cards_limit.min(8).saturating_mul(lane_multiplier);
+    let pins_limit = cards_limit.min(8);
     let pins_slice = graph_query_or_empty(
         server,
         workspace,
@@ -144,7 +130,7 @@ pub(crate) fn fetch_relevance_first_cards(
         if seen.len() >= cards_limit {
             break;
         }
-        if !lane_allows(&node.tags) {
+        if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
             continue;
         }
         if seen.insert(node.id.clone()) {
@@ -153,7 +139,7 @@ pub(crate) fn fetch_relevance_first_cards(
         }
     }
 
-    let open_each_limit = cards_limit.clamp(1, 6).saturating_mul(lane_multiplier);
+    let open_each_limit = cards_limit.clamp(1, 6);
     for req in [
         bm_storage::GraphQueryRequest {
             ids: None,
@@ -212,7 +198,7 @@ pub(crate) fn fetch_relevance_first_cards(
             if seen.len() >= cards_limit {
                 break;
             }
-            if !lane_allows(&node.tags) {
+            if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
                 continue;
             }
             if seen.insert(node.id.clone()) {
@@ -223,7 +209,7 @@ pub(crate) fn fetch_relevance_first_cards(
     }
 
     if focus_step_tag.is_some() && seen.len() < cards_limit {
-        let step_any_limit = cards_limit.clamp(1, 4).saturating_mul(lane_multiplier);
+        let step_any_limit = cards_limit.clamp(1, 4);
         let step_any_slice = graph_query_or_empty(
             server,
             workspace,
@@ -247,7 +233,7 @@ pub(crate) fn fetch_relevance_first_cards(
             if seen.len() >= cards_limit {
                 break;
             }
-            if !lane_allows(&node.tags) {
+            if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
                 continue;
             }
             if seen.insert(node.id.clone()) {
@@ -261,10 +247,7 @@ pub(crate) fn fetch_relevance_first_cards(
     if seen.len() < cards_limit {
         let remaining = cards_limit.saturating_sub(seen.len());
         let padding = remaining.min(8);
-        let recent_limit = remaining
-            .saturating_add(padding)
-            .saturating_mul(lane_multiplier)
-            .max(1);
+        let recent_limit = remaining.saturating_add(padding).max(1);
         let recent_status = if warm_archive {
             None
         } else {
@@ -293,7 +276,7 @@ pub(crate) fn fetch_relevance_first_cards(
             if seen.len() >= cards_limit {
                 break;
             }
-            if !lane_allows(&node.tags) {
+            if !tags_visibility_allows(&node.tags, include_drafts, focus_step_tag) {
                 continue;
             }
             if !seen.insert(node.id.clone()) {

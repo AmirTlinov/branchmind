@@ -85,6 +85,47 @@ pub(super) fn apply(result: &mut Value, state: &mut ResumeSuperBudgetState<'_>) 
         }
     }
 
+    // Preserve step focus under budget pressure by shrinking the capsule before last-resort
+    // capsule-only fallback would drop `step_focus` entirely.
+    //
+    // Rationale: in smart/focus_only views, `step_focus` is the highest-signal navigation anchor.
+    // The capsule is valuable, but its larger optional fields (handoff/radar/counts) should be
+    // the first to go.
+    if json_len_chars(result) > limit {
+        if drop_fields_at(result, &["capsule"], &["map_escalation"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.map_escalation");
+        }
+        if drop_fields_at(result, &["capsule"], &["prep_escalation"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.prep_escalation");
+        }
+        if drop_fields_at(result, &["capsule"], &["graph_diff"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.graph_diff");
+        }
+        if drop_fields_at(result, &["capsule"], &["last_event"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.last_event");
+        }
+        if drop_fields_at(result, &["capsule"], &["counts"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.counts");
+        }
+        if drop_fields_at(result, &["capsule"], &["handoff"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.handoff");
+        }
+        if drop_fields_at(result, &["capsule"], &["radar"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.radar");
+        }
+        if json_len_chars(result) > limit && drop_fields_at(result, &["capsule"], &["map_action"]) {
+            state.truncated = true;
+            state.mark_trimmed("capsule.map_action");
+        }
+    }
+
     if json_len_chars(result) > limit {
         if compact_event_payloads_at(result, &["timeline", "events"]) {
             state.truncated = true;

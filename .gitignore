@@ -3,3 +3,5 @@
 /.branchmind
 /.branchmind_rust
 /.last
+/tmp
+.agents/

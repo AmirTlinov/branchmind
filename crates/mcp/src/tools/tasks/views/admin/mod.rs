@@ -3,6 +3,7 @@
 
 mod handoff;
 mod lint;
+pub(crate) mod mindpack;
 mod mirror;
 mod scaffold;
 mod storage;

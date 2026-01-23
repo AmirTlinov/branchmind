@@ -29,6 +29,7 @@ This document fixes the non-negotiable **anti-noise invariants** and the **test 
 - **Happy path (daily)**: **2 lines max**
   - 1 untagged state line
   - 1 next-action command line
+  - state line must include `ref=<id>` (stable navigation handle; survives truncation)
 - **Progressive disclosure**: **3 lines max**
   - state line
   - `tools/list toolset=...`
@@ -61,5 +62,5 @@ These tests are the “noise firewall” and must stay green:
 - DX-DoD portal size and disclosure rules (`dx_dod_*`)
 - Portal recovery stays minimal (`portal_defaults_*`, `recovery_ux_*`)
 - Capsule/HUD survives budgets (`packs_hud_*`)
+- Flagship eval gates stay green (`flagship_eval_*`)
 - Multi-agent lane defaults stay isolated (`multi_agent_lanes_*`)
-

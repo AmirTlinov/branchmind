@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod anchors;
+mod jobs;
 mod plans;
 mod steps;
 mod tasks;
@@ -14,5 +16,7 @@ pub(super) fn apply(conn: &Connection) -> Result<(), StoreError> {
     plans::apply(conn)?;
     tasks::apply(conn)?;
     steps::apply(conn)?;
+    jobs::apply(conn)?;
+    anchors::apply(conn)?;
     Ok(())
 }

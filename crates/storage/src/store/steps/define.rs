@@ -23,6 +23,8 @@ impl SqliteStore {
             success_criteria,
             tests,
             blockers,
+            next_action,
+            stop_criteria,
             proof_tests_mode,
             proof_security_mode,
             proof_perf_mode,
@@ -33,6 +35,8 @@ impl SqliteStore {
             && success_criteria.is_none()
             && tests.is_none()
             && blockers.is_none()
+            && next_action.is_none()
+            && stop_criteria.is_none()
             && proof_tests_mode.is_none()
             && proof_security_mode.is_none()
             && proof_perf_mode.is_none()
@@ -118,6 +122,21 @@ impl SqliteStore {
                 )?;
             }
             fields.push("blockers");
+        }
+
+        if let Some(next_action) = next_action {
+            tx.execute(
+                "UPDATE steps SET next_action=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, next_action, now_ms],
+            )?;
+            fields.push("next_action");
+        }
+        if let Some(stop_criteria) = stop_criteria {
+            tx.execute(
+                "UPDATE steps SET stop_criteria=?4, updated_at_ms=?5 WHERE workspace=?1 AND task_id=?2 AND step_id=?3",
+                params![workspace.as_str(), task_id, step_id, stop_criteria, now_ms],
+            )?;
+            fields.push("stop_criteria");
         }
 
         if let Some(mode) = proof_tests_mode {

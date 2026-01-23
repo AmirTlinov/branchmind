@@ -16,6 +16,7 @@ pub(super) struct HandoffCapsuleArgs<'a> {
     pub(super) radar: &'a Value,
     pub(super) steps_summary: Option<&'a Value>,
     pub(super) step_focus: Option<&'a Value>,
+    pub(super) map_hud: Value,
     pub(super) handoff: &'a HandoffCore,
     pub(super) timeline: &'a super::timeline::TimelineEvents,
     pub(super) notes_count: usize,
@@ -140,9 +141,12 @@ fn tool_available(toolset: Toolset, tool: &str) -> bool {
             tool,
             "status"
                 | "macro_branch_note"
+                | "open"
                 | "tasks_macro_start"
                 | "tasks_macro_close_step"
                 | "tasks_snapshot"
+                | "think_card"
+                | "think_playbook"
         ),
         Toolset::Core => matches!(tool, "status" | "tasks_macro_start" | "tasks_snapshot"),
     }
@@ -155,6 +159,205 @@ fn active_step_lease_holder(step_focus: Option<&Value>) -> Option<String> {
         .and_then(|v| v.get("holder_agent_id"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+fn map_where_is_unknown(map_hud: &Value) -> bool {
+    map_hud
+        .get("where")
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("unknown"))
+}
+
+fn suggested_anchor_title(task_title: Option<&str>) -> Option<String> {
+    let title = task_title.unwrap_or("").trim();
+    if title.is_empty() {
+        return None;
+    }
+    // Heuristic: prefer the "prefix" before ':' as an anchor title candidate.
+    // Example: "Storage: fix migrations" -> "Storage".
+    if let Some((head, _)) = title.split_once(':') {
+        let head = head.trim();
+        if !head.is_empty() {
+            return Some(truncate_string(&redact_text(head), 80));
+        }
+    }
+    Some(truncate_string(&redact_text(title), 80))
+}
+
+fn derive_anchor_id_from_title(title: &str) -> String {
+    // Deterministic, ascii-only slugify for `a:<slug>`:
+    // - lowercased
+    // - non-alnum => '-'
+    // - collapse/trim '-'
+    // - max 64 chars (slug)
+    let raw = title.trim();
+    if raw.is_empty() {
+        return "a:core".to_string();
+    }
+
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in raw.chars() {
+        let c = ch.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+        if out.len() >= 64 {
+            break;
+        }
+    }
+
+    let slug = out.trim_matches('-').to_string();
+    if slug.is_empty() {
+        return "a:core".to_string();
+    }
+
+    // Ensure the slug starts with [a-z0-9] after trimming.
+    let slug = slug
+        .chars()
+        .skip_while(|c| !c.is_ascii_alphanumeric())
+        .take(64)
+        .collect::<String>();
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        return "a:core".to_string();
+    }
+
+    format!("a:{slug}")
+}
+
+fn has_open_step(steps_summary: Option<&Value>) -> bool {
+    steps_summary
+        .and_then(|v| v.get("first_open"))
+        .is_some_and(|v| v.is_object())
+}
+
+fn recommended_map_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
+    if args.focus.is_none() {
+        return (Value::Null, None);
+    }
+
+    // When the anchor is known, give a 1-command "lens" to open the anchor-scoped context.
+    if let Some(where_id) = args
+        .map_hud
+        .get("where")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("unknown"))
+    {
+        let where_id = where_id.to_ascii_lowercase();
+        if where_id.starts_with("a:") && tool_available(args.toolset, "open") {
+            let tool = "open";
+            let mut args_obj = serde_json::Map::new();
+            if !args.omit_workspace {
+                args_obj.insert(
+                    "workspace".to_string(),
+                    Value::String(args.workspace.as_str().to_string()),
+                );
+            }
+            args_obj.insert("id".to_string(), Value::String(where_id));
+            // Keep the anchor lens bounded for daily UX; avoid a second truncation immediately
+            // after following the portal's suggestion.
+            args_obj.insert("max_chars".to_string(), Value::Number(8000.into()));
+
+            let action = json!({
+                "tool": tool,
+                "purpose": "open current meaning-map anchor (fast context lens)",
+                "available": tool_available(args.toolset, tool),
+                "args_hint": Value::Object(args_obj)
+            });
+            return (action, None);
+        }
+    }
+
+    if !map_where_is_unknown(&args.map_hud) {
+        return (Value::Null, None);
+    }
+    // Only nudge map attachment when it can immediately help navigation:
+    // - for TASKs: require an open step so step-scoped attach is valid.
+    // - for PLANs: do not emit a map action (plans do not have step focus).
+    if args.kind == TaskKind::Task && !has_open_step(args.steps_summary) {
+        return (Value::Null, None);
+    }
+    if args.kind == TaskKind::Plan {
+        return (Value::Null, None);
+    }
+
+    let title = suggested_anchor_title(args.target.get("title").and_then(|v| v.as_str()))
+        .unwrap_or_else(|| "Core".to_string());
+    let anchor_id = derive_anchor_id_from_title(&title);
+
+    // Prefer the dedicated 1-command anchor macro when available. It keeps the map stable by
+    // ensuring the anchor is registered (index) and the attached note is canonical (`v:canon`).
+    // Fall back to a plain think_card tag attach if the macro is not available in the current toolset.
+    let prefer_macro = tool_available(args.toolset, "macro_anchor_note");
+    let tool = if prefer_macro {
+        "macro_anchor_note"
+    } else {
+        "think_card"
+    };
+
+    let mut args_obj = serde_json::Map::new();
+    if !args.omit_workspace {
+        args_obj.insert(
+            "workspace".to_string(),
+            Value::String(args.workspace.as_str().to_string()),
+        );
+    }
+
+    // Bind to the focused task unless focus already matches the target.
+    let target_id = args
+        .target
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let need_target = target_id
+        .as_deref()
+        .zip(args.focus)
+        .map(|(target, focus)| target != focus)
+        .unwrap_or(true);
+    if need_target && let Some(target_id) = target_id {
+        args_obj.insert("target".to_string(), Value::String(target_id));
+    }
+
+    if prefer_macro {
+        args_obj.insert("anchor".to_string(), Value::String(anchor_id));
+        args_obj.insert("title".to_string(), Value::String(title));
+        // Minimal, rent-paying default: most repos can start with "component" anchors.
+        args_obj.insert("kind".to_string(), Value::String("component".to_string()));
+        args_obj.insert(
+            "content".to_string(),
+            Value::String("Anchor attach note (invariants/risks/tests).".to_string()),
+        );
+        args_obj.insert("step".to_string(), Value::String("focus".to_string()));
+        args_obj.insert("visibility".to_string(), Value::String("canon".to_string()));
+    } else {
+        args_obj.insert("step".to_string(), Value::String("focus".to_string()));
+        args_obj.insert(
+            "card".to_string(),
+            json!({
+                "text": "Anchor attach note (invariants/risks/tests).",
+                "tags": [anchor_id, VIS_TAG_CANON]
+            }),
+        );
+    }
+
+    // If we cannot step-scope (no open step), do not emit the map action.
+    if args.kind == TaskKind::Task && !has_open_step(args.steps_summary) {
+        return (Value::Null, None);
+    }
+
+    let action = json!({
+        "tool": tool,
+        "purpose": "attach a meaning-map anchor (fix where=unknown)",
+        "available": tool_available(args.toolset, tool),
+        "args_hint": Value::Object(args_obj)
+    });
+    (action, None)
 }
 
 fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
@@ -187,13 +390,6 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                 return (Value::Null, None);
             }
 
-            let tool = "think_pipeline";
-            let required_toolset = if tool_available(args.toolset, tool) {
-                None
-            } else {
-                Some(Value::String("full".to_string()))
-            };
-
             let target_id = args
                 .target
                 .get("id")
@@ -206,45 +402,122 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                 .unwrap_or(true);
 
             let mut args_obj = serde_json::Map::new();
-            if !args.omit_workspace {
-                args_obj.insert(
-                    "workspace".to_string(),
-                    Value::String(args.workspace.as_str().to_string()),
-                );
-            }
-            if need_target && let Some(task) = target_id {
-                args_obj.insert("target".to_string(), Value::String(task));
-            }
+            match args.toolset {
+                Toolset::Daily => {
+                    // Daily portal UX: keep the prep loop inside the daily toolset (no disclosure).
+                    //
+                    // Flagship DX: when we already know `where=a:*`, prefer a 1-command preflight that
+                    // *writes* a step-scoped, anchor-tagged artifact (draft) so nothing is lost across
+                    // /compact or restarts. This stays low-noise because step-scoped drafts are shown
+                    // only while that step is focused.
+                    let where_id = args
+                        .map_hud
+                        .get("where")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
 
-            // Deterministic DX: step="focus" makes this a copy/paste-safe two-step flow.
-            args_obj.insert("step".to_string(), Value::String("focus".to_string()));
-            if let Some(agent_id) = args.agent_id {
-                args_obj.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+                    if !where_id.is_empty()
+                        && !where_id.eq_ignore_ascii_case("unknown")
+                        && where_id.starts_with(ANCHOR_TAG_PREFIX)
+                    {
+                        let tool = "think_card";
+                        if !args.omit_workspace {
+                            args_obj.insert(
+                                "workspace".to_string(),
+                                Value::String(args.workspace.as_str().to_string()),
+                            );
+                        }
+                        if need_target && let Some(task) = target_id {
+                            args_obj.insert("target".to_string(), Value::String(task));
+                        }
+                        args_obj.insert("step".to_string(), Value::String("focus".to_string()));
+                        args_obj.insert(
+                            "card".to_string(),
+                            json!({
+                                "type": "test",
+                                "title": "Skeptic preflight (counter → falsifier → stop)",
+                                "text": "counter-hypothesis: <fill>\nfalsifier test: <fill>\nstop criteria: <fill>",
+                                "tags": [where_id, VIS_TAG_DRAFT, "skeptic:preflight"]
+                            }),
+                        );
+
+                        let action = json!({
+                            "tool": tool,
+                            "purpose": "record a step-scoped skeptic preflight (draft; anchor-tagged)",
+                            "available": tool_available(args.toolset, tool),
+                            "args_hint": Value::Object(args_obj)
+                        });
+                        (action, None)
+                    } else {
+                        // Fallback: when `where` is unknown, suggest the deterministic skeptic playbook.
+                        let tool = "think_playbook";
+                        let reasoning_mode = args
+                            .target
+                            .get("reasoning_mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("normal");
+                        let playbook = if reasoning_mode == "strict" {
+                            "strict"
+                        } else {
+                            "skeptic"
+                        };
+                        if !args.omit_workspace {
+                            args_obj.insert(
+                                "workspace".to_string(),
+                                Value::String(args.workspace.as_str().to_string()),
+                            );
+                        }
+                        args_obj.insert("name".to_string(), Value::String(playbook.to_string()));
+                        let action = json!({
+                            "tool": tool,
+                            "purpose": "skeptic loop before closing (counter-hypothesis → falsifier → stop criteria)",
+                            "available": tool_available(args.toolset, tool),
+                            "args_hint": Value::Object(args_obj)
+                        });
+                        (action, None)
+                    }
+                }
+                Toolset::Full => {
+                    // Full surface: suggest the structured thinking pipeline (step-scoped).
+                    let tool = "think_pipeline";
+                    if !args.omit_workspace {
+                        args_obj.insert(
+                            "workspace".to_string(),
+                            Value::String(args.workspace.as_str().to_string()),
+                        );
+                    }
+                    if need_target && let Some(task) = target_id {
+                        args_obj.insert("target".to_string(), Value::String(task));
+                    }
+
+                    // Deterministic DX: step="focus" makes this a copy/paste-safe two-step flow.
+                    args_obj.insert("step".to_string(), Value::String("focus".to_string()));
+                    if let Some(agent_id) = args.agent_id {
+                        args_obj
+                            .insert("agent_id".to_string(), Value::String(agent_id.to_string()));
+                    }
+
+                    // Keep capsule small: provide a single stage placeholder; other stages are optional.
+                    args_obj.insert("frame".to_string(), Value::String("<fill>".to_string()));
+                    args_obj.insert("note_decision".to_string(), Value::Bool(true));
+                    args_obj.insert(
+                        "note_title".to_string(),
+                        Value::String("Decision".to_string()),
+                    );
+                    args_obj.insert("note_format".to_string(), Value::String("text".to_string()));
+
+                    let action = json!({
+                        "tool": tool,
+                        "purpose": "prepare step-scoped thinking (frame→hypothesis→test→evidence→decision)",
+                        "available": tool_available(args.toolset, tool),
+                        "args_hint": Value::Object(args_obj)
+                    });
+                    (action, None)
+                }
+                Toolset::Core => (Value::Null, None),
             }
-
-            // Keep capsule small: provide a single stage placeholder; other stages are optional.
-            args_obj.insert("frame".to_string(), Value::String("<fill>".to_string()));
-            args_obj.insert("note_decision".to_string(), Value::Bool(true));
-            args_obj.insert(
-                "note_title".to_string(),
-                Value::String("Decision".to_string()),
-            );
-            args_obj.insert("note_format".to_string(), Value::String("text".to_string()));
-
-            let action = json!({
-                "tool": tool,
-                "purpose": "prepare step-scoped thinking (frame→hypothesis→test→evidence→decision)",
-                "available": tool_available(args.toolset, tool),
-                "args_hint": Value::Object(args_obj)
-            });
-            let escalation = required_toolset.map(|ts| {
-                json!({
-                    "required": true,
-                    "toolset": ts,
-                    "reason": "thinking ops are hidden in the current toolset"
-                })
-            });
-            (action, escalation)
         }
         TaskKind::Plan => (Value::Null, None),
     }
@@ -653,12 +926,13 @@ pub(super) fn build_handoff_capsule(args: HandoffCapsuleArgs<'_>) -> Value {
         obj.insert("why".to_string(), why);
     }
 
+    let (map_action, map_escalation) = recommended_map_action(&args);
     let (prep_action, prep_escalation) = recommended_prep_action(&args);
     let (action, escalation) = recommended_action(&args);
     let lane = if args.audit_all_lanes {
         json!({ "kind": "all" })
     } else {
-        lane_meta_value(args.agent_id)
+        lane_meta_value(None)
     };
     json!({
         "type": "handoff_capsule",
@@ -668,7 +942,8 @@ pub(super) fn build_handoff_capsule(args: HandoffCapsuleArgs<'_>) -> Value {
         "focus": args.focus.map(|v| Value::String(v.to_string())).unwrap_or(Value::Null),
         "where": {
             "lane": lane,
-            "step_focus": minimal_step_focus(args.step_focus, args.steps_summary)
+            "step_focus": minimal_step_focus(args.step_focus, args.steps_summary),
+            "map": args.map_hud
         },
         "target": minimal_target(args.target),
         "reasoning_ref": args.reasoning_ref,
@@ -691,6 +966,8 @@ pub(super) fn build_handoff_capsule(args: HandoffCapsuleArgs<'_>) -> Value {
         },
         "last_event": last_event_meta(args.timeline),
         "graph_diff": graph_diff_meta(args.graph_diff_payload),
+        "map_action": map_action,
+        "map_escalation": map_escalation.unwrap_or(Value::Null),
         "prep_action": prep_action,
         "prep_escalation": prep_escalation.unwrap_or(Value::Null),
         "action": action,

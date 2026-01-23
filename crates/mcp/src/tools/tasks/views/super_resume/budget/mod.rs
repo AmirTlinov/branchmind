@@ -33,6 +33,11 @@ impl McpServer {
 
         if let Some(limit) = max_chars {
             let (limit, clamped) = clamp_budget_max(limit);
+            // Navigation safety net: when we know the envelope will be truncated, capture a tiny
+            // set of stable openable refs *before* trimming drops the underlying slices.
+            if json_len_chars(result) > limit {
+                attach_budget_refs_to_capsule(result);
+            }
             let mut state = enforce::ResumeSuperBudgetState::new(
                 limit,
                 events_total,
@@ -97,4 +102,94 @@ impl McpServer {
             filter_engine_to_cards(engine, &cards_snapshot);
         }
     }
+}
+
+fn attach_budget_refs_to_capsule(result: &mut Value) {
+    let refs = collect_resume_open_refs(result);
+    if refs.is_empty() {
+        return;
+    }
+    let Some(obj) = result.get_mut("capsule").and_then(|v| v.as_object_mut()) else {
+        return;
+    };
+    obj.insert("refs".to_string(), Value::Array(refs));
+}
+
+fn collect_resume_open_refs(result: &Value) -> Vec<Value> {
+    // Deterministic, low-noise bounds. This is a navigation safety net for tight budgets.
+    const MAX_CARD_REFS: usize = 2;
+
+    let mut out = Vec::<Value>::new();
+
+    let job_id = result
+        .get("capsule")
+        .and_then(|v| v.get("where"))
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| s.starts_with("JOB-") && !s.is_empty())
+        .map(|s| s.to_string());
+    let max_card_refs = if job_id.is_some() { 1 } else { MAX_CARD_REFS };
+
+    if let Some(cards) = result
+        .get("memory")
+        .and_then(|v| v.get("cards"))
+        .and_then(|v| v.as_array())
+    {
+        for card in cards.iter().take(max_card_refs) {
+            let Some(id) = card.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            out.push(json!({ "label": "CARD", "id": id }));
+        }
+    }
+
+    if let Some(job_id) = job_id.as_deref() {
+        out.push(json!({ "label": "JOB", "id": job_id }));
+    }
+
+    let notes_doc = result
+        .get("reasoning_ref")
+        .and_then(|v| v.get("notes_doc"))
+        .and_then(|v| v.as_str());
+    if let (Some(notes_doc), Some(entries)) = (
+        notes_doc,
+        result
+            .get("memory")
+            .and_then(|v| v.get("notes"))
+            .and_then(|v| v.get("entries"))
+            .and_then(|v| v.as_array()),
+    ) {
+        let max_seq = entries
+            .iter()
+            .filter_map(|e| e.get("seq").and_then(|v| v.as_i64()))
+            .max();
+        if let Some(seq) = max_seq {
+            out.push(json!({ "label": "NOTE", "id": format!("{notes_doc}@{seq}") }));
+        }
+    }
+
+    let trace_doc = result
+        .get("reasoning_ref")
+        .and_then(|v| v.get("trace_doc"))
+        .and_then(|v| v.as_str());
+    if let (Some(trace_doc), Some(entries)) = (
+        trace_doc,
+        result
+            .get("memory")
+            .and_then(|v| v.get("trace"))
+            .and_then(|v| v.get("entries"))
+            .and_then(|v| v.as_array()),
+    ) {
+        let max_seq = entries
+            .iter()
+            .filter_map(|e| e.get("seq").and_then(|v| v.as_i64()))
+            .max();
+        if let Some(seq) = max_seq {
+            out.push(json!({ "label": "TRACE", "id": format!("{trace_doc}@{seq}") }));
+        }
+    }
+
+    out
 }

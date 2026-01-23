@@ -175,13 +175,7 @@ pub(super) fn read_context_pack(
                     return false;
                 }
                 let meta = entry.get("meta").unwrap_or(&Value::Null);
-                if !step_meta_matches(meta, focus_task_id, focus_step_path) {
-                    return false;
-                }
-                if all_lanes {
-                    return true;
-                }
-                lane_matches_meta(meta, agent_id)
+                step_meta_matches(meta, focus_task_id, focus_step_path)
             },
         )?;
         (entries, next_cursor, has_more)
@@ -201,7 +195,7 @@ pub(super) fn read_context_pack(
                     return true;
                 }
                 let meta = entry.get("meta").unwrap_or(&Value::Null);
-                lane_matches_meta(meta, agent_id)
+                !meta_is_draft(meta)
             });
         }
         (entries, slice.next_cursor, slice.has_more)
@@ -232,14 +226,7 @@ pub(super) fn read_context_pack(
                     }
                     "note" => {
                         let meta = entry.get("meta").unwrap_or(&Value::Null);
-                        if !step_meta_matches(meta, focus_task_id, focus_step_path) {
-                            return false;
-                        }
-                        if all_lanes {
-                            true
-                        } else {
-                            lane_matches_meta(meta, agent_id)
-                        }
+                        step_meta_matches(meta, focus_task_id, focus_step_path)
                     }
                     _ => false,
                 }
@@ -262,23 +249,16 @@ pub(super) fn read_context_pack(
                     return true;
                 }
                 let meta = entry.get("meta").unwrap_or(&Value::Null);
-                lane_matches_meta(meta, agent_id)
+                !meta_is_draft(meta)
             });
         }
         (entries, slice.next_cursor, slice.has_more)
     };
 
-    let lane_multiplier = if all_lanes {
-        1usize
-    } else if agent_id.is_some() {
-        2usize
-    } else {
-        1usize
-    };
     let cards = match fetch_relevance_first_cards(
         server,
-        workspace,
-        RelevanceFirstCardsRequest {
+        RelevanceFirstCardsArgs {
+            workspace,
             branch: scope.branch.as_str(),
             graph_doc: scope.graph_doc.as_str(),
             cards_limit: limit_cards,
@@ -319,7 +299,7 @@ pub(super) fn read_context_pack(
 
     let mut decisions = Vec::new();
     if decisions_limit > 0 {
-        let limit = decisions_limit.saturating_mul(lane_multiplier);
+        let limit = decisions_limit;
         let slice = graph_query_or_empty(bm_storage::GraphQueryRequest {
             ids: None,
             types: Some(vec!["decision".to_string()]),
@@ -334,14 +314,14 @@ pub(super) fn read_context_pack(
         })?;
         decisions = graph_nodes_to_signal_cards(slice.nodes);
         if !all_lanes {
-            decisions.retain(|card| lane_matches_card_value(card, agent_id));
+            decisions.retain(|card| card_value_visibility_allows(card, false, focus_step_tag));
         }
         decisions.truncate(decisions_limit);
     }
 
     let mut evidence = Vec::new();
     if evidence_limit > 0 {
-        let limit = evidence_limit.saturating_mul(lane_multiplier);
+        let limit = evidence_limit;
         let slice = graph_query_or_empty(bm_storage::GraphQueryRequest {
             ids: None,
             types: Some(vec!["evidence".to_string()]),
@@ -356,14 +336,14 @@ pub(super) fn read_context_pack(
         })?;
         evidence = graph_nodes_to_signal_cards(slice.nodes);
         if !all_lanes {
-            evidence.retain(|card| lane_matches_card_value(card, agent_id));
+            evidence.retain(|card| card_value_visibility_allows(card, false, focus_step_tag));
         }
         evidence.truncate(evidence_limit);
     }
 
     let mut blockers = Vec::new();
     if blockers_limit > 0 {
-        let limit = blockers_limit.saturating_mul(lane_multiplier);
+        let limit = blockers_limit;
         let slice = graph_query_or_empty(bm_storage::GraphQueryRequest {
             ids: None,
             types: None,
@@ -378,7 +358,7 @@ pub(super) fn read_context_pack(
         })?;
         blockers = graph_nodes_to_signal_cards(slice.nodes);
         if !all_lanes {
-            blockers.retain(|card| lane_matches_card_value(card, agent_id));
+            blockers.retain(|card| card_value_visibility_allows(card, false, focus_step_tag));
         }
         blockers.truncate(blockers_limit);
     }
