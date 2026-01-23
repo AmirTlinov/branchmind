@@ -12,6 +12,7 @@ pub(crate) fn dispatch_branchmind_tool(
         "init" => server.tool_branchmind_init(args),
         "status" => server.tool_branchmind_status(args),
         "workspace_use" => server.tool_branchmind_workspace_use(args),
+        "workspace_reset" => server.tool_branchmind_workspace_reset(args),
         "open" => server.tool_branchmind_open(args),
         "help" => server.tool_branchmind_help(args),
         "skill" => server.tool_branchmind_skill(args),

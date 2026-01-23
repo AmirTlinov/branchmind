@@ -39,6 +39,15 @@ pub(crate) fn core_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "workspace_reset",
+            "description": "Reset the active workspace override (return to auto/default).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }),
+        json!({
             "name": "open",
             "description": "Open a single artifact by stable id/reference (CARD-..., <doc>@<seq>, a:<anchor>, runner:<id>, TASK-..., PLAN-..., JOB-...).",
             "inputSchema": {

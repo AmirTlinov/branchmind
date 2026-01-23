@@ -54,6 +54,7 @@ pub(crate) fn apply_portal_line_format(
     let rendered = match tool {
         "status" => branchmind::render_branchmind_status_lines(args, response, toolset),
         "workspace_use" => branchmind::render_branchmind_workspace_use_lines(args, response),
+        "workspace_reset" => branchmind::render_branchmind_workspace_reset_lines(response),
         "macro_branch_note" => {
             branchmind::render_branchmind_macro_branch_note_lines(args, response, toolset)
         }

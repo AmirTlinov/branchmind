@@ -349,8 +349,13 @@ fn advertised_portal_toolsets_stay_minimal() {
         .collect::<Vec<_>>();
     assert_eq!(
         core_names,
-        vec!["status", "tasks_macro_start", "tasks_snapshot"],
-        "core toolset must stay the 3-tool golden path"
+        vec![
+            "status",
+            "tasks_macro_start",
+            "tasks_snapshot",
+            "workspace_use"
+        ],
+        "core toolset must stay the 4-tool golden path"
     );
 
     let mut daily = Server::start_initialized_with_args(
@@ -373,6 +378,7 @@ fn advertised_portal_toolsets_stay_minimal() {
             "status",
             "tasks_macro_start",
             "tasks_snapshot",
+            "workspace_use",
             "open",
             "skill",
             "tasks_jobs_radar",
@@ -381,7 +387,7 @@ fn advertised_portal_toolsets_stay_minimal() {
             "tasks_macro_delegate",
             "think_card",
             "think_playbook",
-            "workspace_use",
+            "workspace_reset",
         ],
         "daily toolset must stay the small portal set"
     );

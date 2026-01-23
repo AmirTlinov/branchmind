@@ -57,6 +57,7 @@ fn is_daily_tool_name(name: &str) -> bool {
             | "open"
             | "skill"
             | "workspace_use"
+            | "workspace_reset"
             | "think_card"
             | "think_playbook"
     )
@@ -71,7 +72,7 @@ fn is_core_tool_name(name: &str) -> bool {
     matches!(
         name,
         // Core: ultra-minimal “portal” set (golden path).
-        "status" | "tasks_macro_start" | "tasks_snapshot"
+        "status" | "workspace_use" | "tasks_macro_start" | "tasks_snapshot"
     )
 }
 

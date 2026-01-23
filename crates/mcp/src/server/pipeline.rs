@@ -11,13 +11,15 @@ impl McpServer {
             .workspace_override
             .as_deref()
             .or(self.default_workspace.as_deref());
+        let skip_workspace_injection = matches!(name, "workspace_use" | "workspace_reset");
 
         // DX: when a default workspace is configured, treat it as the implicit workspace
         // for all tool calls unless the caller explicitly provides `workspace`.
         //
         // This keeps daily usage cheap (no boilerplate) and makes BM-L1 "copy/paste" commands
         // usable across restarts when the server is scoped to a single project.
-        if let Some(default_workspace) = effective_default
+        if !skip_workspace_injection
+            && let Some(default_workspace) = effective_default
             && !args_obj.contains_key("workspace")
         {
             args_obj.insert(
@@ -191,7 +193,7 @@ impl McpServer {
             ));
         }
 
-        if let Some(resp) = self.auto_init_workspace(args_obj) {
+        if !skip_workspace_injection && let Some(resp) = self.auto_init_workspace(args_obj) {
             return Some(resp);
         }
         if let Err(resp) = crate::normalize_target_map(name, args_obj) {

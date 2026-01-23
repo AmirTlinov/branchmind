@@ -25,6 +25,11 @@ pub(super) fn render_branchmind_status_lines(
         .and_then(|v| v.get("workspace_mode"))
         .and_then(|v| v.as_str())
         .and_then(|s| opt_str(Some(s)));
+    let workspace_allowlist_alias = result
+        .get("workspace_policy")
+        .and_then(|v| v.get("workspace_allowlist_alias"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)));
     let workspace_lock = result
         .get("workspace_policy")
         .and_then(|v| v.get("workspace_lock"))
@@ -63,6 +68,13 @@ pub(super) fn render_branchmind_status_lines(
     if let Some(mode) = workspace_mode {
         state.push_str(" mode=");
         state.push_str(mode);
+    }
+    if let Some(alias) = workspace_allowlist_alias {
+        let alias = truncate_line(alias, 24);
+        if !alias.is_empty() {
+            state.push_str(" allow=");
+            state.push_str(&alias);
+        }
     }
     if workspace_lock == Some(true) {
         state.push_str(" lock=true");
@@ -121,6 +133,32 @@ pub(super) fn render_branchmind_workspace_use_lines(_args: &Value, response: &Va
     }
     if cleared {
         state.push_str(" override=cleared");
+    }
+    lines.push(state);
+    lines.push("status".to_string());
+    append_warnings_as_warnings(&mut lines, response);
+    lines.join("\n")
+}
+
+pub(super) fn render_branchmind_workspace_reset_lines(response: &Value) -> String {
+    let result = response.get("result").unwrap_or(&Value::Null);
+    let workspace = result
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)))
+        .unwrap_or("-");
+    let previous = result
+        .get("previous")
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)));
+
+    let mut lines = Vec::new();
+    let mut state = format!("workspace auto={workspace}");
+    if let Some(previous) = previous
+        && previous != workspace
+    {
+        state.push_str(" prev=");
+        state.push_str(previous);
     }
     lines.push(state);
     lines.push("status".to_string());

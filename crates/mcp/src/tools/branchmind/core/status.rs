@@ -72,9 +72,11 @@ impl McpServer {
         });
 
         let portals = json!({
-            "core": ["status", "tasks_macro_start", "tasks_snapshot"],
+            "core": ["status", "workspace_use", "tasks_macro_start", "tasks_snapshot"],
             "daily": [
                 "status",
+                "workspace_use",
+                "workspace_reset",
                 "macro_branch_note",
                 "tasks_macro_start",
                 "tasks_macro_close_step",
@@ -99,18 +101,23 @@ impl McpServer {
         } else {
             "auto"
         };
-        let (workspace_allowlist, allowlist_count, allowlist_truncated) =
+        let (workspace_allowlist, allowlist_count, allowlist_truncated, allowlist_alias) =
             if let Some(list) = &self.workspace_allowlist {
                 let mut list = list.clone();
                 list.sort();
                 let count = list.len();
+                let alias = if list.len() <= 3 {
+                    list.join(",")
+                } else {
+                    format!("{}+{}", list[0], list.len() - 1)
+                };
                 let truncated = count > 20;
                 if truncated {
                     list.truncate(20);
                 }
-                (Some(list), count, truncated)
+                (Some(list), count, truncated, Some(alias))
             } else {
-                (None, 0, false)
+                (None, 0, false, None)
             };
 
         let (disclosure_toolset, disclosure_hint) = match self.toolset {
@@ -173,6 +180,7 @@ impl McpServer {
                 "workspace_allowlist": workspace_allowlist,
                 "workspace_allowlist_count": allowlist_count,
                 "workspace_allowlist_truncated": allowlist_truncated,
+                "workspace_allowlist_alias": allowlist_alias,
                 "workspace_lock": self.workspace_lock,
                 "project_guard_configured": self.project_guard.is_some(),
                 "project_guard_stored": project_guard_stored,

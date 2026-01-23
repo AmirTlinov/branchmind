@@ -118,7 +118,7 @@ Output:
 - `defaults` match `init` defaults.
 - `golden_path` lists the recommended minimal DX flow (macros + snapshot).
 - `workspace_policy` is an optional block exposing anti-drift configuration and guard state (best-effort):
-  - `{ default_workspace?, workspace_override?, workspace_effective?, workspace_mode?, workspace_allowlist?, workspace_allowlist_count?, workspace_allowlist_truncated?, workspace_lock?, project_guard_configured?, project_guard_stored?, default_agent_id? }`
+  - `{ default_workspace?, workspace_override?, workspace_effective?, workspace_mode?, workspace_allowlist?, workspace_allowlist_count?, workspace_allowlist_truncated?, workspace_allowlist_alias?, workspace_lock?, project_guard_configured?, project_guard_stored?, default_agent_id? }`
   - `workspace_mode` is one of: `auto | explicit | allowlist`.
 
 ### `workspace_use`
@@ -132,6 +132,18 @@ Notes:
 
 - If `workspace` matches `default_workspace`, the override is cleared (`override_cleared=true`).
 - Workspace allowlist + lock rules are enforced (typed errors on mismatch).
+
+### `workspace_reset`
+
+Reset the active workspace override (return to auto/default).
+
+Input: `{}`  
+Output: `{ workspace, previous?, default_workspace?, workspace_override?, workspace_mode? }`
+
+Notes:
+
+- Clears the session override and recomputes the effective workspace.
+- If no default workspace is configured, `workspace` may be `null`.
 
 ### `help`
 
