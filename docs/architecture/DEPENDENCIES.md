@@ -36,5 +36,6 @@ If “0 deps strict” is required, replace these with in-house minimal implemen
 - `serde_json`: JSON values + construction for tool inputs/outputs.
 - `time`: RFC3339 timestamps in agent-facing payloads.
 - `nix` (unix-only): poll/select wrappers used to poll stdin with a timeout so hot reload can
-  trigger even when the MCP client is idle (no manual restarts).
+  trigger even when the MCP client is idle (no manual restarts). Also used for POSIX signals
+  in the local viewer process-takeover flow (no external `kill` command).
 - Local HTTP viewer (optional) uses `std::net` only (no additional dependencies).

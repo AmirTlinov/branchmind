@@ -1,3 +1,4 @@
+// Source of truth for the viewer UI (no TS build step).
 const state = {
   snapshot: null,
   selectedPlanId: null,

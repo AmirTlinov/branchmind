@@ -12,13 +12,16 @@ pub(crate) use registry::{PresenceConfig, list_projects, lookup_project, start_p
 
 use crate::{now_ms_i64, now_rfc3339};
 use bm_storage::{SqliteStore, StoreError};
+#[cfg(unix)]
+use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
+use nix::unistd::Pid;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -195,10 +198,7 @@ fn nudge_existing_viewer(port: u16) {
     if !process_is_stopped(pid) {
         return;
     }
-    let _ = Command::new("kill")
-        .arg("-CONT")
-        .arg(pid.to_string())
-        .status();
+    resume_process(pid);
 }
 
 fn terminate_existing_viewer_process(port: u16) {
@@ -213,15 +213,9 @@ fn terminate_existing_viewer_process(port: u16) {
     }
 
     if process_is_stopped(pid) {
-        let _ = Command::new("kill")
-            .arg("-CONT")
-            .arg(pid.to_string())
-            .status();
+        resume_process(pid);
     }
-    let _ = Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status();
+    terminate_process(pid, false);
 
     let deadline = Instant::now() + Duration::from_millis(350);
     while Instant::now() < deadline {
@@ -231,11 +225,29 @@ fn terminate_existing_viewer_process(port: u16) {
         std::thread::sleep(Duration::from_millis(40));
     }
 
-    let _ = Command::new("kill")
-        .arg("-KILL")
-        .arg(pid.to_string())
-        .status();
+    terminate_process(pid, true);
 }
+
+#[cfg(unix)]
+fn resume_process(pid: u32) {
+    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGCONT);
+}
+
+#[cfg(not(unix))]
+fn resume_process(_pid: u32) {}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32, force: bool) {
+    let signal = if force {
+        Signal::SIGKILL
+    } else {
+        Signal::SIGTERM
+    };
+    let _ = kill(Pid::from_raw(pid as i32), signal);
+}
+
+#[cfg(not(unix))]
+fn terminate_process(_pid: u32, _force: bool) {}
 
 fn pid_listening_on_port(port: u16) -> Option<u32> {
     let inode = inode_for_tcp_listen(port)?;
