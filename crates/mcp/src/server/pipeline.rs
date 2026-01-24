@@ -169,7 +169,12 @@ impl McpServer {
         // them explicitly. Even in fmt=lines mode the tool still builds a structured payload and
         // may emit BUDGET_* warnings — defaults + auto-escalation remove “limit juggling”.
         if super::portal::is_portal_tool(name) {
-            super::budgets::apply_portal_default_budgets(self.toolset, name, args_obj);
+            super::budgets::apply_portal_default_budgets(
+                self.toolset,
+                self.dx_mode,
+                name,
+                args_obj,
+            );
         }
 
         // Full toolset DX: for heavy read tools, apply deterministic default budgets when the

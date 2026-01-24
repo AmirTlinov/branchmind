@@ -26,6 +26,7 @@ mod vcs;
 use bm_core::ids::WorkspaceId;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const DEFAULT_BRANCH: &str = "main";
 
@@ -53,6 +54,7 @@ impl SqliteStore {
         std::fs::create_dir_all(&storage_dir)?;
         let db_path = storage_dir.join("branchmind_rust.db");
         let conn = Connection::open(db_path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
         let store = Self { storage_dir, conn };
         store.migrate()?;
         Ok(store)
@@ -68,6 +70,7 @@ impl SqliteStore {
         let storage_dir = storage_dir.as_ref().to_path_buf();
         let db_path = storage_dir.join("branchmind_rust.db");
         let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
         Ok(Self { storage_dir, conn })
     }
 

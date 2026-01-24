@@ -43,10 +43,15 @@ impl McpServer {
             .map(|(id, _kind, _focus)| id);
         let mut patched = args_obj.clone();
 
-        let delta = patched
-            .get("delta")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let delta = match patched.get("delta").and_then(|v| v.as_bool()) {
+            Some(value) => value,
+            None => {
+                if self.dx_mode {
+                    patched.insert("delta".to_string(), Value::Bool(true));
+                }
+                self.dx_mode
+            }
+        };
         let delta_limit = patched
             .get("delta_limit")
             .and_then(|v| v.as_u64())
@@ -618,5 +623,122 @@ impl McpServer {
         } else {
             ai_ok_with_warnings("context_pack", result, warnings, Vec::new())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bm_storage::SqliteStore;
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("bm_snapshot_dx_{nanos}"));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn build_server(dx_mode: bool) -> (McpServer, PathBuf) {
+        let dir = temp_dir();
+        let store = SqliteStore::open(&dir).expect("open store");
+        let runner_autostart_enabled =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runner_autostart_state =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::RunnerAutostartState::default()));
+        (
+            McpServer::new(
+                store,
+                crate::McpServerConfig {
+                    toolset: crate::Toolset::Daily,
+                    response_verbosity: crate::ResponseVerbosity::Full,
+                    dx_mode,
+                    default_workspace: Some("demo".to_string()),
+                    workspace_explicit: false,
+                    workspace_allowlist: None,
+                    workspace_lock: true,
+                    project_guard: None,
+                    project_guard_rebind_enabled: false,
+                    default_agent_id: None,
+                    runner_autostart_enabled,
+                    runner_autostart_dry_run: false,
+                    runner_autostart: runner_autostart_state,
+                },
+            ),
+            dir,
+        )
+    }
+
+    #[test]
+    fn snapshot_defaults_delta_in_dx_mode() {
+        let (mut server, dir) = build_server(true);
+        let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+        server.store.workspace_init(&workspace).unwrap();
+
+        let plan_payload_json = json!({
+            "kind": "plan",
+            "title": "DX Snapshot Plan",
+            "parent": null
+        })
+        .to_string();
+        let (plan_id, _plan_revision, _plan_event) = server
+            .store
+            .create(
+                &workspace,
+                bm_storage::TaskCreateRequest {
+                    kind: crate::TaskKind::Plan,
+                    title: "DX Snapshot Plan".to_string(),
+                    parent_plan_id: None,
+                    description: None,
+                    contract: None,
+                    contract_json: None,
+                    event_type: "plan_created".to_string(),
+                    event_payload_json: plan_payload_json,
+                },
+            )
+            .expect("create plan");
+
+        let task_payload_json = json!({
+            "kind": "task",
+            "title": "DX Snapshot Task",
+            "parent": plan_id
+        })
+        .to_string();
+        let (task_id, _revision, _event) = server
+            .store
+            .create(
+                &workspace,
+                bm_storage::TaskCreateRequest {
+                    kind: crate::TaskKind::Task,
+                    title: "DX Snapshot Task".to_string(),
+                    parent_plan_id: Some(plan_id),
+                    description: None,
+                    contract: None,
+                    contract_json: None,
+                    event_type: "task_created".to_string(),
+                    event_payload_json: task_payload_json,
+                },
+            )
+            .expect("create task");
+
+        let resp = server.tool_tasks_snapshot(json!({ "workspace": "demo", "task": task_id }));
+        assert_eq!(
+            resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "snapshot should succeed"
+        );
+        let result = resp.get("result").expect("result");
+        assert!(
+            result.get("delta").is_some(),
+            "dx mode should default delta"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

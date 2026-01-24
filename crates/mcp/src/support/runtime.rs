@@ -16,6 +16,8 @@ fn auto_mode_enabled() -> bool {
         "BRANCHMIND_AGENT_ID",
         "BRANCHMIND_WORKSPACE_LOCK",
         "BRANCHMIND_PROJECT_GUARD",
+        "BRANCHMIND_RESPONSE_VERBOSITY",
+        "BRANCHMIND_DX",
     ];
     keys.iter().all(|key| std::env::var_os(key).is_none())
 }
@@ -136,6 +138,35 @@ impl Toolset {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseVerbosity {
+    Full,
+    Compact,
+}
+
+impl ResponseVerbosity {
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "full" => Some(Self::Full),
+            "compact" | "refs" => Some(Self::Compact),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        value
+            .and_then(|v| Self::from_str(v.trim()))
+            .unwrap_or(Self::Full)
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Compact => "compact",
+        }
+    }
+}
+
 pub(crate) fn parse_storage_dir() -> PathBuf {
     let mut storage_dir: Option<PathBuf> = None;
     let mut saw_flag = false;
@@ -173,6 +204,51 @@ pub(crate) fn parse_toolset() -> Toolset {
         return Toolset::Daily;
     }
     Toolset::parse(value.as_deref())
+}
+
+pub(crate) fn parse_response_verbosity() -> ResponseVerbosity {
+    let mut cli: Option<String> = None;
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            cli = Some(arg);
+            break;
+        }
+        saw_flag = arg.as_str() == "--response-verbosity";
+    }
+
+    let value = cli.or_else(|| std::env::var("BRANCHMIND_RESPONSE_VERBOSITY").ok());
+    ResponseVerbosity::parse(value.as_deref())
+}
+
+pub(crate) fn response_verbosity_explicit() -> bool {
+    let mut saw_flag = false;
+    for arg in std::env::args().skip(1) {
+        if saw_flag {
+            return true;
+        }
+        saw_flag = arg.as_str() == "--response-verbosity";
+    }
+
+    std::env::var("BRANCHMIND_RESPONSE_VERBOSITY")
+        .ok()
+        .is_some_and(|raw| !raw.trim().is_empty())
+}
+
+pub(crate) fn parse_dx_mode() -> bool {
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--dx" => return true,
+            "--no-dx" => return false,
+            _ => {}
+        }
+    }
+
+    if let Some(value) = parse_bool_env_override("BRANCHMIND_DX") {
+        return value;
+    }
+
+    auto_mode_enabled()
 }
 
 pub(crate) fn parse_workspace_explicit() -> Option<String> {
@@ -377,9 +453,8 @@ pub(crate) fn parse_hot_reload_enabled() -> bool {
             raw.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         ),
-        // DX default: enable hot reload in session modes so Codex users don't have to restart
-        // the MCP server manually after rebuilding `bm_mcp`. Daemons remain opt-in.
-        Err(_) => !parse_daemon_mode(),
+        // Stability default: hot reload is opt-in to avoid transport drops in long-lived sessions.
+        Err(_) => false,
     }
 }
 
@@ -407,7 +482,7 @@ pub(crate) fn parse_hot_reload_poll_ms() -> u64 {
         .unwrap_or(DEFAULT_POLL_MS)
 }
 
-pub(crate) fn parse_socket_path(storage_dir: &Path) -> PathBuf {
+pub(crate) fn parse_socket_path(storage_dir: &Path, socket_tag: Option<&str>) -> PathBuf {
     let mut cli: Option<PathBuf> = None;
     let mut saw_flag = false;
     for arg in std::env::args().skip(1) {
@@ -423,7 +498,140 @@ pub(crate) fn parse_socket_path(storage_dir: &Path) -> PathBuf {
             .ok()
             .map(PathBuf::from)
     })
-    .unwrap_or_else(|| storage_dir.join("branchmind_mcp.sock"))
+    .unwrap_or_else(|| {
+        let filename = default_socket_filename(socket_tag);
+        let candidate = storage_dir.join(&filename);
+        if socket_path_fits_unix_limit(&candidate) {
+            return candidate;
+        }
+
+        // Fallback: some repo roots are long enough that a tagged socket path exceeds the Unix
+        // domain socket limit (SUN_LEN). Prefer a short, user-scoped runtime directory.
+        let base = default_socket_base_dir();
+        let dir = base.join("branchmind_mcp");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join(filename)
+    })
+}
+
+pub(crate) struct SocketTagConfig<'a> {
+    pub(crate) compat_fingerprint: &'a str,
+    pub(crate) toolset: Toolset,
+    pub(crate) response_verbosity: ResponseVerbosity,
+    pub(crate) dx_mode: bool,
+    pub(crate) default_workspace: Option<&'a str>,
+    pub(crate) workspace_explicit: bool,
+    pub(crate) workspace_lock: bool,
+    pub(crate) workspace_allowlist: Option<&'a [String]>,
+    pub(crate) project_guard: Option<&'a str>,
+    pub(crate) default_agent_id: Option<&'a DefaultAgentIdConfig>,
+}
+
+pub(crate) fn socket_tag_for_config(cfg: SocketTagConfig<'_>) -> String {
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    let mut hash = FNV_OFFSET;
+
+    // Flagship stability:
+    // Include a build-compat fingerprint in the socket tag so different `bm_mcp` builds
+    // (e.g., Codex/Claude/Gemini shipping different copies/versions) don't fight over the
+    // same shared daemon and cause cross-session transport drops.
+    hash = fnv1a_kv(hash, "compat", cfg.compat_fingerprint);
+    hash = fnv1a_kv(hash, "toolset", cfg.toolset.as_str());
+    hash = fnv1a_kv(hash, "verbosity", cfg.response_verbosity.as_str());
+    hash = fnv1a_kv(hash, "dx", if cfg.dx_mode { "1" } else { "0" });
+    hash = fnv1a_kv(hash, "workspace", cfg.default_workspace.unwrap_or(""));
+    hash = fnv1a_kv(
+        hash,
+        "workspace_explicit",
+        if cfg.workspace_explicit { "1" } else { "0" },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "workspace_lock",
+        if cfg.workspace_lock { "1" } else { "0" },
+    );
+
+    let mut allowlist = cfg
+        .workspace_allowlist
+        .map(|list| list.to_vec())
+        .unwrap_or_default();
+    allowlist.sort();
+    allowlist.dedup();
+    if allowlist.is_empty() {
+        hash = fnv1a_kv(hash, "allowlist", "none");
+    } else {
+        hash = fnv1a_update(hash, b"allowlist=");
+        for item in allowlist {
+            hash = fnv1a_update(hash, item.as_bytes());
+            hash = fnv1a_update(hash, b",");
+        }
+    }
+
+    hash = fnv1a_kv(hash, "project_guard", cfg.project_guard.unwrap_or(""));
+
+    let agent_tag = match cfg.default_agent_id {
+        Some(DefaultAgentIdConfig::Auto) => "auto".to_string(),
+        Some(DefaultAgentIdConfig::Explicit(value)) => value.to_string(),
+        None => "none".to_string(),
+    };
+    hash = fnv1a_kv(hash, "agent_id", agent_tag.as_str());
+
+    format!("cfg.{hash:016x}")
+}
+
+fn default_socket_filename(socket_tag: Option<&str>) -> String {
+    match socket_tag {
+        // Keep the filename short: some projects live under long paths, and Unix domain sockets
+        // have a small max path length. The tag already encodes config isolation.
+        Some(tag) if !tag.trim().is_empty() => format!("bm.{tag}.sock"),
+        _ => "branchmind_mcp.sock".to_string(),
+    }
+}
+
+fn default_socket_base_dir() -> PathBuf {
+    // Prefer per-user runtime dirs when available (short, auto-cleaned by OS).
+    if let Ok(raw) = std::env::var("XDG_RUNTIME_DIR") {
+        let path = PathBuf::from(raw);
+        if path.is_absolute() {
+            return path;
+        }
+    }
+    std::env::temp_dir()
+}
+
+fn socket_path_fits_unix_limit(path: &Path) -> bool {
+    // Unix domain sockets typically cap sun_path at 108 bytes including the trailing nul.
+    // Use a conservative bound to avoid runtime errors like:
+    //   InvalidInput: "path must be shorter than SUN_LEN"
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        const MAX_BYTES: usize = 100;
+        path.as_os_str().as_bytes().len() < MAX_BYTES
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
+}
+
+fn fnv1a_kv(mut hash: u64, key: &str, value: &str) -> u64 {
+    hash = fnv1a_update(hash, key.as_bytes());
+    hash = fnv1a_update(hash, b"=");
+    hash = fnv1a_update(hash, value.as_bytes());
+    hash = fnv1a_update(hash, b";");
+    hash
+}
+
+fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
+    const FNV_PRIME: u64 = 1099511628211;
+    for b in bytes {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 pub(crate) fn parse_viewer_enabled() -> bool {
@@ -548,4 +756,71 @@ fn normalize_agent_id(raw: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_tag_is_stable_for_equivalent_config() {
+        let allowlist_a = vec!["b".to_string(), "a".to_string()];
+        let allowlist_b = vec!["a".to_string(), "b".to_string(), "b".to_string()];
+
+        let tag_a = socket_tag_for_config(SocketTagConfig {
+            compat_fingerprint: "compat",
+            toolset: Toolset::Daily,
+            response_verbosity: ResponseVerbosity::Full,
+            dx_mode: false,
+            default_workspace: Some("demo"),
+            workspace_explicit: false,
+            workspace_lock: true,
+            workspace_allowlist: Some(&allowlist_a),
+            project_guard: Some("repo:abc"),
+            default_agent_id: Some(&DefaultAgentIdConfig::Auto),
+        });
+        let tag_b = socket_tag_for_config(SocketTagConfig {
+            compat_fingerprint: "compat",
+            toolset: Toolset::Daily,
+            response_verbosity: ResponseVerbosity::Full,
+            dx_mode: false,
+            default_workspace: Some("demo"),
+            workspace_explicit: false,
+            workspace_lock: true,
+            workspace_allowlist: Some(&allowlist_b),
+            project_guard: Some("repo:abc"),
+            default_agent_id: Some(&DefaultAgentIdConfig::Auto),
+        });
+
+        assert_eq!(tag_a, tag_b);
+    }
+
+    #[test]
+    fn socket_tag_changes_when_config_changes() {
+        let base = socket_tag_for_config(SocketTagConfig {
+            compat_fingerprint: "compat",
+            toolset: Toolset::Daily,
+            response_verbosity: ResponseVerbosity::Full,
+            dx_mode: false,
+            default_workspace: Some("demo"),
+            workspace_explicit: false,
+            workspace_lock: true,
+            workspace_allowlist: None,
+            project_guard: Some("repo:abc"),
+            default_agent_id: None,
+        });
+        let different = socket_tag_for_config(SocketTagConfig {
+            compat_fingerprint: "compat",
+            toolset: Toolset::Full,
+            response_verbosity: ResponseVerbosity::Full,
+            dx_mode: true,
+            default_workspace: Some("demo"),
+            workspace_explicit: false,
+            workspace_lock: true,
+            workspace_allowlist: None,
+            project_guard: Some("repo:abc"),
+            default_agent_id: None,
+        });
+        assert_ne!(base, different);
+    }
 }

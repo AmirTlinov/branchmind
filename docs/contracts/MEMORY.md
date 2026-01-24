@@ -106,7 +106,7 @@ Defaults:
 
 Fast storage and workspace snapshot.
 
-Input: `{ workspace }`  
+Input: `{ workspace, max_chars?, verbosity? }`  
 DX note: `workspace` may be omitted when the server is configured with a default workspace (`--workspace` / `BRANCHMIND_WORKSPACE`).
 Output:
 
@@ -120,6 +120,8 @@ Output:
 - `workspace_policy` is an optional block exposing anti-drift configuration and guard state (best-effort):
   - `{ default_workspace?, workspace_override?, workspace_effective?, workspace_mode?, workspace_allowlist?, workspace_allowlist_count?, workspace_allowlist_truncated?, workspace_allowlist_alias?, workspace_lock?, project_guard_configured?, project_guard_stored?, default_agent_id? }`
   - `workspace_mode` is one of: `auto | explicit | allowlist`.
+- `verbosity` controls output shape: `full` (default) or `compact` (essential fields + next action).
+  - DX mode (`--dx` / `BRANCHMIND_DX=1` / zero‑arg auto) defaults to `compact` unless explicitly overridden.
 
 ### `workspace_use`
 
@@ -211,7 +213,7 @@ Semantics:
 
 Open a single artifact by a stable id/reference (no hunting).
 
-Input: `{ workspace, id, limit?, include_drafts?, max_chars? }`
+Input: `{ workspace, id, limit?, include_drafts?, max_chars?, verbosity? }`
 
 Supported `id` forms (v1):
 
@@ -223,10 +225,16 @@ Supported `id` forms (v1):
 - `JOB-...` — a delegation job id (opens job status + bounded event tail; prompt is opt-in via `include_drafts=true`).
 - `JOB-...@<seq>` — a job event ref (opens the exact event + bounded context).
 
+Optional:
+
+- `verbosity`: `full|compact` (default: `full`).
+  - `compact` returns a minimal navigation payload (refs/focus/next_action when available).
+
 Output (union):
 
 - Card: `{ kind:"card", id:"CARD-...", head:{ seq, ts, ts_ms, branch, doc }, card:{ id, type, title?, text?, status, tags, meta }, edges:{ supports:[...], blocks:[...] }, truncated }`
 - Doc entry: `{ kind:"doc_entry", ref:"notes@123", entry:{ seq, ts, ts_ms, branch, doc, kind, title?, format?, meta?, content }, truncated }`
+
 - Anchor: `{ kind:"anchor", id:"a:...", anchor:{ id, title, kind, status, description?, refs:[...], parent_id?, depends_on:[...], created_at_ms, updated_at_ms, registered }, stats:{ links_count, links_has_more }, cards:[...], count, truncated }`
 - Runner: `{ kind:"runner", id:"runner:<id>", status:"offline"|"idle"|"live", lease:{ runner_id, status:"idle"|"live", active_job_id?, lease_expires_at_ms, created_at_ms, updated_at_ms, lease_active, expires_in_ms }, meta?, truncated }`
 - Task/plan: `{ kind:"task"|"plan", id:"TASK-..."|"PLAN-...", target:{...}, reasoning_ref:{...}, capsule, step_focus?, degradation, truncated }`
@@ -246,6 +254,25 @@ Semantics:
   - `include_drafts=false` uses `view="focus_only"` internally (low-noise default).
   - `include_drafts=true` uses `view="audit"` internally (expanded lens).
 - On unknown ids/refs, returns `UNKNOWN_ID` with a recovery hint (e.g. “copy id from snapshot delta”).
+
+### `think_card`
+
+Commit a structured reasoning card (note/hypothesis/test/evidence/decision).
+
+Input: `{ workspace, card, target?, branch?, trace_doc?, graph_doc?, step?, agent_id?, supports?, blocks?, verbosity? }`
+
+Optional:
+
+- `verbosity`: `full|compact` (default: `full`).
+  - `compact` returns only stable refs (`card_id`, `trace_ref`, `graph_ref`) plus `branch`/`workspace`.
+
+Output (full):
+
+- `{ workspace, branch, trace_doc, graph_doc, card_id, inserted, trace_seq, trace_ref, graph_applied:{...}, last_seq, graph_ref }`
+
+Output (compact):
+
+- `{ workspace, branch, card_id, inserted, trace_ref, graph_ref }`
 
 ### `export`
 

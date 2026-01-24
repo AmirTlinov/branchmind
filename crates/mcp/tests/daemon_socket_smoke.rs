@@ -81,6 +81,58 @@ mod unix {
         cleanup(child, storage_dir);
     }
 
+    #[test]
+    fn daemon_exits_when_socket_is_unlinked() {
+        let storage_dir = temp_dir("daemon_socket_unlink_exits");
+        std::fs::create_dir_all(&storage_dir).expect("create storage dir");
+        let socket_path = storage_dir.join("branchmind_test.sock");
+
+        // Some sandboxed environments disallow unix domain sockets (EPERM). In that case, skip.
+        match UnixListener::bind(&socket_path) {
+            Ok(listener) => {
+                drop(listener);
+                let _ = std::fs::remove_file(&socket_path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                let _ = std::fs::remove_dir_all(storage_dir);
+                return;
+            }
+            Err(err) => panic!("unix socket bind preflight failed: {err}"),
+        }
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bm_mcp"))
+            .arg("--daemon")
+            .arg("--socket")
+            .arg(&socket_path)
+            .arg("--storage-dir")
+            .arg(&storage_dir)
+            .arg("--toolset")
+            .arg("daily")
+            .arg("--no-viewer")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn daemon");
+
+        let _stream = wait_for_socket(&socket_path);
+        std::fs::remove_file(&socket_path).expect("unlink socket path");
+
+        // The daemon should notice the missing socket path and exit quickly.
+        for _ in 0..80 {
+            if let Some(status) = child.try_wait().expect("try_wait") {
+                assert!(status.success(), "daemon exited with error: {status}");
+                let _ = std::fs::remove_dir_all(storage_dir);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("daemon did not exit after socket unlink");
+    }
+
     fn send_frame(stream: &UnixStream, value: serde_json::Value) {
         let body = serde_json::to_vec(&value).expect("serialize request");
         let mut writer = stream;

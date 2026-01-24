@@ -516,6 +516,7 @@ Semantics:
 
 - Wrapper around `tasks_resume_super` with a more explicit portal intent.
 - Default view: when `view` is omitted, the wrapper sets `view="smart"` (relevance-first, cold archive) to keep the portal fast and low-noise.
+- DX default: when `delta` is omitted, the wrapper sets `delta=true` in DX mode (`--dx` / `BRANCHMIND_DX=1` / zero‑arg auto).
 - **Snapshot Navigation Guarantee v2 (BM‑L1):** the first (state) line always includes a stable navigation handle as `ref=<id>`.
   - Preferred: `ref=CARD-...` (pinned cockpit if present; otherwise the most recent `CARD-*` in the returned slice).
   - Fallback: `ref=TASK-...` / `ref=PLAN-...`.

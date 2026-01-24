@@ -3,6 +3,87 @@
 use crate::*;
 use serde_json::{Value, json};
 
+fn parse_response_verbosity(
+    args_obj: &serde_json::Map<String, Value>,
+    fallback: ResponseVerbosity,
+) -> Result<ResponseVerbosity, Value> {
+    let raw = match optional_string(args_obj, "verbosity")? {
+        Some(v) => v,
+        None => return Ok(fallback),
+    };
+    let trimmed = raw.trim();
+    ResponseVerbosity::from_str(trimmed)
+        .ok_or_else(|| ai_error("INVALID_INPUT", "verbosity must be one of: full|compact"))
+}
+
+fn compact_status_result(result: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+
+    if let Some(server) = result.get("server") {
+        let mut server_out = serde_json::Map::new();
+        if let Some(name) = server.get("name") {
+            server_out.insert("name".to_string(), name.clone());
+        }
+        if let Some(version) = server.get("version") {
+            server_out.insert("version".to_string(), version.clone());
+        }
+        if let Some(build) = server.get("build_fingerprint") {
+            server_out.insert("build_fingerprint".to_string(), build.clone());
+        }
+        if !server_out.is_empty() {
+            out.insert("server".to_string(), Value::Object(server_out));
+        }
+    }
+
+    if let Some(workspace) = result.get("workspace") {
+        out.insert("workspace".to_string(), workspace.clone());
+    }
+    if let Some(toolset) = result.get("toolset") {
+        out.insert("toolset".to_string(), toolset.clone());
+    }
+    if let Some(workspace_exists) = result.get("workspace_exists") {
+        out.insert("workspace_exists".to_string(), workspace_exists.clone());
+    }
+    if let Some(checkout) = result.get("checkout") {
+        out.insert("checkout".to_string(), checkout.clone());
+    }
+    if let Some(last_task_event) = result.get("last_task_event") {
+        out.insert("last_task_event".to_string(), last_task_event.clone());
+    } else if let Some(last_event) = result.get("last_event") {
+        out.insert("last_event".to_string(), last_event.clone());
+    }
+    if let Some(last_doc_entry) = result.get("last_doc_entry") {
+        out.insert("last_doc_entry".to_string(), last_doc_entry.clone());
+    }
+
+    if let Some(policy) = result.get("workspace_policy").and_then(|v| v.as_object()) {
+        let mut policy_out = serde_json::Map::new();
+        for key in [
+            "workspace_effective",
+            "workspace_mode",
+            "workspace_allowlist_alias",
+            "workspace_lock",
+            "project_guard_configured",
+            "project_guard_stored",
+            "default_agent_id",
+        ] {
+            if let Some(value) = policy.get(key) {
+                policy_out.insert(key.to_string(), value.clone());
+            }
+        }
+        if !policy_out.is_empty() {
+            out.insert("workspace_policy".to_string(), Value::Object(policy_out));
+        }
+    }
+
+    out.insert(
+        "next_action".to_string(),
+        json!({ "tool": "tasks_snapshot" }),
+    );
+
+    Value::Object(out)
+}
+
 impl McpServer {
     pub(crate) fn tool_branchmind_status(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
@@ -13,6 +94,17 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let verbosity = match parse_response_verbosity(
+            args_obj,
+            if self.dx_mode {
+                ResponseVerbosity::Compact
+            } else {
+                self.response_verbosity
+            },
+        ) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -228,6 +320,10 @@ impl McpServer {
             ));
         }
 
+        if verbosity == ResponseVerbosity::Compact {
+            result = compact_status_result(&result);
+        }
+
         let mut warnings = Vec::new();
         if let Some(limit) = max_chars {
             let (limit, clamped) = clamp_budget_max(limit);
@@ -278,5 +374,81 @@ impl McpServer {
         } else {
             ai_ok_with_warnings("status", result, warnings, suggestions)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bm_storage::SqliteStore;
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("bm_status_compact_{nanos}"));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn build_server(dx_mode: bool) -> (McpServer, PathBuf) {
+        let dir = temp_dir();
+        let store = SqliteStore::open(&dir).expect("open store");
+        let runner_autostart_enabled =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runner_autostart_state =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::RunnerAutostartState::default()));
+        (
+            McpServer::new(
+                store,
+                crate::McpServerConfig {
+                    toolset: crate::Toolset::Daily,
+                    response_verbosity: crate::ResponseVerbosity::Full,
+                    dx_mode,
+                    default_workspace: Some("demo".to_string()),
+                    workspace_explicit: false,
+                    workspace_allowlist: None,
+                    workspace_lock: true,
+                    project_guard: None,
+                    project_guard_rebind_enabled: false,
+                    default_agent_id: None,
+                    runner_autostart_enabled,
+                    runner_autostart_dry_run: false,
+                    runner_autostart: runner_autostart_state,
+                },
+            ),
+            dir,
+        )
+    }
+
+    #[test]
+    fn status_defaults_compact_in_dx_mode() {
+        let (mut server, dir) = build_server(true);
+        let resp = server.tool_branchmind_status(json!({ "workspace": "demo" }));
+        assert_eq!(
+            resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "status should succeed"
+        );
+        let result = resp.get("result").expect("result");
+        assert!(result.get("defaults").is_none(), "compact drops defaults");
+        assert!(
+            result.get("golden_path").is_none(),
+            "compact drops golden_path"
+        );
+        assert!(result.get("workspace").is_some(), "compact keeps workspace");
+        assert_eq!(
+            result
+                .get("next_action")
+                .and_then(|v| v.get("tool"))
+                .and_then(|v| v.as_str()),
+            Some("tasks_snapshot")
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

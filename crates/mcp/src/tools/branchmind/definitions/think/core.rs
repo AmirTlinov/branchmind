@@ -37,7 +37,11 @@ pub(super) fn definitions() -> Vec<Value> {
                         ]
                     },
                     "supports": { "type": "array", "items": { "type": "string" } },
-                    "blocks": { "type": "array", "items": { "type": "string" } }
+                    "blocks": { "type": "array", "items": { "type": "string" } },
+                    "verbosity": {
+                        "type": "string",
+                        "enum": ["full", "compact"]
+                    }
                 },
                 "required": ["workspace", "card"]
             }

@@ -5,7 +5,7 @@ use crate::entry::framing::{
     request_expects_response,
 };
 use crate::json_rpc_error;
-use crate::{DefaultAgentIdConfig, McpServer, Toolset};
+use crate::{DefaultAgentIdConfig, McpServer, ResponseVerbosity, Toolset};
 use bm_storage::SqliteStore;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 pub(crate) struct SharedProxyConfig {
     pub(crate) storage_dir: PathBuf,
     pub(crate) toolset: Toolset,
+    pub(crate) response_verbosity: ResponseVerbosity,
+    pub(crate) dx_mode: bool,
     pub(crate) default_workspace: Option<String>,
     pub(crate) workspace_explicit: bool,
     pub(crate) workspace_allowlist: Option<Vec<String>>,
@@ -44,6 +46,7 @@ pub(crate) fn run_shared_proxy(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut daemon: Option<DaemonPipe> = None;
     let mut local_server: Option<McpServer> = None;
+    let mut session_log = crate::SessionLog::new(&config.storage_dir);
 
     if config.viewer_enabled {
         let viewer_config = crate::viewer::ViewerConfig {
@@ -107,6 +110,7 @@ pub(crate) fn run_shared_proxy(
                 let mut peek = String::new();
                 let read = reader.read_line(&mut peek)?;
                 if read == 0 {
+                    session_log.note_exit("stdin_eof_before_mode");
                     break;
                 }
                 if let Some(detected) = detect_mode_from_first_line(&peek) {
@@ -119,32 +123,52 @@ pub(crate) fn run_shared_proxy(
                 let detected = mode.unwrap();
                 match detected {
                     TransportMode::NewlineJson => {
+                        session_log.note_mode("newline_json", &peek);
                         let raw = peek.trim();
                         if raw.is_empty() {
                             continue;
                         }
-                        handle_client_body(
+                        if let Err(err) = handle_client_body(
                             raw.as_bytes().to_vec(),
                             detected,
                             &mut daemon,
                             &mut local_server,
                             &config,
                             &mut stdout,
-                        )?;
+                            &mut session_log,
+                        ) {
+                            session_log.note_error(format!("{err}").as_str());
+                            return Err(err);
+                        }
                         continue;
                     }
                     TransportMode::ContentLength => {
-                        let Some(body) = read_content_length_frame(&mut reader, Some(peek))? else {
-                            break;
+                        session_log.note_mode("content_length", &peek);
+                        let body = match read_content_length_frame(&mut reader, Some(peek)) {
+                            Ok(Some(body)) => body,
+                            Ok(None) => {
+                                session_log.note_exit("stdin_eof_during_first_frame");
+                                break;
+                            }
+                            Err(err) => {
+                                session_log.note_error(format!("first_frame: {err}").as_str());
+                                // Keep the proxy alive: invalid framing must not kill the transport.
+                                mode = None;
+                                continue;
+                            }
                         };
-                        handle_client_body(
+                        if let Err(err) = handle_client_body(
                             body,
                             detected,
                             &mut daemon,
                             &mut local_server,
                             &config,
                             &mut stdout,
-                        )?;
+                            &mut session_log,
+                        ) {
+                            session_log.note_error(format!("{err}").as_str());
+                            return Err(err);
+                        }
                         continue;
                     }
                 }
@@ -156,41 +180,61 @@ pub(crate) fn run_shared_proxy(
                 let mut line = String::new();
                 let read = reader.read_line(&mut line)?;
                 if read == 0 {
+                    session_log.note_exit("stdin_eof");
                     break;
                 }
                 let raw = line.trim();
                 if raw.is_empty() {
                     continue;
                 }
-                handle_client_body(
+                if let Err(err) = handle_client_body(
                     raw.as_bytes().to_vec(),
                     effective_mode,
                     &mut daemon,
                     &mut local_server,
                     &config,
                     &mut stdout,
-                )?;
+                    &mut session_log,
+                ) {
+                    session_log.note_error(format!("{err}").as_str());
+                    return Err(err);
+                }
             }
             TransportMode::ContentLength => {
                 let mut first_header = String::new();
                 let read = reader.read_line(&mut first_header)?;
                 if read == 0 {
+                    session_log.note_exit("stdin_eof");
                     break;
                 }
                 if first_header.trim().is_empty() {
                     continue;
                 }
-                let Some(body) = read_content_length_frame(&mut reader, Some(first_header))? else {
-                    break;
+                let body = match read_content_length_frame(&mut reader, Some(first_header)) {
+                    Ok(Some(body)) => body,
+                    Ok(None) => {
+                        session_log.note_exit("stdin_eof_during_frame");
+                        break;
+                    }
+                    Err(err) => {
+                        session_log.note_error(format!("frame: {err}").as_str());
+                        // Keep the proxy alive: invalid framing must not kill the transport.
+                        mode = None;
+                        continue;
+                    }
                 };
-                handle_client_body(
+                if let Err(err) = handle_client_body(
                     body,
                     effective_mode,
                     &mut daemon,
                     &mut local_server,
                     &config,
                     &mut stdout,
-                )?;
+                    &mut session_log,
+                ) {
+                    session_log.note_error(format!("{err}").as_str());
+                    return Err(err);
+                }
             }
         }
     }
@@ -205,9 +249,11 @@ fn handle_client_body(
     local_server: &mut Option<McpServer>,
     config: &SharedProxyConfig,
     stdout: &mut std::io::StdoutLock<'_>,
+    session_log: &mut crate::SessionLog,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let expects_response = request_expects_response(&body);
     let method = extract_request_method(&body);
+    session_log.note_method(method.as_deref().unwrap_or(""));
 
     // Fast-path: handle MCP handshake + introspection locally so Codex can reliably start the
     // server even if the shared daemon is stale/dead/unavailable. This avoids startup timeouts
@@ -228,7 +274,7 @@ fn handle_client_body(
         method.as_deref(),
         Some("initialize") | Some("ping") | Some("tools/call")
     );
-    let timeout = response_timeout_for_method(method.as_deref(), expects_response);
+    let timeout = response_timeout_for_request(method.as_deref(), &body, expects_response);
     let mut resp_body = match forward_body_with_reconnect(
         daemon,
         config,
@@ -323,6 +369,8 @@ fn ensure_local_server<'a>(
             store,
             crate::McpServerConfig {
                 toolset: config.toolset,
+                response_verbosity: config.response_verbosity,
+                dx_mode: config.dx_mode,
                 default_workspace: config.default_workspace.clone(),
                 workspace_explicit: config.workspace_explicit,
                 workspace_allowlist: config.workspace_allowlist.clone(),
@@ -374,12 +422,16 @@ fn try_handle_locally(
     };
 
     // Notifications never expect a response and should never require a daemon.
-    if method == "notifications/initialized" {
+    // MCP client compatibility: some clients send `initialized` instead of `notifications/initialized`.
+    if method == "notifications/initialized" || method == "initialized" {
         return LocalHandling::NoResponse;
     }
 
     if !expects_response {
-        return LocalHandling::NotHandled;
+        // Client notifications are never allowed to break the transport.
+        // In shared mode we also avoid daemon startup work for notifications, since
+        // we don't currently support any notification-driven side effects.
+        return LocalHandling::NoResponse;
     }
 
     let id = serde_json::from_slice::<Value>(body)
@@ -388,15 +440,29 @@ fn try_handle_locally(
 
     match method {
         "initialize" => {
+            // Some clients are strict about the server echoing the negotiated protocol version.
+            // In shared mode we short-circuit initialize locally, so we must reflect the
+            // client’s declared version here as well.
+            let protocol_version = serde_json::from_slice::<Value>(body)
+                .ok()
+                .and_then(|v| v.get("params").cloned())
+                .and_then(|v| v.get("protocolVersion").cloned())
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_else(|| crate::MCP_VERSION.to_string());
             let resp = crate::json_rpc_response(
                 id,
                 json!({
-                    "protocolVersion": crate::MCP_VERSION,
+                    "protocolVersion": protocol_version,
                     "serverInfo": {
                         "name": crate::SERVER_NAME,
                         "version": crate::build_fingerprint()
                     },
-                    "capabilities": { "tools": {} }
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {},
+                        "prompts": {},
+                        "logging": {}
+                    }
                 }),
             );
             match serde_json::to_vec(&resp) {
@@ -414,8 +480,37 @@ fn try_handle_locally(
                 Err(_) => LocalHandling::NotHandled,
             }
         }
+        "resources/templates/list" => match serde_json::to_vec(&crate::json_rpc_response(
+            id,
+            json!({ "resourceTemplates": [] }),
+        )) {
+            Ok(bytes) => LocalHandling::Response(bytes),
+            Err(_) => LocalHandling::NotHandled,
+        },
         "resources/read" => {
             match serde_json::to_vec(&crate::json_rpc_response(id, json!({ "contents": [] }))) {
+                Ok(bytes) => LocalHandling::Response(bytes),
+                Err(_) => LocalHandling::NotHandled,
+            }
+        }
+        "prompts/list" => {
+            match serde_json::to_vec(&crate::json_rpc_response(id, json!({ "prompts": [] }))) {
+                Ok(bytes) => LocalHandling::Response(bytes),
+                Err(_) => LocalHandling::NotHandled,
+            }
+        }
+        "prompts/get" => {
+            match serde_json::to_vec(&crate::json_rpc_error(id, -32602, "Unknown prompt")) {
+                Ok(bytes) => LocalHandling::Response(bytes),
+                Err(_) => LocalHandling::NotHandled,
+            }
+        }
+        "logging/setLevel" => match serde_json::to_vec(&crate::json_rpc_response(id, json!({}))) {
+            Ok(bytes) => LocalHandling::Response(bytes),
+            Err(_) => LocalHandling::NotHandled,
+        },
+        "roots/list" => {
+            match serde_json::to_vec(&crate::json_rpc_response(id, json!({ "roots": [] }))) {
                 Ok(bytes) => LocalHandling::Response(bytes),
                 Err(_) => LocalHandling::NotHandled,
             }
@@ -584,8 +679,43 @@ fn response_timeout_for_method(method: Option<&str>, expects_response: bool) -> 
         return None;
     }
     match method {
-        Some("initialize") | Some("ping") => Some(Duration::from_secs(2)),
+        Some("initialize") | Some("ping") => Some(Duration::from_secs(5)),
         _ => Some(Duration::from_secs(30)),
+    }
+}
+
+fn extract_tools_call_name(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    let name = value
+        .get("params")
+        .and_then(|v| v.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())?;
+
+    let canonical = name
+        .strip_prefix("branchmind/")
+        .or_else(|| name.strip_prefix("branchmind."))
+        .unwrap_or(name);
+    Some(canonical.to_string())
+}
+
+fn response_timeout_for_request(
+    method: Option<&str>,
+    body: &[u8],
+    expects_response: bool,
+) -> Option<Duration> {
+    if !expects_response {
+        return None;
+    }
+    match method {
+        Some("initialize") | Some("ping") => Some(Duration::from_secs(5)),
+        Some("tools/call") => match extract_tools_call_name(body).as_deref() {
+            Some("status") => Some(Duration::from_secs(5)),
+            Some("tasks_snapshot") => Some(Duration::from_secs(10)),
+            _ => Some(Duration::from_secs(20)),
+        },
+        _ => response_timeout_for_method(method, expects_response),
     }
 }
 
@@ -617,10 +747,14 @@ fn connect_or_spawn(config: &SharedProxyConfig) -> Result<UnixStream, Box<dyn st
         // we restart (best-effort, low-noise).
         match daemon_is_compatible(&stream, config) {
             Ok(true) => return Ok(stream),
-            Ok(false) | Err(_) => {
+            Ok(false) => {
                 let _ = recover_daemon(Some(stream), config);
                 return connect_with_deadline(&config.socket_path, Duration::from_secs(2));
             }
+            // Flagship stability: never kill a shared daemon just because a probe timed out or
+            // returned malformed data. Transient probe failures are common under load and should
+            // not cause cross-session transport drops.
+            Err(_) => return Ok(stream),
         }
     }
 
@@ -628,10 +762,14 @@ fn connect_or_spawn(config: &SharedProxyConfig) -> Result<UnixStream, Box<dyn st
     let stream = connect_with_deadline(&config.socket_path, Duration::from_secs(2))?;
     match daemon_is_compatible(&stream, config) {
         Ok(true) => Ok(stream),
-        Ok(false) | Err(_) => {
+        Ok(false) => {
             let _ = recover_daemon(Some(stream), config);
             connect_with_deadline(&config.socket_path, Duration::from_secs(2))
         }
+        // A freshly spawned daemon may still be warming up (opening SQLite, etc.). Probing it via
+        // a short-timeout internal request is best-effort only; fail-open and let the first real
+        // request establish readiness.
+        Err(_) => Ok(stream),
     }
 }
 
@@ -669,9 +807,18 @@ fn spawn_daemon(config: &SharedProxyConfig) -> Result<(), Box<dyn std::error::Er
             .arg(&config.storage_dir)
             .arg("--toolset")
             .arg(config.toolset.as_str())
+            .arg("--response-verbosity")
+            .arg(config.response_verbosity.as_str())
+            .arg(if config.dx_mode { "--dx" } else { "--no-dx" })
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
+        // Prevent process explosions: daemons spawned by shared proxies should self-terminate
+        // after a short idle period when no sessions use them anymore.
+        if std::env::var_os("BRANCHMIND_MCP_DAEMON_IDLE_EXIT_SECS").is_none() {
+            command.env("BRANCHMIND_MCP_DAEMON_IDLE_EXIT_SECS", "120");
+        }
 
         if config.workspace_explicit {
             if let Some(workspace) = &config.default_workspace {
@@ -705,7 +852,14 @@ fn spawn_daemon(config: &SharedProxyConfig) -> Result<(), Box<dyn std::error::Er
         }
 
         match command.spawn() {
-            Ok(_) => return Ok(()),
+            Ok(mut child) => {
+                // Flagship stability: avoid accumulating `<defunct>` zombies when the daemon
+                // self-terminates (idle exit) while a long-lived proxy is still running.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
             Err(err) => last_err = Some(err),
         }
     }
@@ -742,15 +896,43 @@ fn daemon_is_compatible(
     config: &SharedProxyConfig,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let info = probe_daemon_info(stream)?;
-    let local_fingerprint = crate::build_fingerprint();
-
-    let daemon_fingerprint = info
-        .get("fingerprint")
+    let local_compat = crate::build_compat_fingerprint();
+    let daemon_compat = info
+        .get("compat_fingerprint")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    if daemon_fingerprint.is_empty() || daemon_fingerprint != local_fingerprint {
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            info.get("fingerprint")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|full| full.split(".bin.").next().unwrap_or(full).to_string())
+        });
+    let Some(daemon_compat) = daemon_compat else {
         return Ok(false);
+    };
+    if daemon_compat != local_compat {
+        return Ok(false);
+    }
+
+    // If we have a git-backed compat fingerprint, treat it as code-identity and do not try to
+    // “outsmart” it with file mtimes. Different agent CLIs may run the same build from different
+    // paths (or copied binaries), and using mtimes here would cause needless daemon churn.
+    //
+    // When BM_GIT_SHA is unavailable (non-git builds), fall back to a cheap build-time heuristic.
+    if crate::build_git_sha().is_none() {
+        let daemon_build_time_ms = info
+            .get("build_time_ms")
+            .and_then(|v| v.as_u64())
+            .filter(|ms| *ms > 0);
+        let local_build_time_ms = crate::binary_build_time_ms();
+        if let (Some(daemon_ms), Some(local_ms)) = (daemon_build_time_ms, local_build_time_ms)
+            && daemon_ms < local_ms
+        {
+            return Ok(false);
+        }
     }
 
     let daemon_storage_dir = info
@@ -773,6 +955,30 @@ fn daemon_is_compatible(
         .unwrap_or("")
         .trim();
     if daemon_toolset != config.toolset.as_str() {
+        return Ok(false);
+    }
+
+    let daemon_verbosity = info
+        .get("response_verbosity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if !daemon_verbosity.is_empty() && daemon_verbosity != config.response_verbosity.as_str() {
+        return Ok(false);
+    }
+    let daemon_dx_mode = info
+        .get("dx_mode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if daemon_dx_mode != config.dx_mode {
+        return Ok(false);
+    }
+
+    let daemon_workspace_explicit = info
+        .get("workspace_explicit")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if daemon_workspace_explicit != config.workspace_explicit {
         return Ok(false);
     }
 

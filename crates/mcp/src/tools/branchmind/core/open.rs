@@ -44,6 +44,67 @@ fn anchor_title_from_id(anchor_id: &str) -> String {
     }
 }
 
+fn parse_response_verbosity(
+    args_obj: &serde_json::Map<String, Value>,
+    fallback: ResponseVerbosity,
+) -> Result<ResponseVerbosity, Value> {
+    let raw = match optional_string(args_obj, "verbosity")? {
+        Some(v) => v,
+        None => return Ok(fallback),
+    };
+    let trimmed = raw.trim();
+    ResponseVerbosity::from_str(trimmed)
+        .ok_or_else(|| ai_error("INVALID_INPUT", "verbosity must be one of: full|compact"))
+}
+
+fn compact_open_result(id: &str, result: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("id".to_string(), Value::String(id.to_string()));
+    if let Some(kind) = result.get("kind") {
+        out.insert("kind".to_string(), kind.clone());
+    }
+    if let Some(ref_val) = result.get("ref") {
+        out.insert("ref".to_string(), ref_val.clone());
+    }
+    if let Some(reasoning_ref) = result.get("reasoning_ref") {
+        out.insert("reasoning_ref".to_string(), reasoning_ref.clone());
+    }
+    if let Some(card) = result.get("card") {
+        if let Some(card_id) = card.get("id") {
+            out.insert("card_id".to_string(), card_id.clone());
+        }
+        if let Some(card_type) = card.get("type") {
+            out.insert("card_type".to_string(), card_type.clone());
+        }
+    }
+    if let Some(entry) = result.get("entry") {
+        if let Some(doc) = entry.get("doc") {
+            out.insert("entry_doc".to_string(), doc.clone());
+        }
+        if let Some(seq) = entry.get("seq") {
+            out.insert("entry_seq".to_string(), seq.clone());
+        }
+    }
+    if let Some(capsule) = result.get("capsule") {
+        if let Some(focus) = capsule.get("focus") {
+            out.insert("focus".to_string(), focus.clone());
+        }
+        if let Some(action) = capsule.get("action") {
+            let mut action_out = serde_json::Map::new();
+            if let Some(tool) = action.get("tool") {
+                action_out.insert("tool".to_string(), tool.clone());
+            }
+            if let Some(args) = action.get("args") {
+                action_out.insert("args".to_string(), args.clone());
+            }
+            if !action_out.is_empty() {
+                out.insert("next_action".to_string(), Value::Object(action_out));
+            }
+        }
+    }
+    Value::Object(out)
+}
+
 fn card_type(card: &Value) -> &str {
     card.get("type").and_then(|v| v.as_str()).unwrap_or("note")
 }
@@ -208,6 +269,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let max_chars = match optional_usize(args_obj, "max_chars") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let verbosity = match parse_response_verbosity(args_obj, self.response_verbosity) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -949,7 +1014,9 @@ impl McpServer {
 
         redact_value(&mut result, 6);
 
-        if let Some(limit) = max_chars {
+        if verbosity == ResponseVerbosity::Compact {
+            result = compact_open_result(&id, &result);
+        } else if let Some(limit) = max_chars {
             let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
             let mut minimal = false;

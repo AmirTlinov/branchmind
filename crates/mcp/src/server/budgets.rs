@@ -95,6 +95,7 @@ impl McpServer {
 
 pub(super) fn apply_portal_default_budgets(
     toolset: crate::Toolset,
+    dx_mode: bool,
     name: &str,
     args_obj: &mut serde_json::Map<String, Value>,
 ) {
@@ -102,10 +103,18 @@ pub(super) fn apply_portal_default_budgets(
     // server may auto-escalate budgets for read-ish portals (status/snapshot/anchors_*).
     //
     // Important: keep explicit caller budgets untouched (explicit wins).
-    let default_status_max_chars = match toolset {
-        crate::Toolset::Core => 20_000,
-        crate::Toolset::Daily => 40_000,
-        crate::Toolset::Full => 60_000,
+    let default_status_max_chars = if dx_mode {
+        match toolset {
+            crate::Toolset::Core => 6_000,
+            crate::Toolset::Daily => 9_000,
+            crate::Toolset::Full => 12_000,
+        }
+    } else {
+        match toolset {
+            crate::Toolset::Core => 20_000,
+            crate::Toolset::Daily => 40_000,
+            crate::Toolset::Full => 60_000,
+        }
     };
     // NOTE: keep snapshot defaults in the "medium" tier so the capsule remains stable and
     // continuation commands (e.g. notes_cursor) stay predictable in DX tests.

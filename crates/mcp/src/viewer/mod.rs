@@ -40,6 +40,14 @@ pub(crate) struct ViewerConfig {
 }
 
 pub(crate) fn start_viewer(config: ViewerConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let takeover_enabled = match std::env::var("BRANCHMIND_VIEWER_TAKEOVER") {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    };
+
     let local_fingerprint = crate::build_fingerprint();
     let mut takeover_attempts: u8 = 0;
     let mut forced_kill_attempted = false;
@@ -47,6 +55,16 @@ pub(crate) fn start_viewer(config: ViewerConfig) -> Result<(), Box<dyn std::erro
         match TcpListener::bind(("127.0.0.1", config.port)) {
             Ok(listener) => break listener,
             Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+                // Flagship stability: never kill other `bm_mcp` processes to take over the viewer
+                // port unless explicitly requested. In multi-session agent workflows, killing the
+                // owning process drops active MCP transports ("Transport closed").
+                //
+                // The viewer is optional and multi-project; if another session already owns the
+                // port, we keep using that viewer and rely on presence/catalog updates.
+                if !takeover_enabled {
+                    return Ok(());
+                }
+
                 // If the port is already occupied, try to detect whether it is an existing
                 // BranchMind viewer. If so, do not fail: the UI is multi-project and can show
                 // any project discovered via the registry/catalog.

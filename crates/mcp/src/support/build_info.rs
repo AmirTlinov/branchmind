@@ -18,6 +18,34 @@ pub(crate) fn build_git_sha() -> Option<&'static str> {
     })
 }
 
+pub(crate) fn build_compat_fingerprint() -> String {
+    // Compatibility fingerprint:
+    // - Stable across identical code built from different paths/copies.
+    // - Used to decide whether a daemon is protocol/feature compatible.
+    //
+    // NOTE: this intentionally excludes the local-machine-specific `bin.*` tag, because multiple
+    // agent CLIs (Codex/Claude/Gemini/etc.) may run the same build from different locations.
+    // Stale-daemon avoidance is handled via `binary_build_time_ms()` instead.
+    let version = crate::SERVER_VERSION;
+    let profile = build_profile_label();
+    match build_git_sha() {
+        Some(sha) => format!("{version}+git.{sha}.{profile}"),
+        None => format!("{version}+{profile}"),
+    }
+}
+
+pub(crate) fn binary_build_time_ms() -> Option<u64> {
+    let exe = std::env::current_exe().ok()?;
+    let meta = std::fs::metadata(&exe).ok()?;
+    let modified = meta.modified().ok()?;
+    let dur = modified.duration_since(UNIX_EPOCH).ok()?;
+    let millis = dur.as_millis();
+    if millis == 0 {
+        return None;
+    }
+    Some(millis.min(u64::MAX as u128) as u64)
+}
+
 fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
     const FNV_PRIME: u64 = 1099511628211;
     for b in bytes {

@@ -21,6 +21,7 @@ Zero-arg invocation enables flagship DX defaults:
 - repo-local store (`.agents/mcp/.branchmind/`)
 - daily toolset
 - workspace lock (guards against accidental cross-workspace calls)
+- DX mode defaults (compact outputs + snapshot delta on by default)
 
 ## OpenCode (recommended)
 

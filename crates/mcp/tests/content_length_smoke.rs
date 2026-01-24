@@ -110,10 +110,17 @@ fn mcp_supports_content_length_framing() {
         "initialize must return result"
     );
 
-    // notifications/initialized is a notification (no id) => no response expected.
+    // `initialized` is a notification (no id) => no response expected.
     client.send(json!({
         "jsonrpc": "2.0",
-        "method": "notifications/initialized",
+        "method": "initialized",
+        "params": {}
+    }));
+
+    // Client compatibility: ignore unknown notifications (no response expected).
+    client.send(json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
         "params": {}
     }));
 

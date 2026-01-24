@@ -30,6 +30,19 @@ fn validate_edge_node_ids(field: &str, values: &[String]) -> Result<(), Value> {
     Ok(())
 }
 
+fn parse_response_verbosity(
+    args_obj: &serde_json::Map<String, Value>,
+    fallback: ResponseVerbosity,
+) -> Result<ResponseVerbosity, Value> {
+    let raw = match optional_string(args_obj, "verbosity")? {
+        Some(v) => v,
+        None => return Ok(fallback),
+    };
+    let trimmed = raw.trim();
+    ResponseVerbosity::from_str(trimmed)
+        .ok_or_else(|| ai_error("INVALID_INPUT", "verbosity must be one of: full|compact"))
+}
+
 impl McpServer {
     pub(crate) fn tool_branchmind_think_template(&mut self, args: Value) -> Value {
         let Some(args_obj) = args.as_object() else {
@@ -117,6 +130,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let mut warnings = Vec::<Value>::new();
+        let verbosity = match parse_response_verbosity(args_obj, self.response_verbosity) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let supports = match optional_string_array(args_obj, "supports") {
             Ok(v) => v.unwrap_or_default(),
@@ -168,25 +185,39 @@ impl McpServer {
         let trace_ref = format!("{}@{}", trace_doc, result.trace_seq);
         let graph_ref = result.last_seq.map(|seq| format!("{}@{}", graph_doc, seq));
 
-        let response = ai_ok(
-            "think_card",
-            json!({
-                "workspace": workspace.as_str(),
-                "branch": branch,
-                "trace_doc": trace_doc,
-                "graph_doc": graph_doc,
-                "card_id": card_id,
-                "inserted": result.inserted,
-                "trace_seq": result.trace_seq,
-                "trace_ref": trace_ref,
-                "graph_applied": {
-                    "nodes_upserted": result.nodes_upserted,
-                    "edges_upserted": result.edges_upserted
-                },
-                "last_seq": result.last_seq,
-                "graph_ref": graph_ref
-            }),
-        );
+        let response = if verbosity == ResponseVerbosity::Compact {
+            ai_ok(
+                "think_card",
+                json!({
+                    "workspace": workspace.as_str(),
+                    "branch": branch,
+                    "card_id": card_id,
+                    "inserted": result.inserted,
+                    "trace_ref": trace_ref,
+                    "graph_ref": graph_ref
+                }),
+            )
+        } else {
+            ai_ok(
+                "think_card",
+                json!({
+                    "workspace": workspace.as_str(),
+                    "branch": branch,
+                    "trace_doc": trace_doc,
+                    "graph_doc": graph_doc,
+                    "card_id": card_id,
+                    "inserted": result.inserted,
+                    "trace_seq": result.trace_seq,
+                    "trace_ref": trace_ref,
+                    "graph_applied": {
+                        "nodes_upserted": result.nodes_upserted,
+                        "edges_upserted": result.edges_upserted
+                    },
+                    "last_seq": result.last_seq,
+                    "graph_ref": graph_ref
+                }),
+            )
+        };
 
         if warnings.is_empty() {
             response

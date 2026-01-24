@@ -22,7 +22,11 @@ pub(crate) fn core_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
-                    "max_chars": { "type": "integer" }
+                    "max_chars": { "type": "integer" },
+                    "verbosity": {
+                        "type": "string",
+                        "enum": ["full", "compact"]
+                    }
                 },
                 "required": []
             }
@@ -57,7 +61,11 @@ pub(crate) fn core_definitions() -> Vec<Value> {
                     "id": { "type": "string" },
                     "limit": { "type": "integer" },
                     "include_drafts": { "type": "boolean" },
-                    "max_chars": { "type": "integer" }
+                    "max_chars": { "type": "integer" },
+                    "verbosity": {
+                        "type": "string",
+                        "enum": ["full", "compact"]
+                    }
                 },
                 "required": []
             }

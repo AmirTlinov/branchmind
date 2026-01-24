@@ -69,7 +69,10 @@ Runtime flags:
   - `core`: ultra-minimal tool surface.
 - `--shared` — run a stdio proxy that connects to a shared local daemon (deduplicates processes across sessions).
 - `--daemon` — run the shared local daemon on a Unix socket (no stdio).
-- `--socket <path>` — override the Unix socket path (default: `<storage-dir>/branchmind_mcp.sock`).
+- `BRANCHMIND_MCP_DAEMON_IDLE_EXIT_SECS=<secs>` — when set on a daemon, it exits after `<secs>` of *zero active connections*.
+  - Shared proxies set a default (currently 120s) for daemons they spawn, to avoid accumulating idle processes.
+- `--socket <path>` — override the Unix socket path (default: `<storage-dir>/bm.<config>.sock`, with an automatic fallback to a short runtime dir if the path would exceed Unix socket limits).
+  - The default name includes a config hash (toolset/workspace/guard/agent id) to avoid cross-session collisions.
 - `--viewer` — enable the local read-only HTTP viewer (loopback-only).
 - `--no-viewer` — disable the viewer (useful for headless runs).
 - `--viewer-port <port>` — set the viewer port (default: `7331`).
@@ -81,8 +84,8 @@ Runtime flags:
 
 Hot reload defaults:
 
-- Hot reload is enabled by default in **session** modes (stdio + shared proxy).
-- To disable: pass `--no-hot-reload` or set `BRANCHMIND_HOT_RELOAD=0`.
+- Hot reload is **disabled by default** for stability.
+- To enable: pass `--hot-reload` or set `BRANCHMIND_HOT_RELOAD=1`.
 
 Viewer note:
 
@@ -115,6 +118,8 @@ Environment:
 - `BRANCHMIND_WORKSPACE_LOCK=1|0` — same as `--workspace-lock` (set `0` to disable auto-lock).
 - `BRANCHMIND_PROJECT_GUARD=<value>` — same as `--project-guard`.
 - `BRANCHMIND_AGENT_ID=<id>` — same as `--agent-id` (`auto` is supported).
+- `BRANCHMIND_RESPONSE_VERBOSITY=full|compact` — default output verbosity for non-portal tools.
+- `BRANCHMIND_DX=1|0` — enable DX defaults (compact outputs, portal-friendly defaults).
 
 Templates (DX):
 
