@@ -169,6 +169,7 @@ pub mod think {
         "test",
         "evidence",
         "decision",
+        "knowledge",
         "note",
         "update",
     ];

@@ -680,7 +680,7 @@ Design:
 
 Supported card types (v0):
 
-- `frame`, `hypothesis`, `question`, `test`, `evidence`, `decision`, `note`, `update`
+- `frame`, `hypothesis`, `question`, `test`, `evidence`, `decision`, `knowledge`, `note`, `update`
 
 ### `think_template`
 
@@ -882,7 +882,7 @@ Defaults:
 - If `target` is absent, explicit `branch`/`ref` wins; otherwise fallback to checkout.
 - Doc keys default to `notes` / `graph` / `trace` when supported by the tool.
 
-### `think_add_hypothesis` / `think_add_question` / `think_add_test` / `think_add_note` / `think_add_decision` / `think_add_evidence` / `think_add_frame` / `think_add_update`
+### `think_add_hypothesis` / `think_add_question` / `think_add_test` / `think_add_note` / `think_add_decision` / `think_add_evidence` / `think_add_knowledge` / `think_add_frame` / `think_add_update`
 
 Thin wrappers over `think_card` that enforce the corresponding `card.type`
 and normalize fields.
@@ -906,6 +906,18 @@ Optional:
 - `agent_id` — accepted for compatibility and audit metadata; it does not filter results in meaning-mode.
 - `all_lanes` — when `true`, includes drafts (`v:draft` + legacy `lane:agent:*`) in this read view. Intended for explicit audit/sync.
 - `include_drafts` — alias for `all_lanes` (read UX: “show drafts”).
+
+### `knowledge_list`
+
+List knowledge cards (`type="knowledge"`), optionally filtered by anchor/tags.
+
+Input: `{ workspace, target?, ref?, graph_doc?, anchor?, ids?, status?, tags_any?, tags_all?, text?, limit?, context_budget?, max_chars?, agent_id?, all_lanes?, include_drafts? }`
+
+Semantics:
+
+- `types` are forced to `["knowledge"]` (request cannot override).
+- `anchor` accepts either `a:<slug>` or `<slug>` and adds it to `tags_all`.
+- If `include_drafts=false` and `tags_all` is omitted, the server defaults to `tags_all=["v:canon"]`.
 
 ### `think_pack`
 

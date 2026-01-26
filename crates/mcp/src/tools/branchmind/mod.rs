@@ -7,6 +7,7 @@ mod definitions;
 mod dispatch;
 mod docs;
 mod graph;
+mod knowledge;
 mod notes_vcs;
 mod packs;
 mod think;

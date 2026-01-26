@@ -19,6 +19,37 @@ fn parse_response_verbosity(
         .ok_or_else(|| ai_error("INVALID_INPUT", "verbosity must be one of: full|compact"))
 }
 
+fn ensure_visibility_tag(tags: &mut Vec<String>) {
+    let mut has_canon = false;
+    let mut has_draft = false;
+    for tag in tags.iter() {
+        let lowered = tag.trim().to_ascii_lowercase();
+        if lowered == VIS_TAG_CANON {
+            has_canon = true;
+        }
+        if lowered == VIS_TAG_DRAFT {
+            has_draft = true;
+        }
+    }
+    if !has_canon && !has_draft {
+        tags.push(VIS_TAG_CANON.to_string());
+    }
+}
+
+fn normalize_anchor_tag(raw: &str) -> Result<String, Value> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(ai_error("INVALID_INPUT", "anchor must not be empty"));
+    }
+    let candidate = if raw.starts_with(ANCHOR_TAG_PREFIX) {
+        raw.to_string()
+    } else {
+        format!("{ANCHOR_TAG_PREFIX}{raw}")
+    };
+    normalize_anchor_id_tag(&candidate)
+        .ok_or_else(|| ai_error("INVALID_INPUT", "anchor must be a valid slug (a:<slug>)"))
+}
+
 impl McpServer {
     pub(crate) fn tool_branchmind_think_add_typed(
         &mut self,
@@ -147,6 +178,119 @@ impl McpServer {
 
     pub(crate) fn tool_branchmind_think_add_evidence(&mut self, args: Value) -> Value {
         self.tool_branchmind_think_add_typed(args, "evidence", "think_add_evidence")
+    }
+
+    pub(crate) fn tool_branchmind_think_add_knowledge(&mut self, args: Value) -> Value {
+        let Some(args_obj) = args.as_object() else {
+            return ai_error("INVALID_INPUT", "arguments must be an object");
+        };
+        let workspace = match require_workspace(args_obj) {
+            Ok(w) => w,
+            Err(resp) => return resp,
+        };
+        let mut warnings = Vec::<Value>::new();
+        let verbosity = match parse_response_verbosity(args_obj, self.response_verbosity) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let supports = match optional_string_array(args_obj, "supports") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let blocks = match optional_string_array(args_obj, "blocks") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+
+        let anchor = match optional_string(args_obj, "anchor") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let card_value = args_obj.get("card").cloned().unwrap_or(Value::Null);
+        let mut parsed = match parse_think_card(&workspace, card_value) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        parsed.card_type = "knowledge".to_string();
+        ensure_visibility_tag(&mut parsed.tags);
+        if let Some(anchor) = anchor {
+            let tag = match normalize_anchor_tag(&anchor) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            if !tags_has(&parsed.tags, &tag) {
+                parsed.tags.push(tag);
+            }
+        }
+
+        match apply_step_context_to_card(self, &workspace, args_obj, &mut parsed) {
+            Ok(Some(w)) => warnings.push(w),
+            Ok(None) => {}
+            Err(resp) => return resp,
+        }
+        if let Err(resp) = apply_lane_context_to_card(args_obj, &mut parsed) {
+            return resp;
+        }
+
+        let (branch, trace_doc, graph_doc) =
+            match self.resolve_think_commit_scope(&workspace, args_obj) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+
+        let (card_id, result) = match self.commit_think_card_internal(ThinkCardCommitInternalArgs {
+            workspace: &workspace,
+            branch: &branch,
+            trace_doc: &trace_doc,
+            graph_doc: &graph_doc,
+            parsed,
+            supports: &supports,
+            blocks: &blocks,
+        }) {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+
+        let trace_ref = format!("{}@{}", trace_doc, result.trace_seq);
+        let graph_ref = result.last_seq.map(|seq| format!("{}@{seq}", graph_doc));
+        let response = if verbosity == ResponseVerbosity::Compact {
+            ai_ok(
+                "think_add_knowledge",
+                json!({
+                    "workspace": workspace.as_str(),
+                    "branch": branch,
+                    "card_id": card_id,
+                    "inserted": result.inserted,
+                    "trace_ref": trace_ref,
+                    "graph_ref": graph_ref
+                }),
+            )
+        } else {
+            ai_ok(
+                "think_add_knowledge",
+                json!({
+                    "workspace": workspace.as_str(),
+                    "branch": branch,
+                    "trace_doc": trace_doc,
+                    "graph_doc": graph_doc,
+                    "card_id": card_id,
+                    "inserted": result.inserted,
+                    "graph_applied": {
+                        "nodes_upserted": result.nodes_upserted,
+                        "edges_upserted": result.edges_upserted
+                    },
+                    "last_seq": result.last_seq
+                }),
+            )
+        };
+
+        if warnings.is_empty() {
+            response
+        } else {
+            let result = response.get("result").cloned().unwrap_or(Value::Null);
+            ai_ok_with_warnings("think_add_knowledge", result, warnings, Vec::new())
+        }
     }
 
     pub(crate) fn tool_branchmind_think_add_frame(&mut self, args: Value) -> Value {

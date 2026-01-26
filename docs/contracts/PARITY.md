@@ -73,7 +73,7 @@ Present:
 - tag_create / tag_list / tag_delete
 - reflog / reset
 - think_add_hypothesis / think_add_question / think_add_test
-- think_add_note / think_add_decision / think_add_evidence / think_add_frame / think_add_update
+- think_add_note / think_add_decision / think_add_evidence / think_add_knowledge / think_add_frame / think_add_update
 - think_next / think_frontier / think_pack
 - think_query / think_lint / think_watch
 - think_link / think_set_status
@@ -82,6 +82,7 @@ Present:
 - think_subgoal_open / think_subgoal_close
 - trace_step / trace_sequential_step / trace_hydrate / trace_validate
 - transcripts_search / transcripts_open / transcripts_digest
+- knowledge_list
 
 Planned:
 
