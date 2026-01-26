@@ -575,7 +575,7 @@ Input: `{ workspace, task?, plan?, limit?, max_chars?, read_only? }`
 
 Read-only integrity checks for a plan/task.
 
-Input: `{ workspace, task?, plan? }`
+Input: `{ workspace, task?, plan?, patches_limit? }`
 
 Semantics:
 
@@ -616,7 +616,9 @@ Output shape (conceptual):
 Determinism:
 
 - Issue ordering is deterministic (by `severity`, then `kind`, then `target`).
-- Patch ids are stable strings; patches are ordered by id.
+- Если указан `patches_limit`, сервер возвращает приоритизированный поднабор патчей
+  (сортировка по важности, затем стабильность). Без лимита возвращается полный список.
+- Patch ids are stable strings; patches are ordered by id **после** отбора по лимиту.
 - Lint never applies patches; it only suggests bounded changes.
 
 ### `tasks_mindpack` (v0.9)
@@ -1114,6 +1116,9 @@ Shorthand:
 - `checkpoints: "gate"` — compact shortcut for confirming only the gate checkpoints (criteria + tests).
 - `checkpoints: "all"` — compact shortcut for confirming all checkpoint categories.
 - Boolean shortcut is allowed inside object form, e.g. `{ "criteria": true, "tests": true }`.
+- If the task has `reasoning_mode="strict"`, `tasks_close_step` (and `tasks_done`) enforce the same
+  strict gate as `tasks_macro_close_step` and may return `REASONING_REQUIRED`.
+  Escape hatch requires `tasks_macro_close_step` with `override={reason,risk}`.
 
 ## DX macros (v0.3)
 

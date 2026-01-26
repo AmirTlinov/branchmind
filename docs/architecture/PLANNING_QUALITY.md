@@ -48,7 +48,7 @@ BranchMind treats a plan as a **persistent structure** with stable identifiers.
 
 Instead of “write a new plan”, agents should do:
 
-**Plan → Lint → Patch (small) → Repeat**
+**Plan → Lint (patches_limit=2) → Patch (small) → Repeat**
 
 This is the same idea as code refactoring:
 - we don’t rewrite a codebase when it’s imperfect,

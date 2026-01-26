@@ -1255,6 +1255,13 @@ fn render_tasks_resume_lines(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
     let where_unknown = where_id.as_deref() == Some("unknown");
+    let where_needs_anchor = resume
+        .get("capsule")
+        .and_then(|v| v.get("where"))
+        .and_then(|v| v.get("map"))
+        .and_then(|v| v.get("needs_anchor"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if let Some(where_id) = where_id.as_deref() {
         state.push_str(" | where=");
@@ -1496,7 +1503,7 @@ fn render_tasks_resume_lines(
     // Keep the informational payload extremely small: one state line + a best-effort "next" hint.
     // Deep structured detail remains available via explicit full-view tools (e.g., tasks_resume_super).
     let map_primary = action_tool == Some("tasks_macro_close_step")
-        && where_unknown
+        && (where_unknown || where_needs_anchor)
         && map_available == Some(true)
         && map_cmd.is_some();
 

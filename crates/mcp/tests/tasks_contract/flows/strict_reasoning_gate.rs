@@ -143,6 +143,55 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "expected typed REASONING_REQUIRED"
     );
 
+    let blocked_done = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 30,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_done",
+            "arguments": {
+                "workspace": "ws_strict_gate",
+                "task": task_id.clone(),
+                "step_id": step_id.clone()
+            }
+        }
+    }));
+    let blocked_done_text = extract_tool_text(&blocked_done);
+    let blocked_done_code = blocked_done_text
+        .get("error")
+        .and_then(|v| v.get("code"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        blocked_done_code,
+        Some("REASONING_REQUIRED"),
+        "tasks_done should enforce strict reasoning gate"
+    );
+
+    let blocked_close_step = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 31,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_close_step",
+            "arguments": {
+                "workspace": "ws_strict_gate",
+                "task": task_id.clone(),
+                "step_id": step_id.clone(),
+                "checkpoints": "gate"
+            }
+        }
+    }));
+    let blocked_close_step_text = extract_tool_text(&blocked_close_step);
+    let blocked_close_step_code = blocked_close_step_text
+        .get("error")
+        .and_then(|v| v.get("code"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        blocked_close_step_code,
+        Some("REASONING_REQUIRED"),
+        "tasks_close_step should enforce strict reasoning gate"
+    );
+
     // Add a hypothesis (step-scoped).
     let _h1 = server.request(json!({
         "jsonrpc": "2.0",

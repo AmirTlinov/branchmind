@@ -133,6 +133,7 @@ fn build_meaning_map_hud(
     cards: &[Value],
     include_drafts: bool,
     focus_step_tag: Option<&str>,
+    fallback_anchor: Option<String>,
 ) -> Value {
     use std::collections::BTreeMap;
 
@@ -188,12 +189,36 @@ fn build_meaning_map_hud(
         .take(3)
         .map(|(id, _, _)| id.clone())
         .collect::<Vec<_>>();
-    let where_id = top_anchors
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "unknown".to_string());
+    let (where_id, needs_anchor) = match top_anchors.first() {
+        Some(id) => (id.clone(), false),
+        None => (
+            fallback_anchor.unwrap_or_else(|| "a:core".to_string()),
+            true,
+        ),
+    };
 
-    json!({ "where": where_id, "top_anchors": top_anchors })
+    json!({ "where": where_id, "top_anchors": top_anchors, "needs_anchor": needs_anchor })
+}
+
+fn primary_engine_signal(engine: &Value) -> Option<Value> {
+    let signal = engine
+        .get("signals")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())?;
+    let code = signal.get("code").cloned().unwrap_or(Value::Null);
+    let severity = signal.get("severity").cloned().unwrap_or(Value::Null);
+    let message = signal
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(|v| Value::String(truncate_string(&redact_text(v), 140)))
+        .unwrap_or(Value::Null);
+    let refs = signal.get("refs").cloned().unwrap_or(Value::Null);
+    Some(json!({
+        "code": code,
+        "severity": severity,
+        "message": message,
+        "refs": refs
+    }))
 }
 
 impl McpServer {
@@ -392,6 +417,7 @@ impl McpServer {
                 actions_limit: args.engine_actions_limit,
             },
         );
+        let primary_signal = engine.as_ref().and_then(primary_engine_signal);
 
         let step_focus = if matches!(
             focus_view,
@@ -491,6 +517,19 @@ impl McpServer {
         };
 
         let include_drafts = focus_view == args::ResumeSuperView::Audit;
+        let fallback_anchor = context
+            .target
+            .get("title")
+            .and_then(|v| v.as_str())
+            .and_then(|title| capsule::suggested_anchor_title(Some(title)))
+            .or_else(|| {
+                context
+                    .target
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string())
+            })
+            .map(|title| capsule::derive_anchor_id_from_title(&title));
         let map_hud = if let Some(step_tag) = focus_step_tag.as_deref() {
             // Robustness: derive the "where" compass from an explicit step-scoped query rather
             // than relying on the relevance-selected memory slice to contain the latest step note.
@@ -525,12 +564,22 @@ impl McpServer {
             };
             let step_cards = graph_nodes_to_cards(step_slice.nodes);
             if step_cards.is_empty() {
-                build_meaning_map_hud(&memory.cards, include_drafts, Some(step_tag))
+                build_meaning_map_hud(
+                    &memory.cards,
+                    include_drafts,
+                    Some(step_tag),
+                    fallback_anchor.clone(),
+                )
             } else {
-                build_meaning_map_hud(&step_cards, include_drafts, Some(step_tag))
+                build_meaning_map_hud(
+                    &step_cards,
+                    include_drafts,
+                    Some(step_tag),
+                    fallback_anchor.clone(),
+                )
             }
         } else {
-            build_meaning_map_hud(&memory.cards, include_drafts, None)
+            build_meaning_map_hud(&memory.cards, include_drafts, None, fallback_anchor.clone())
         };
 
         let omit_workspace = self
@@ -725,6 +774,7 @@ impl McpServer {
             steps_summary: context.steps.as_ref(),
             step_focus: step_focus.as_ref(),
             map_hud,
+            primary_signal,
             handoff: &handoff,
             timeline: &timeline,
             notes_count,

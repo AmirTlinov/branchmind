@@ -3,7 +3,7 @@
 use crate::*;
 use serde_json::Value;
 
-const SKILL_PACK_VERSION: &str = "0.1.0";
+const SKILL_PACK_VERSION: &str = "0.1.1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SkillProfile {
@@ -101,9 +101,9 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 &mut out,
                 profile.section_name(),
                 &[
-                    "Before closing: run tasks_lint and apply the smallest patch suggestion.",
-                    "DoD discipline: every active step must have success_criteria + tests + proof.",
-                    "Override exists, but it must be explicit: reason+risk (and is visible debt).",
+                    "Loop: tasks_snapshot → tasks_lint (patches_limit=2) → apply 1 patch → think_card (hypothesis+test) → evidence → close_step.",
+                    "DoD discipline: every active step has success_criteria + tests + proof.",
+                    "Override exists but must be explicit: reason+risk (visible debt).",
                 ],
             );
         }
@@ -112,9 +112,9 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 &mut out,
                 profile.section_name(),
                 &[
-                    "Unit of progress: hypothesis → minimal falsifier test → evidence → decision (canon).",
-                    "Always add stop criteria (time/budget/signal) to avoid infinite loops.",
-                    "Keep research anchor-scoped so you can resume without scanning the project.",
+                    "Unit of progress: hypothesis → falsifier test → evidence → decision (canon).",
+                    "Add stop criteria (time/budget/signal) to avoid infinite loops.",
+                    "Keep research anchor-scoped + step-scoped so you can resume without scanning.",
                 ],
             );
         }
@@ -125,7 +125,7 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 &[
                     "Fan-out: split work into 3–10 jobs by anchors; keep each job bounded.",
                     "Inbox loop: tasks_jobs_radar → open JOB ref → answer once → job continues.",
-                    "Accept DONE only with proof refs (or an explicit override with reason+risk).",
+                    "Accept DONE only with proof refs (or explicit override with reason+risk).",
                     "Fan-in: produce one canonical merge report (what changed + proofs + risks).",
                     "Liveness is explicit: runner state is live/idle/offline; reclaim offline slices when needed.",
                 ],

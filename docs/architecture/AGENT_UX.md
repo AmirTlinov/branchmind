@@ -180,6 +180,7 @@ must keep a small stable block that never disappears under budgets:
 - **where**: workspace + target + step focus (+ optional meaning anchor)
 - **now**: what we’re trying to achieve right now (1–2 lines)
 - **why**: top signals (bounded)
+- **signal**: one primary reasoning signal (bounded, engine-derived)
 - **next**: exactly 1 primary action + 1 backup action (bounded)
 - **budget**: what was trimmed and why (explicit)
 

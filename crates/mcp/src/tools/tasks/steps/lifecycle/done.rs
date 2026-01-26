@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use super::super::strict_gate::{StrictGateContext, enforce_strict_reasoning_gate};
 use crate::*;
 use serde_json::{Value, json};
 
@@ -27,6 +28,22 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+
+        if let Err(resp) = enforce_strict_reasoning_gate(StrictGateContext {
+            server: self,
+            workspace: &workspace,
+            task_id: &task_id,
+            step_id: step_id.as_deref(),
+            path: path.as_ref(),
+            args_obj,
+            reasoning_override: None,
+            allow_override: false,
+            close_args_obj: None,
+            warnings: None,
+            note_event: None,
+        }) {
+            return resp;
+        }
 
         let result = self.store.step_done(
             &workspace,

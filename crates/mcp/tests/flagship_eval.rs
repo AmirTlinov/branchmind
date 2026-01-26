@@ -62,6 +62,10 @@ fn flagship_eval_snapshot_is_two_lines_and_ref_first() {
         state.contains("focus TASK-") && state.contains("| where="),
         "state line must include focus + where=..."
     );
+    assert!(
+        state.contains("where=a:"),
+        "state line should include a fallback where=a:* anchor"
+    );
     let ref_id = parse_state_ref_id(state).expect("state line must include ref=");
     assert!(
         ref_id.starts_with("CARD-") || ref_id.starts_with("TASK-") || ref_id.starts_with("PLAN-"),
@@ -70,7 +74,7 @@ fn flagship_eval_snapshot_is_two_lines_and_ref_first() {
 
     assert!(
         lines[1].starts_with("think_card"),
-        "when where=unknown, second line must be the canonical anchor attach command"
+        "when anchor is missing, second line must be the canonical anchor attach command"
     );
     assert!(
         lines[1].contains("v:canon"),

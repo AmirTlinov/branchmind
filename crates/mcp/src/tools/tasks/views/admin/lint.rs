@@ -51,6 +51,54 @@ impl McpServer {
         out
     }
 
+    fn patch_priority(id: &str) -> u8 {
+        if id.contains("current:clamp") {
+            return 0;
+        }
+        if id.contains("active_limit:park") {
+            return 1;
+        }
+        if id.contains("mark_done") {
+            return 2;
+        }
+        if id.contains("seed_steps") {
+            return 3;
+        }
+        if id.contains("seed_success_criteria") || id.contains("confirm_criteria") {
+            return 4;
+        }
+        if id.contains("seed_tests") || id.contains("confirm_tests") {
+            return 5;
+        }
+        if id.contains("missing_anchor") {
+            return 6;
+        }
+        7
+    }
+
+    fn select_patches(mut patches: Vec<Value>, limit: usize) -> Vec<Value> {
+        if limit == 0 || patches.is_empty() {
+            return Vec::new();
+        }
+        if patches.len() <= limit {
+            return patches;
+        }
+        let mut ranked = patches
+            .drain(..)
+            .enumerate()
+            .map(|(idx, patch)| {
+                let id = patch.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                (Self::patch_priority(id), idx, patch)
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, patch)| patch)
+            .collect()
+    }
+
     fn default_step_seed(title: &str) -> (Vec<&'static str>, Vec<&'static str>) {
         let raw = title.trim().to_ascii_lowercase();
         let is_research = raw.contains("research")
@@ -301,6 +349,11 @@ impl McpServer {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };
+        let patches_limit = match optional_usize(args_obj, "patches_limit") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let anchor_suggestions_limit = patches_limit.unwrap_or(5).min(5);
 
         let mut issues = Vec::new();
         let mut patches = Vec::new();
@@ -365,7 +418,7 @@ impl McpServer {
                 };
                 let active = by_status.get("ACTIVE").copied().unwrap_or(0);
 
-                // Anchor coverage KPI: active tasks without anchors reliably cause “where=unknown”
+                // Anchor coverage KPI: active tasks without anchors reliably cause missing anchors
                 // and re-invention in new sessions. This lint is the one-shot “pay rent” reminder.
                 let coverage = match self.store.plan_anchors_coverage(
                     &workspace,
@@ -403,7 +456,7 @@ impl McpServer {
 
                     let mut suggested = 0usize;
                     for t in active_tasks.iter() {
-                        if suggested >= 5 {
+                        if suggested >= anchor_suggestions_limit {
                             break;
                         }
                         let Ok(list) = self.store.task_anchors_list(
@@ -617,7 +670,7 @@ impl McpServer {
                             "warning",
                             "unnavigable",
                             "MISSING_ANCHOR",
-                            "task has no anchors (where=unknown)".to_string(),
+                            "task has no anchors (anchor missing)".to_string(),
                             "Attach an anchor so the task is findable by meaning and old decisions are discoverable.",
                             Some(json!({ "kind": "task", "id": target_id })),
                         ));
@@ -1104,6 +1157,9 @@ impl McpServer {
                 .unwrap_or("");
             (sev_rank(sev_a), kind_a, code_a, tgt_a).cmp(&(sev_rank(sev_b), kind_b, code_b, tgt_b))
         });
+        if let Some(limit) = patches_limit {
+            patches = Self::select_patches(patches, limit);
+        }
         patches.sort_by(|a, b| {
             let id_a = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let id_b = b.get("id").and_then(|v| v.as_str()).unwrap_or("");

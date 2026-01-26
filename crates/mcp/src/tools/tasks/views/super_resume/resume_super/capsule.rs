@@ -17,6 +17,7 @@ pub(super) struct HandoffCapsuleArgs<'a> {
     pub(super) steps_summary: Option<&'a Value>,
     pub(super) step_focus: Option<&'a Value>,
     pub(super) map_hud: Value,
+    pub(super) primary_signal: Option<Value>,
     pub(super) handoff: &'a HandoffCore,
     pub(super) timeline: &'a super::timeline::TimelineEvents,
     pub(super) notes_count: usize,
@@ -162,13 +163,20 @@ fn active_step_lease_holder(step_focus: Option<&Value>) -> Option<String> {
 }
 
 fn map_where_is_unknown(map_hud: &Value) -> bool {
+    if map_hud
+        .get("needs_anchor")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return true;
+    }
     map_hud
         .get("where")
         .and_then(|v| v.as_str())
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("unknown"))
 }
 
-fn suggested_anchor_title(task_title: Option<&str>) -> Option<String> {
+pub(super) fn suggested_anchor_title(task_title: Option<&str>) -> Option<String> {
     let title = task_title.unwrap_or("").trim();
     if title.is_empty() {
         return None;
@@ -184,7 +192,7 @@ fn suggested_anchor_title(task_title: Option<&str>) -> Option<String> {
     Some(truncate_string(&redact_text(title), 80))
 }
 
-fn derive_anchor_id_from_title(title: &str) -> String {
+pub(super) fn derive_anchor_id_from_title(title: &str) -> String {
     // Deterministic, ascii-only slugify for `a:<slug>`:
     // - lowercased
     // - non-alnum => '-'
@@ -241,13 +249,16 @@ fn recommended_map_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value
         return (Value::Null, None);
     }
 
+    let map_missing = map_where_is_unknown(&args.map_hud);
+
     // When the anchor is known, give a 1-command "lens" to open the anchor-scoped context.
-    if let Some(where_id) = args
-        .map_hud
-        .get("where")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("unknown"))
+    if !map_missing
+        && let Some(where_id) = args
+            .map_hud
+            .get("where")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("unknown"))
     {
         let where_id = where_id.to_ascii_lowercase();
         if where_id.starts_with("a:") && tool_available(args.toolset, "open") {
@@ -274,7 +285,7 @@ fn recommended_map_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value
         }
     }
 
-    if !map_where_is_unknown(&args.map_hud) {
+    if !map_missing {
         return (Value::Null, None);
     }
     // Only nudge map attachment when it can immediately help navigation:
@@ -948,6 +959,7 @@ pub(super) fn build_handoff_capsule(args: HandoffCapsuleArgs<'_>) -> Value {
         "target": minimal_target(args.target),
         "reasoning_ref": args.reasoning_ref,
         "radar": radar,
+        "reasoning_signal": args.primary_signal.clone().unwrap_or(Value::Null),
         "handoff": {
             "done": &args.handoff.done,
             "remaining": &args.handoff.remaining,

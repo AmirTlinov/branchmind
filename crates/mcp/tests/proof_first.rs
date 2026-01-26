@@ -80,7 +80,7 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
     );
     assert!(
         snap_lines[1].starts_with("think_card"),
-        "when where=unknown, snapshot must suggest a canonical anchor attach command"
+        "when anchor is missing, snapshot must suggest a canonical anchor attach command"
     );
     assert!(
         snap_lines[1].contains("v:canon"),

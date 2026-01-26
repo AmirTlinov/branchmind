@@ -1,10 +1,15 @@
 #![forbid(unsafe_code)]
 
+use super::super::strict_gate::{StrictGateContext, enforce_strict_reasoning_gate};
 use crate::*;
 use serde_json::{Value, json};
 
 impl McpServer {
     pub(crate) fn tool_tasks_close_step(&mut self, args: Value) -> Value {
+        self.close_step_internal(args, true)
+    }
+
+    pub(crate) fn close_step_internal(&mut self, args: Value, enforce_strict: bool) -> Value {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
         };
@@ -35,6 +40,24 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+
+        if enforce_strict
+            && let Err(resp) = enforce_strict_reasoning_gate(StrictGateContext {
+                server: self,
+                workspace: &workspace,
+                task_id: &task_id,
+                step_id: step_id.as_deref(),
+                path: path.as_ref(),
+                args_obj,
+                reasoning_override: None,
+                allow_override: false,
+                close_args_obj: None,
+                warnings: None,
+                note_event: None,
+            })
+        {
+            return resp;
+        }
 
         let result = self.store.step_close(
             &workspace,

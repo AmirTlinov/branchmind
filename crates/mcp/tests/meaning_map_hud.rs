@@ -35,10 +35,14 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
         snap1_state.contains("pack=mindpack@"),
         "snapshot should surface pack=mindpack@<seq> in the state line for resume-by-meaning, got:\n{snap1_text}"
     );
+    assert!(
+        snap1_state.contains("where=a:storage"),
+        "snapshot state line should include fallback where=a:storage (derived from title), got:\n{snap1_text}"
+    );
     let snap1_lines = snap1_text.lines().collect::<Vec<_>>();
     assert!(
         snap1_lines.iter().any(|l| l.starts_with("think_card")),
-        "when where=unknown, snapshot should prompt a think_card command, got:\n{snap1_text}"
+        "when anchor is missing, snapshot should prompt a think_card command, got:\n{snap1_text}"
     );
     let think_line = snap1_lines
         .iter()

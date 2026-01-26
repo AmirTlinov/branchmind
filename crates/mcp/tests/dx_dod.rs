@@ -81,11 +81,15 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
     );
     assert!(
         start_lines[0].contains("focus TASK-") && start_lines[0].contains("| next map"),
-        "when where=unknown, start state line should prefer next map hint"
+        "when anchor is missing, start state line should prefer next map hint"
     );
     assert!(
         start_lines[0].contains("| where="),
-        "start state line should include where=... (explicit, even when unknown)"
+        "start state line should include where=... (explicit, even when anchor missing)"
+    );
+    assert!(
+        start_lines[0].contains("where=a:"),
+        "start state line should include a fallback where=a:* anchor"
     );
     assert!(
         start_lines[0].contains("| ref="),
@@ -93,7 +97,7 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
     );
     assert!(
         start_lines[1].starts_with("think_card"),
-        "when where=unknown, start should suggest a canonical anchor attach command"
+        "when anchor is missing, start should suggest a canonical anchor attach command"
     );
     assert!(
         !start_lines[1].contains("workspace="),
@@ -124,11 +128,15 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
     );
     assert!(
         snap_lines[0].contains("focus TASK-") && snap_lines[0].contains("| next map"),
-        "when where=unknown, snapshot state line should prefer next map hint"
+        "when anchor is missing, snapshot state line should prefer next map hint"
     );
     assert!(
         snap_lines[0].contains("| where="),
-        "snapshot state line should include where=... (explicit, even when unknown)"
+        "snapshot state line should include where=... (explicit, even when anchor missing)"
+    );
+    assert!(
+        snap_lines[0].contains("where=a:"),
+        "snapshot state line should include a fallback where=a:* anchor"
     );
     assert!(
         snap_lines[0].contains("| ref="),
@@ -136,7 +144,7 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
     );
     assert!(
         snap_lines[1].starts_with("think_card"),
-        "when where=unknown, snapshot should suggest a canonical anchor attach command"
+        "when anchor is missing, snapshot should suggest a canonical anchor attach command"
     );
     assert!(
         !snap_lines[1].contains("workspace="),
