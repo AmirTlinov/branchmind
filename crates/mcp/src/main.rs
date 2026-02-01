@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
 mod entry;
+mod ops;
 mod server;
 mod support;
 mod tools;
+mod tools_v1;
 mod viewer;
 
 pub(crate) use support::*;

@@ -70,13 +70,19 @@ fn tasks_focus_and_radar_smoke() {
             .and_then(|v| v.as_str()),
         Some("INVALID_INPUT")
     );
-    let suggestions = radar_without_focus_text
-        .get("suggestions")
+    let actions = radar_without_focus_text
+        .get("actions")
         .and_then(|v| v.as_array())
-        .expect("suggestions");
-    assert_eq!(
-        suggestions[0].get("target").and_then(|v| v.as_str()),
-        Some("tasks_snapshot")
+        .expect("actions");
+    assert!(
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("tasks")
+                && a.get("args")
+                    .and_then(|v| v.get("cmd"))
+                    .and_then(|v| v.as_str())
+                    == Some("tasks.snapshot")
+        }),
+        "tasks_radar without focus must include a tasks.snapshot action"
     );
 
     let focus_set = server.request(json!({

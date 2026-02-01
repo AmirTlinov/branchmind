@@ -98,25 +98,40 @@ impl SqliteStore {
             path: path.clone(),
         };
         let event_payload_json = build_step_deleted_payload(task_id, &step_ref);
-        let event = insert_event_tx(
+        let (event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.to_string()),
-            Some(path.clone()),
-            "step_deleted",
-            &event_payload_json,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "step_deleted",
+                payload_json: &event_payload_json,
+            },
         )?;
 
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
-        )?;
+        let mut graph_touched = false;
+        for step_id in step_ids.iter() {
+            let node_id = step_graph_node_id(step_id);
+            graph_touched |= Self::project_task_graph_delete_node_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref,
+                &event,
+                &node_id,
+                now_ms,
+            )?;
+        }
+        if graph_touched {
+            touch_document_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref.branch,
+                &reasoning_ref.graph_doc,
+                now_ms,
+            )?;
+        }
 
         if record_undo {
             ops_history_insert_tx(
@@ -162,8 +177,7 @@ impl SqliteStore {
                 "task must start with PLAN- or TASK-",
             ));
         };
-
-        if matches!(kind, TaskKind::Plan) {
+        let (event_payload_json, event) = if matches!(kind, TaskKind::Plan) {
             let exists = tx
                 .query_row(
                     "SELECT 1 FROM plans WHERE workspace=?1 AND id=?2",
@@ -184,26 +198,51 @@ impl SqliteStore {
                 rows.collect::<Result<Vec<_>, _>>()?
             };
             for task_id in task_ids.iter() {
+                let step_ids = collect_task_step_ids_tx(&tx, workspace.as_str(), task_id)?;
                 delete_task_rows_tx(&tx, workspace.as_str(), task_id)?;
                 let event_payload_json = build_task_deleted_payload(task_id, TaskKind::Task);
-                let task_event = insert_event_tx(
+                let (task_event, reasoning_ref) = emit_task_event_tx(
                     &tx,
-                    workspace.as_str(),
-                    now_ms,
-                    Some(task_id.to_string()),
-                    None,
-                    "task_deleted",
-                    &event_payload_json,
+                    TaskEventEmitTxArgs {
+                        workspace,
+                        now_ms,
+                        task_id,
+                        kind: TaskKind::Task,
+                        path: None,
+                        event_type: "task_deleted",
+                        payload_json: &event_payload_json,
+                    },
                 )?;
-                let reasoning_ref =
-                    ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
-                let _ = ingest_task_event_tx(
+                let mut graph_touched = false;
+                for step_id in step_ids.iter() {
+                    let node_id = step_graph_node_id(step_id);
+                    graph_touched |= Self::project_task_graph_delete_node_tx(
+                        &tx,
+                        workspace.as_str(),
+                        &reasoning_ref,
+                        &task_event,
+                        &node_id,
+                        now_ms,
+                    )?;
+                }
+                let task_node_id = task_graph_node_id(task_id);
+                graph_touched |= Self::project_task_graph_delete_node_tx(
                     &tx,
                     workspace.as_str(),
-                    &reasoning_ref.branch,
-                    &reasoning_ref.trace_doc,
+                    &reasoning_ref,
                     &task_event,
+                    &task_node_id,
+                    now_ms,
                 )?;
+                if graph_touched {
+                    touch_document_tx(
+                        &tx,
+                        workspace.as_str(),
+                        &reasoning_ref.branch,
+                        &reasoning_ref.graph_doc,
+                        now_ms,
+                    )?;
+                }
             }
 
             tx.execute(
@@ -238,6 +277,21 @@ impl SqliteStore {
                 "DELETE FROM plans WHERE workspace=?1 AND id=?2",
                 params![workspace.as_str(), id],
             )?;
+
+            let payload = build_task_deleted_payload(id, kind);
+            let (plan_event, _reasoning_ref) = emit_task_event_tx(
+                &tx,
+                TaskEventEmitTxArgs {
+                    workspace,
+                    now_ms,
+                    task_id: id,
+                    kind,
+                    path: None,
+                    event_type: "task_deleted",
+                    payload_json: &payload,
+                },
+            )?;
+            (payload, plan_event)
         } else {
             let exists = tx
                 .query_row(
@@ -250,28 +304,53 @@ impl SqliteStore {
             if !exists {
                 return Err(StoreError::UnknownId);
             }
+            let step_ids = collect_task_step_ids_tx(&tx, workspace.as_str(), id)?;
             delete_task_rows_tx(&tx, workspace.as_str(), id)?;
-        }
-
-        let event_payload_json = build_task_deleted_payload(id, kind);
-        let event = insert_event_tx(
-            &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(id.to_string()),
-            None,
-            "task_deleted",
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, id, kind, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
-        )?;
+            let payload = build_task_deleted_payload(id, kind);
+            let (task_event, reasoning_ref) = emit_task_event_tx(
+                &tx,
+                TaskEventEmitTxArgs {
+                    workspace,
+                    now_ms,
+                    task_id: id,
+                    kind,
+                    path: None,
+                    event_type: "task_deleted",
+                    payload_json: &payload,
+                },
+            )?;
+            let mut graph_touched = false;
+            for step_id in step_ids.iter() {
+                let node_id = step_graph_node_id(step_id);
+                graph_touched |= Self::project_task_graph_delete_node_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &reasoning_ref,
+                    &task_event,
+                    &node_id,
+                    now_ms,
+                )?;
+            }
+            let task_node_id = task_graph_node_id(id);
+            graph_touched |= Self::project_task_graph_delete_node_tx(
+                &tx,
+                workspace.as_str(),
+                &reasoning_ref,
+                &task_event,
+                &task_node_id,
+                now_ms,
+            )?;
+            if graph_touched {
+                touch_document_tx(
+                    &tx,
+                    workspace.as_str(),
+                    &reasoning_ref.branch,
+                    &reasoning_ref.graph_doc,
+                    now_ms,
+                )?;
+            }
+            (payload, task_event)
+        };
 
         if record_undo {
             ops_history_insert_tx(

@@ -118,10 +118,59 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let meta_json = args_obj
+        let executor = match optional_string(args_obj, "executor") {
+            Ok(v) => v.unwrap_or_else(|| "auto".to_string()),
+            Err(resp) => return resp,
+        };
+        let executor_profile = match optional_string(args_obj, "executor_profile") {
+            Ok(v) => v.unwrap_or_else(|| "fast".to_string()),
+            Err(resp) => return resp,
+        };
+        let expected_artifacts = match optional_string_array(args_obj, "expected_artifacts") {
+            Ok(v) => v.unwrap_or_default(),
+            Err(resp) => return resp,
+        };
+        let policy = args_obj.get("policy").cloned().unwrap_or(Value::Null);
+
+        let mut meta_obj = args_obj
             .get("meta")
             .cloned()
-            .and_then(|v| serde_json::to_string(&v).ok());
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        meta_obj.insert("executor".to_string(), Value::String(executor.clone()));
+        meta_obj.insert(
+            "executor_profile".to_string(),
+            Value::String(executor_profile.clone()),
+        );
+        if !expected_artifacts.is_empty() {
+            meta_obj.insert(
+                "expected_artifacts".to_string(),
+                Value::Array(
+                    expected_artifacts
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        if !policy.is_null() {
+            meta_obj.insert("policy".to_string(), policy.clone());
+        }
+
+        if executor == "auto"
+            && let Some(selection) = auto_route_executor(
+                self,
+                &workspace,
+                &executor_profile,
+                &expected_artifacts,
+                &policy,
+            )
+        {
+            meta_obj.insert("routing".to_string(), selection);
+        }
+
+        let meta_json = serde_json::to_string(&Value::Object(meta_obj)).ok();
 
         let created = match self.store.job_create(
             &workspace,
@@ -949,10 +998,33 @@ impl McpServer {
             Ok(v) => v.unwrap_or(20_000).clamp(1_000, 300_000) as u64,
             Err(resp) => return resp,
         };
-        let meta_json = args_obj
+        let mut meta_obj = args_obj
             .get("meta")
             .cloned()
-            .and_then(|v| serde_json::to_string(&v).ok());
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        if let Some(executors) = args_obj.get("executors").and_then(|v| v.as_array()) {
+            meta_obj.insert("executors".to_string(), Value::Array(executors.clone()));
+        }
+        if let Some(profiles) = args_obj.get("profiles").and_then(|v| v.as_array()) {
+            meta_obj.insert("profiles".to_string(), Value::Array(profiles.clone()));
+        }
+        if let Some(artifacts) = args_obj
+            .get("supports_artifacts")
+            .and_then(|v| v.as_array())
+        {
+            meta_obj.insert(
+                "supports_artifacts".to_string(),
+                Value::Array(artifacts.clone()),
+            );
+        }
+        if let Some(max_parallel) = args_obj.get("max_parallel") {
+            meta_obj.insert("max_parallel".to_string(), max_parallel.clone());
+        }
+        if let Some(sandbox_policy) = args_obj.get("sandbox_policy") {
+            meta_obj.insert("sandbox_policy".to_string(), sandbox_policy.clone());
+        }
+        let meta_json = serde_json::to_string(&Value::Object(meta_obj)).ok();
 
         let lease = match self.store.runner_lease_upsert(
             &workspace,
@@ -1583,4 +1655,160 @@ impl McpServer {
         });
         ai_ok("tasks_jobs_requeue", result)
     }
+}
+
+#[derive(Default)]
+struct ExecutorPolicy {
+    prefer: Vec<String>,
+    forbid: HashSet<String>,
+    min_profile: Option<String>,
+}
+
+fn parse_policy(value: &Value) -> ExecutorPolicy {
+    let mut policy = ExecutorPolicy::default();
+    let Some(obj) = value.as_object() else {
+        return policy;
+    };
+    if let Some(prefer) = obj.get("prefer").and_then(|v| v.as_array()) {
+        policy.prefer = prefer
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+    }
+    if let Some(forbid) = obj.get("forbid").and_then(|v| v.as_array()) {
+        policy.forbid = forbid
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect::<HashSet<_>>();
+    }
+    if let Some(min_profile) = obj.get("min_profile").and_then(|v| v.as_str()) {
+        policy.min_profile = Some(min_profile.to_string());
+    }
+    policy
+}
+
+fn profile_rank(profile: &str) -> u8 {
+    match profile.to_ascii_lowercase().as_str() {
+        "fast" => 0,
+        "deep" => 1,
+        "audit" => 2,
+        _ => 0,
+    }
+}
+
+fn auto_route_executor(
+    server: &mut McpServer,
+    workspace: &WorkspaceId,
+    executor_profile: &str,
+    expected_artifacts: &[String],
+    policy_value: &Value,
+) -> Option<Value> {
+    let policy = parse_policy(policy_value);
+    let now_ms = crate::support::now_ms_i64();
+    let list = server
+        .store
+        .runner_leases_list_active(
+            workspace,
+            now_ms,
+            bm_storage::RunnerLeasesListRequest {
+                limit: 50,
+                status: None,
+            },
+        )
+        .ok()?;
+
+    let mut candidates = Vec::<(u8, u8, String, String)>::new(); // (prefer_rank, availability_rank, runner_id, executor)
+    for runner in list.runners {
+        let meta = server
+            .store
+            .runner_lease_get(
+                workspace,
+                bm_storage::RunnerLeaseGetRequest {
+                    runner_id: runner.runner_id.clone(),
+                },
+            )
+            .ok()
+            .flatten()
+            .and_then(|row| row.meta_json)
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .unwrap_or(Value::Null);
+        let executors = meta
+            .get("executors")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec!["codex".to_string()]);
+        let profiles = meta
+            .get("profiles")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec!["fast".to_string(), "deep".to_string(), "audit".to_string()]);
+        let supports_artifacts = meta
+            .get("supports_artifacts")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let availability_rank = if runner.status == "idle" { 0 } else { 1 };
+        for executor in executors {
+            if policy.forbid.contains(&executor) {
+                continue;
+            }
+            if !profiles.iter().any(|p| p == executor_profile) {
+                continue;
+            }
+            if let Some(min_profile) = &policy.min_profile
+                && profile_rank(executor_profile) < profile_rank(min_profile)
+            {
+                continue;
+            }
+            if !expected_artifacts.is_empty() && !supports_artifacts.is_empty() {
+                let missing = expected_artifacts
+                    .iter()
+                    .any(|item| !supports_artifacts.iter().any(|v| v == item));
+                if missing {
+                    continue;
+                }
+            }
+            let prefer_rank = policy
+                .prefer
+                .iter()
+                .position(|v| v == &executor)
+                .unwrap_or(usize::MAX) as u8;
+            candidates.push((
+                prefer_rank,
+                availability_rank,
+                runner.runner_id.clone(),
+                executor,
+            ));
+        }
+    }
+
+    candidates.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.cmp(&b.1))
+            .then(a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))
+    });
+    let (_, _, runner_id, executor) = candidates.first()?.clone();
+    Some(json!({
+        "selected_executor": executor,
+        "selected_runner_id": runner_id,
+        "policy": {
+            "prefer": policy.prefer,
+            "forbid": policy.forbid.iter().cloned().collect::<Vec<_>>(),
+            "min_profile": policy.min_profile
+        }
+    }))
 }

@@ -55,6 +55,21 @@ Properties:
 To make the system a **single organism**, task mutations project into the task's `graph_doc`
 atomically and deterministically.
 
+Projection rules:
+
+- Node ids:
+  - Task: `task:<TASK-###>`
+  - Step: `step:<STEP-XXXXXXXX>`
+- Node types: `task`, `step`.
+- Edge type: `contains` (task → step, parent step → child step).
+- Step node status is derived from step completion (`open` | `done`); task nodes omit status in v0.
+- Deletions emit a `graph_node_delete` op and write tombstones for the node **and** all connected
+  edges (no dangling edges in the effective view).
+- Idempotency is guaranteed via `source_event_id = event_id + graph_key` (nodes/edges) and
+  `event_id + node_delete + id` (deletes).
+- Graph writes happen in the **same transaction** as the task event and trace ingestion,
+  atomically and deterministically.
+
 ### Namespace (reserved)
 
 - Task node id: `task:<TASK-###>`

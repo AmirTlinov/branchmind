@@ -75,6 +75,36 @@ impl SqliteStore {
         )
     }
 
+    pub(in crate::store) fn project_task_graph_delete_node_tx(
+        tx: &Transaction<'_>,
+        workspace: &str,
+        reasoning: &ReasoningRefRow,
+        event: &EventRow,
+        node_id: &str,
+        now_ms: i64,
+    ) -> Result<bool, StoreError> {
+        ensure_document_tx(
+            tx,
+            workspace,
+            &reasoning.branch,
+            &reasoning.graph_doc,
+            DocumentKind::Graph.as_str(),
+            now_ms,
+        )?;
+        let source_event_id = format!("task_graph:{}:node_delete:{node_id}", event.event_id());
+        graph_delete_node_tx(
+            tx,
+            GraphNodeDeleteTxArgs {
+                workspace,
+                branch: &reasoning.branch,
+                doc: &reasoning.graph_doc,
+                now_ms,
+                node_id,
+                source_event_id: &source_event_id,
+            },
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in crate::store) fn project_task_graph_step_node_tx(
         tx: &Transaction<'_>,

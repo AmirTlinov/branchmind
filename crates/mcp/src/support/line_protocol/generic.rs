@@ -4,6 +4,7 @@ use crate::Toolset;
 use serde_json::Value;
 
 use super::TAG_ERROR;
+use super::actions::append_actions_as_commands_limited;
 use super::util::{append_suggestions_as_commands_limited, append_warnings_as_warnings};
 
 pub(super) fn render_generic_lines(
@@ -28,7 +29,15 @@ pub(super) fn render_generic_lines(
         }
         // Flagship invariant: keep recovery commands minimal.
         // If progressive disclosure is required, the server puts that first.
-        append_suggestions_as_commands_limited(&mut lines, response, 2);
+        let has_suggestions = response
+            .get("suggestions")
+            .and_then(|v| v.as_array())
+            .is_some_and(|arr| !arr.is_empty());
+        if has_suggestions {
+            append_suggestions_as_commands_limited(&mut lines, response, 2);
+        } else {
+            append_actions_as_commands_limited(&mut lines, response, 2);
+        }
         return lines.join("\n");
     }
 
@@ -45,9 +54,9 @@ pub(super) fn render_generic_lines(
     } else {
         lines.push(format!("intent={intent}"));
     }
-    // Generic fallback: let the agent discover the appropriate tool surface without
-    // teaching "switch to json" as a habit.
-    lines.push("tools/list toolset=full".to_string());
+    // Generic fallback: keep the next move portal-first. The v1 surface is always 10 tools,
+    // so `tools/list toolset=full` is no longer a meaningful disclosure mechanism.
+    lines.push("status".to_string());
     append_warnings_as_warnings(&mut lines, response);
     lines.join("\n")
 }

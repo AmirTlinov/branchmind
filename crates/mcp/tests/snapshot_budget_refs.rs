@@ -70,14 +70,14 @@ fn tasks_snapshot_budget_truncation_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000, "refs": true } }
+        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000, "refs": true, "fmt": "lines" } }
     }));
     let text = extract_tool_text_str(&snapshot);
 
     assert!(
         text.lines()
             .any(|l| l.starts_with("WARNING: BUDGET_TRUNCATED")),
-        "expected BUDGET_TRUNCATED warning when max_chars is tight"
+        "expected BUDGET_TRUNCATED warning when max_chars is tight, got:\n{text}"
     );
 
     let ref_pos = text

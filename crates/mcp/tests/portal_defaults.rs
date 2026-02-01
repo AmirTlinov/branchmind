@@ -47,7 +47,7 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "daily portal status should not include line protocol prefixes for content lines"
     );
     assert!(
-        status_result.contains("tasks_snapshot"),
+        status_result.contains("cmd=tasks.snapshot"),
         "daily portal status must advertise a low-noise next action entrypoint"
     );
 
@@ -89,11 +89,11 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "daily portal must keep content lines unprefixed"
     );
     assert!(
-        start_result.contains("tasks_macro_close_step"),
+        start_result.contains("cmd=tasks.macro.close.step"),
         "daily portal must provide a low-noise next action command"
     );
     assert!(
-        start_result.contains("checkpoints=gate"),
+        start_result.contains("\"checkpoints\":\"gate\""),
         "portal next action must be copy/paste-safe (default checkpoints=gate)"
     );
     assert!(
@@ -133,11 +133,11 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "daily snapshot must keep content lines unprefixed"
     );
     assert!(
-        snapshot_result.contains("tasks_macro_close_step"),
+        snapshot_result.contains("cmd=tasks.macro.close.step"),
         "daily snapshot must provide a low-noise next action command"
     );
     assert!(
-        snapshot_result.contains("checkpoints=gate"),
+        snapshot_result.contains("\"checkpoints\":\"gate\""),
         "snapshot next action must be copy/paste-safe (default checkpoints=gate)"
     );
     assert!(
@@ -361,12 +361,13 @@ fn portal_disclosure_commands_use_args_hint_for_hidden_actions() {
 
     let text = extract_tool_text_str(&snapshot);
     assert!(
-        text.contains("tools/list toolset=full"),
-        "hidden capsule action should provide a fast full-disclosure command"
+        text.lines()
+            .any(|l| l.starts_with("tasks ") && l.contains("cmd=tasks.plan.decompose")),
+        "hidden capsule action should provide a fast decompose command via the tasks portal"
     );
     assert!(
-        text.contains("tasks_decompose") && text.contains("steps=") && text.contains("task="),
-        "hidden capsule action must include args_hint so the agent can copy/paste the next command"
+        text.contains("\"task\"") && text.contains("\"steps\""),
+        "hidden capsule action must include task + steps args so the agent can copy/paste the next command"
     );
     assert!(
         !text.contains("\n\n"),
@@ -401,11 +402,11 @@ fn portal_recovery_unknown_id_injects_snapshot_and_start() {
         "should return a typed unknown-id error"
     );
     assert!(
-        text.contains("tasks_snapshot"),
+        text.contains("cmd=tasks.snapshot"),
         "should offer a portal snapshot recovery command"
     );
     assert!(
-        text.contains("tasks_macro_start"),
+        text.contains("cmd=tasks.macro.start"),
         "should offer a safe portal fallback to re-establish focus"
     );
     assert!(
@@ -442,11 +443,11 @@ fn hidden_tasks_unknown_id_still_gets_portal_recovery() {
         "should return a typed unknown-id error"
     );
     assert!(
-        text.contains("tasks_snapshot"),
+        text.contains("cmd=tasks.snapshot"),
         "should provide a portal snapshot recovery command"
     );
     assert!(
-        text.contains("tasks_macro_start"),
+        text.contains("cmd=tasks.macro.start"),
         "should provide a portal fallback to restore focus"
     );
     assert!(
@@ -493,9 +494,9 @@ fn portal_recovery_macro_close_step_plan_target_suggests_macro_start() {
         "should be a typed invalid-input error for plan targets"
     );
     assert!(
-        text.contains("tasks_macro_start")
-            && text.contains("plan=")
-            && text.contains("task_title="),
+        text.contains("cmd=tasks.macro.start")
+            && text.contains("\"plan\"")
+            && text.contains("\"task_title\""),
         "should suggest creating a task under the plan via the portal"
     );
     assert!(

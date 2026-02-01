@@ -37,7 +37,7 @@ fn tasks_snapshot_delta_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "delta": true } }
+        "params": { "name": "tasks_snapshot", "arguments": { "delta": true, "fmt": "lines" } }
     }));
     let seeded_text = extract_tool_text_str(&seeded);
     assert!(
@@ -87,7 +87,7 @@ fn tasks_snapshot_delta_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "delta": true } }
+        "params": { "name": "tasks_snapshot", "arguments": { "delta": true, "fmt": "lines" } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

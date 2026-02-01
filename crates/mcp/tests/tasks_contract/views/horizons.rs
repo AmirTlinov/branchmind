@@ -59,7 +59,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_without_listing_backlog() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws_horizons", "plan": plan_id, "max_chars": 2000 } }
+        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws_horizons", "plan": plan_id, "max_chars": 2000, "fmt": "lines" } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

@@ -58,7 +58,7 @@ fn tasks_snapshot_auto_truncation_emits_openable_refs_without_budget_opt_in() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": {} }
+        "params": { "name": "tasks_snapshot", "arguments": { "fmt": "lines" } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

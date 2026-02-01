@@ -33,8 +33,8 @@ fn default_budgets_apply_to_branchmind_show_when_omitted() {
         .expect("budget.max_chars");
 
     assert_eq!(
-        max, 16_000,
-        "default show max_chars should be injected as a bounded, generous payload cap"
+        max, 20_000,
+        "default show max_chars should follow the v1 default budget profile"
     );
 }
 
@@ -88,7 +88,7 @@ fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
         )
     });
     assert!(
-        !has_budget_warning,
-        "auto-escalation should remove BUDGET_* warnings for large-but-reasonable payloads (max_chars={max}), got: {warnings:?}"
+        has_budget_warning,
+        "hard budget caps should surface truncation warnings (max_chars={max}), got: {warnings:?}"
     );
 }

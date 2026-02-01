@@ -1,5 +1,9 @@
 # Contracts — Task Execution Surface (v0)
 
+> ⚠️ **v1 surface note:** In contract **v1**, legacy tool names like `tasks_snapshot` / `tasks_macro_*`
+> are **rejected** (`UNKNOWN_TOOL`). Use the **`tasks` portal** with `op="call"` + `cmd` (e.g.
+> `cmd="tasks.snapshot"`, `cmd="tasks.macro.start"`). See `V1_OVERVIEW.md` + `V1_COMMANDS.md`.
+
 This server provides a task execution API designed for AI agents:
 
 - explicit targeting (no silent mis-target),
@@ -34,6 +38,12 @@ Some task flows can optionally switch into a stricter reasoning discipline.
     (`status=closed|done|resolved`). This prevents accidental bypass via status drift (e.g. “accepted”).
 
 Determinism rules (MUST):
+
+- Task operations are deterministic with respect to inputs + persisted workspace state (no network I/O, randomness, or ambient process state).
+- Timestamps are outputs only: they may advance with the store clock, but must not influence control flow beyond persisted ordering.
+- Event IDs are derived from the monotonic event sequence; ordering of events/steps/checkpoints is stable.
+- Pagination/truncation must be repeatable for identical inputs and state, and truncation must be explicitly signaled.
+- Strict gating relies only on persisted artifacts (notes/graph/trace) and must return a concrete recovery action.
 
 - Strict gating must depend only on persisted artifacts (graph + trace + receipts); no wall clock and no network.
 - Recovery must be portal-first: return at least one concrete next action suggestion (typically `think_card`) with

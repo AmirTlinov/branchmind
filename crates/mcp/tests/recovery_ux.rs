@@ -91,34 +91,34 @@ fn recovery_ux_daily_replaces_hidden_suggestions_with_portal() {
         Some("CHECKPOINTS_NOT_CONFIRMED")
     );
 
-    let suggestions = done_text
-        .get("suggestions")
+    let actions = done_text
+        .get("actions")
         .and_then(|v| v.as_array())
-        .expect("error must include suggestions");
+        .expect("error must include actions");
     assert_eq!(
-        suggestions.len(),
+        actions.len(),
         1,
-        "daily toolset should return one portal recovery suggestion"
+        "daily toolset should return one portal recovery action"
     );
     assert_eq!(
-        suggestions[0].get("action").and_then(|v| v.as_str()),
-        Some("call_tool")
+        actions[0].get("tool").and_then(|v| v.as_str()),
+        Some("tasks")
     );
     assert_eq!(
-        suggestions[0].get("target").and_then(|v| v.as_str()),
-        Some("tasks_macro_close_step")
+        actions[0]
+            .get("args")
+            .and_then(|v| v.get("cmd"))
+            .and_then(|v| v.as_str()),
+        Some("tasks.macro.close.step")
     );
     assert!(
-        !suggestions
-            .iter()
-            .any(|s| s.get("target").and_then(|v| v.as_str()) == Some("tasks_verify")),
-        "hidden low-level suggestions must be replaced, not duplicated"
-    );
-    assert!(
-        !suggestions
-            .iter()
-            .any(|s| s.get("action").and_then(|v| v.as_str()) == Some("call_method")),
-        "daily toolset should not require progressive disclosure for portal recovery"
+        !actions.iter().any(|a| {
+            a.get("args")
+                .and_then(|v| v.get("cmd"))
+                .and_then(|v| v.as_str())
+                == Some("tasks.verify")
+        }),
+        "low-level cmd suggestions must be replaced, not duplicated"
     );
 }
 
@@ -207,44 +207,34 @@ fn recovery_ux_core_adds_progressive_disclosure_for_daily_portal_recovery() {
         Some("CHECKPOINTS_NOT_CONFIRMED")
     );
 
-    let suggestions = done_text
-        .get("suggestions")
+    let actions = done_text
+        .get("actions")
         .and_then(|v| v.as_array())
-        .expect("error must include suggestions");
+        .expect("error must include actions");
 
-    let disclosure_count = suggestions
-        .iter()
-        .filter(|s| {
-            s.get("action").and_then(|v| v.as_str()) == Some("call_method")
-                && s.get("method").and_then(|v| v.as_str()) == Some("tools/list")
-        })
-        .count();
     assert_eq!(
-        disclosure_count, 1,
-        "core toolset should include exactly one disclosure suggestion"
+        actions.len(),
+        1,
+        "core toolset should provide a single portal recovery action"
+    );
+    assert_eq!(
+        actions[0].get("tool").and_then(|v| v.as_str()),
+        Some("tasks")
+    );
+    assert_eq!(
+        actions[0]
+            .get("args")
+            .and_then(|v| v.get("cmd"))
+            .and_then(|v| v.as_str()),
+        Some("tasks.macro.close.step")
     );
     assert!(
-        suggestions.iter().any(|s| {
-            s.get("action").and_then(|v| v.as_str()) == Some("call_method")
-                && s.get("method").and_then(|v| v.as_str()) == Some("tools/list")
-                && s.get("params")
-                    .and_then(|v| v.get("toolset"))
-                    .and_then(|v| v.as_str())
-                    == Some("daily")
+        !actions.iter().any(|a| {
+            a.get("args")
+                .and_then(|v| v.get("cmd"))
+                .and_then(|v| v.as_str())
+                == Some("tasks.verify")
         }),
-        "core toolset must disclose daily tier for portal recovery"
-    );
-    assert!(
-        suggestions.iter().any(|s| {
-            s.get("action").and_then(|v| v.as_str()) == Some("call_tool")
-                && s.get("target").and_then(|v| v.as_str()) == Some("tasks_macro_close_step")
-        }),
-        "core toolset must provide a portal recovery action"
-    );
-    assert!(
-        !suggestions
-            .iter()
-            .any(|s| s.get("target").and_then(|v| v.as_str()) == Some("tasks_verify")),
-        "hidden low-level suggestions must be replaced, not duplicated"
+        "low-level cmd suggestions must be replaced, not duplicated"
     );
 }

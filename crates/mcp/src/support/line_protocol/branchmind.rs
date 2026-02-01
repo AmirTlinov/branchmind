@@ -4,7 +4,7 @@ use crate::Toolset;
 use serde_json::Value;
 
 use super::TAG_MORE;
-use super::util::{append_warnings_as_warnings, opt_str, truncate_line};
+use super::util::{append_warnings_as_warnings, opt_str, render_kv_args, truncate_line};
 
 pub(super) fn render_branchmind_status_lines(
     _args: &Value,
@@ -102,7 +102,32 @@ pub(super) fn render_branchmind_status_lines(
 
     // The portal output should remain tiny. Prefer a safe, read-only next step that can be run
     // immediately without extra parameters.
-    lines.push("tasks_snapshot".to_string());
+    //
+    // Strict v1 surface: render the snapshot via the `tasks` portal (no legacy tool names).
+    let mut snapshot_cmd: Option<String> = None;
+    if let Some(actions) = response.get("actions").and_then(|v| v.as_array()) {
+        for a in actions {
+            let tool = a.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+            if tool != "tasks" {
+                continue;
+            }
+            let args = a.get("args").unwrap_or(&Value::Null);
+            let cmd = args.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+            if cmd != "tasks.snapshot" {
+                continue;
+            }
+            let args_str = render_kv_args(args).unwrap_or_default();
+            snapshot_cmd = Some(if args_str.is_empty() {
+                "tasks".to_string()
+            } else {
+                format!("tasks {args_str}")
+            });
+            break;
+        }
+    }
+    lines.push(
+        snapshot_cmd.unwrap_or_else(|| "tasks op=call cmd=tasks.snapshot args={}".to_string()),
+    );
     append_warnings_as_warnings(&mut lines, response);
     lines.join("\n")
 }

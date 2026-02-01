@@ -213,19 +213,19 @@ fn tasks_macro_finish_suggests_closing_steps_when_open() {
         "macro_finish must fail when steps are still open"
     );
 
-    let suggested_tools = finish_text
-        .get("suggestions")
+    let actions = finish_text
+        .get("actions")
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.get("target").and_then(|v| v.as_str()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
+        .expect("actions");
     assert!(
-        suggested_tools.contains(&"tasks_macro_close_step"),
-        "macro_finish should suggest tasks_macro_close_step recovery"
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("tasks")
+                && a.get("args")
+                    .and_then(|v| v.get("cmd"))
+                    .and_then(|v| v.as_str())
+                    == Some("tasks.macro.close.step")
+        }),
+        "macro_finish should include tasks.macro.close.step recovery action"
     );
 }
 

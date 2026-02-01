@@ -16,3 +16,6 @@ mod transcripts;
 
 pub(crate) use definitions::branchmind_tool_definitions;
 pub(crate) use dispatch::dispatch_branchmind_tool;
+
+#[cfg(test)]
+pub(crate) use dispatch::dispatch_branchmind_tool_names;

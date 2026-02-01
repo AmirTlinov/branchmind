@@ -117,13 +117,18 @@ fn branchmind_macro_branch_note_can_append_without_creating_branch() {
         "method": "tools/call",
         "params": { "name": "status", "arguments": { "workspace": "ws_note_only" } }
     }));
-    let status_text = extract_tool_text_str(&status);
-    assert!(
-        status_text
-            .lines()
-            .next()
-            .unwrap_or("")
-            .contains("checkout=main"),
+    let status_json = extract_tool_text(&status);
+    assert_eq!(
+        status_json.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "status portal must succeed"
+    );
+    assert_eq!(
+        status_json
+            .get("result")
+            .and_then(|v| v.get("checkout"))
+            .and_then(|v| v.as_str()),
+        Some("main"),
         "note-only mode should switch checkout to main via from=main"
     );
 }
@@ -162,22 +167,61 @@ fn branchmind_macro_branch_note_unknown_from_is_recoverable_in_full() {
         }
     }));
 
-    let text = extract_tool_text_str(&bad);
-    assert!(
-        text.contains("ERROR: UNKNOWN_ID") && text.contains("Unknown branch"),
+    let out = extract_tool_text(&bad);
+    assert_eq!(
+        out.get("success").and_then(|v| v.as_bool()),
+        Some(false),
+        "bad macro_branch_note must fail"
+    );
+    assert_eq!(
+        out.get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("UNKNOWN_ID"),
         "should return a typed unknown-branch error"
     );
     assert!(
-        text.contains("checkout=\""),
+        out.get("error")
+            .and_then(|v| v.get("message"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .contains("Unknown branch"),
+        "unknown-branch message should be present"
+    );
+    assert!(
+        out.get("error")
+            .and_then(|v| v.get("recovery"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .contains("checkout=\""),
         "recovery should mention checkout to stay copy/paste-friendly"
     );
+
+    let actions = out
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     assert!(
-        !text.contains("tools/list") && !text.contains("branch_list"),
-        "daily recovery must not require progressive disclosure for a simple note"
+        actions
+            .iter()
+            .any(|a| a.get("tool").and_then(|v| v.as_str()) == Some("think")),
+        "recovery should include a copy/paste retry action"
     );
     assert!(
-        text.contains("macro_branch_note content=\"note-only with checkout switch smoke\""),
-        "recovery must include a copy/paste-safe retry command (with quoting)"
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("think")
+                && a.get("args")
+                    .and_then(|v| v.get("cmd"))
+                    .and_then(|v| v.as_str())
+                    == Some("think.idea.branch.create")
+                && a.get("args")
+                    .and_then(|v| v.get("args"))
+                    .and_then(|v| v.get("content"))
+                    .and_then(|v| v.as_str())
+                    == Some("note-only with checkout switch smoke")
+        }),
+        "retry action must include the original content"
     );
 }
 
@@ -202,14 +246,20 @@ fn branchmind_macro_branch_note_reuses_existing_branch_when_name_exists() {
         !extract_tool_text_str(&first).starts_with("ERROR:"),
         "first macro_branch_note must succeed"
     );
-    let first_text = extract_tool_text_str(&first);
-    assert!(
-        first_text
-            .lines()
-            .next()
-            .unwrap_or("")
-            .starts_with("branch initiative/reuse"),
-        "first call should create the branch (line protocol: starts with `branch ...`)"
+    let first_json = extract_tool_text(&first);
+    assert_eq!(
+        first_json.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "first macro_branch_note must succeed"
+    );
+    assert_eq!(
+        first_json
+            .get("result")
+            .and_then(|v| v.get("branch"))
+            .and_then(|v| v.get("created"))
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "first call should create the branch"
     );
 
     let second = server.request(json!({
@@ -229,17 +279,19 @@ fn branchmind_macro_branch_note_reuses_existing_branch_when_name_exists() {
         !extract_tool_text_str(&second).starts_with("ERROR:"),
         "second macro_branch_note must succeed even when the branch already exists"
     );
-    let second_text = extract_tool_text_str(&second);
-    assert!(
-        second_text.contains("note committed") && second_text.contains("initiative/reuse"),
-        "second call should append a note on the existing branch (no conflict)"
+    let second_json = extract_tool_text(&second);
+    assert_eq!(
+        second_json.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "second macro_branch_note must succeed even when the branch already exists"
     );
-    assert!(
-        !second_text
-            .lines()
-            .next()
-            .unwrap_or("")
-            .starts_with("branch "),
+    assert_eq!(
+        second_json
+            .get("result")
+            .and_then(|v| v.get("branch"))
+            .and_then(|v| v.get("created"))
+            .and_then(|v| v.as_bool()),
+        Some(false),
         "second call must not claim it created a new branch"
     );
 }

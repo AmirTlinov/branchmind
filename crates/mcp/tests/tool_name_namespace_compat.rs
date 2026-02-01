@@ -11,7 +11,7 @@ fn tools_call_accepts_namespace_prefixed_names_for_interop() {
 
     let variants = ["status", "branchmind/status", "branchmind.status"];
     for (idx, name) in variants.iter().enumerate() {
-        let resp = server.request(json!({
+        let resp = server.request_raw(json!({
             "jsonrpc": "2.0",
             "id": 10 + idx as i64,
             "method": "tools/call",

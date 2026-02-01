@@ -2,7 +2,6 @@
 
 use crate::McpServer;
 use serde_json::Value;
-use std::collections::HashSet;
 
 impl McpServer {
     pub(super) fn preprocess_args(&mut self, name: &str, args: &mut Value) -> Option<Value> {
@@ -12,6 +11,58 @@ impl McpServer {
             .as_deref()
             .or(self.default_workspace.as_deref());
         let skip_workspace_injection = matches!(name, "workspace_use" | "workspace_reset");
+
+        // v1 portals: lift `workspace` / `fmt` out of the nested envelope so the
+        // legacy pipeline (workspace guards, line protocol formatting) continues to work.
+        //
+        // This must happen **before** default workspace injection; otherwise we could override
+        // an explicit inner workspace with the session default.
+        if crate::tools_v1::is_v1_tool(name) {
+            let inner_ws = args_obj
+                .get("args")
+                .and_then(|v| v.get("workspace"))
+                .cloned();
+            let inner_fmt = args_obj.get("args").and_then(|v| v.get("fmt")).cloned();
+
+            if !args_obj.contains_key("workspace")
+                && let Some(ws) = inner_ws
+            {
+                args_obj.insert("workspace".to_string(), ws);
+            }
+            if !args_obj.contains_key("fmt")
+                && let Some(fmt) = inner_fmt
+            {
+                args_obj.insert("fmt".to_string(), fmt);
+            }
+        }
+
+        // v1 DX: in the daily toolset, portal calls default to fmt=lines even when callers
+        // omit fmt explicitly. This keeps the “state + command” path cheap-by-default.
+        //
+        // Important: only enable this default for cmds that have a stable BM-L1 renderer.
+        // Long-tail ops should continue returning structured JSON unless the caller opts in.
+        if self.toolset == crate::Toolset::Daily && !args_obj.contains_key("fmt") {
+            let cmd = args_obj.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+            let wants_default_lines = match name {
+                "status" => true,
+                "workspace" => matches!(cmd, "workspace.use" | "workspace.reset"),
+                "tasks" => matches!(
+                    cmd,
+                    "tasks.macro.start"
+                        | "tasks.macro.delegate"
+                        | "tasks.macro.close.step"
+                        | "tasks.snapshot"
+                ),
+                "jobs" => matches!(
+                    cmd,
+                    "jobs.list" | "jobs.radar" | "jobs.open" | "jobs.tail" | "jobs.message"
+                ),
+                _ => false,
+            };
+            if wants_default_lines {
+                args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
+            }
+        }
 
         // DX: when a default workspace is configured, treat it as the implicit workspace
         // for all tool calls unless the caller explicitly provides `workspace`.
@@ -138,9 +189,11 @@ impl McpServer {
             ));
         }
 
-        // AI-first invariant: portal tools are always context-first (BM-L1 lines).
-        // Do not expose / depend on a json-vs-lines toggle in portals.
-        if super::portal::is_portal_tool(name) {
+        // Legacy portal tools (core/daily): prefer BM-L1 line outputs in reduced toolsets.
+        //
+        // In the full toolset, v1 tools should default to structured JSON envelopes so
+        // contract tests can assert on actions/refs deterministically.
+        if self.toolset != crate::Toolset::Full && super::portal::is_portal_tool(name) {
             args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
         }
 
@@ -151,6 +204,44 @@ impl McpServer {
         if self.toolset != crate::Toolset::Full
             && name == "tasks_jobs_radar"
             && !args_obj.contains_key("fmt")
+        {
+            args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
+        }
+
+        // v1 portals: in reduced toolsets we keep status as BM-L1 tagged lines by
+        // default (state + one safe next command). In full toolset, status defaults to the
+        // structured v1 envelope (actions-first).
+        if self.toolset != crate::Toolset::Full && name == "status" && !args_obj.contains_key("fmt")
+        {
+            args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
+        }
+
+        // v1 portals: preserve the low-noise portal defaults for the canonical macros.
+        //
+        // We do *not* force fmt=lines for all tasks calls — only for the portal-grade macros
+        // that are designed to be read as BM-L1 handoff lines.
+        if name == "tasks"
+            && !args_obj.contains_key("fmt")
+            && let Some(cmd) = args_obj.get("cmd").and_then(|v| v.as_str())
+        {
+            let wants_lines = matches!(
+                cmd,
+                "tasks.macro.start" | "tasks.macro.delegate" | "tasks.macro.close.step"
+            ) || (self.toolset != crate::Toolset::Full
+                && cmd == "tasks.snapshot");
+            if wants_lines {
+                args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
+            }
+        }
+
+        // Daily DX: treat jobs.radar as an inbox (BM-L1 lines) in reduced toolsets.
+        if self.toolset != crate::Toolset::Full
+            && name == "jobs"
+            && !args_obj.contains_key("fmt")
+            && args_obj
+                .get("cmd")
+                .and_then(|v| v.as_str())
+                .is_some_and(|cmd| cmd == "jobs.radar")
         {
             args_obj.insert("fmt".to_string(), Value::String("lines".to_string()));
         }
@@ -201,6 +292,14 @@ impl McpServer {
         if !skip_workspace_injection && let Some(resp) = self.auto_init_workspace(args_obj) {
             return Some(resp);
         }
+        // v1 portals: normalize nested args first so legacy target aliases continue to
+        // work (e.g. `target={id,kind}` → `task=` / `plan=` for tasks).
+        if crate::tools_v1::is_v1_tool(name)
+            && let Some(inner) = args_obj.get_mut("args").and_then(|v| v.as_object_mut())
+            && let Err(resp) = crate::normalize_target_map(name, inner)
+        {
+            return Some(resp);
+        }
         if let Err(resp) = crate::normalize_target_map(name, args_obj) {
             return Some(resp);
         }
@@ -208,17 +307,19 @@ impl McpServer {
     }
 
     pub(super) fn postprocess_response(&self, tool: &str, args: &Value, response: &mut Value) {
-        let fmt = args.get("fmt").and_then(|v| v.as_str());
+        let fmt = args.get("fmt").and_then(|v| v.as_str()).or_else(|| {
+            args.get("args")
+                .and_then(|v| v.get("fmt"))
+                .and_then(|v| v.as_str())
+        });
         let wants_lines = crate::is_lines_fmt(fmt);
 
         let Some(resp_obj) = response.as_object_mut() else {
             return;
         };
 
-        if !wants_lines && self.toolset == crate::Toolset::Full {
-            super::suggestions::inject_smart_navigation_suggestions(tool, args, resp_obj);
-            return;
-        }
+        // v1: suggestions[] are reserved (always empty). We intentionally do not emit
+        // suggestions as a parallel "next steps" rail. All recoveries go through actions[].
 
         if self.toolset != crate::Toolset::Full {
             let advertised = super::suggestions::advertised_tool_names(self.toolset);
@@ -239,109 +340,86 @@ impl McpServer {
                 .and_then(|v| v.get("code"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let error_message = resp_obj
-                .get("error")
-                .and_then(|v| v.get("message"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let Some(suggestions) = resp_obj
-                .get_mut("suggestions")
-                .and_then(|v| v.as_array_mut())
-            else {
-                return;
-            };
-            if suggestions.is_empty() {
-                // Portal-first recovery UX: even when a tool returns a typed error without
-                // suggestions, provide at most 1–2 low-noise portal recovery commands.
-                super::suggestions::inject_portal_recovery_for_error(
-                    tool,
-                    args,
+            if let Some(actions) = resp_obj.get_mut("actions").and_then(|v| v.as_array_mut()) {
+                super::actions::rewrite_actions_for_toolset(
+                    self.toolset,
                     error_code.as_deref(),
-                    error_message.as_deref(),
-                    suggestions,
+                    actions,
                     self.default_workspace.as_deref(),
                 );
             }
-            if !suggestions.is_empty() {
-                let mut rebuilt = Vec::with_capacity(suggestions.len());
-                let mut hidden_targets = Vec::new();
 
-                for suggestion in suggestions.iter() {
-                    let action = suggestion.get("action").and_then(|v| v.as_str());
-                    if action == Some("call_tool") {
-                        let target = suggestion
-                            .get("target")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if !target.is_empty() && !advertised.contains(target) {
-                            let params = suggestion.get("params").cloned().unwrap_or(Value::Null);
-                            if let Some(portal) = super::suggestions::portal_recovery_suggestion(
-                                target,
-                                &params,
-                                tool,
-                                args,
-                                error_code.as_deref(),
-                                self.default_workspace.as_deref(),
-                            ) {
-                                if let Some(portal_target) =
-                                    portal.get("target").and_then(|v| v.as_str())
-                                    && !portal_target.is_empty()
-                                    && !advertised.contains(portal_target)
-                                {
-                                    hidden_targets.push(portal_target.to_string());
-                                }
-                                rebuilt.push(portal);
-                            } else {
-                                hidden_targets.push(target.to_string());
-                                rebuilt.push(suggestion.clone());
-                            }
-                            continue;
-                        }
-                    }
-
-                    rebuilt.push(suggestion.clone());
-                }
-
-                if let Some(escalation_toolset) = super::suggestions::escalation_toolset_for_hidden(
-                    &hidden_targets,
-                    &core_tools,
-                    &daily_tools,
-                ) {
-                    let already_has_disclosure = rebuilt.iter().any(|s| {
-                        s.get("action").and_then(|v| v.as_str()) == Some("call_method")
-                            && s.get("method").and_then(|v| v.as_str()) == Some("tools/list")
-                    });
-                    if !already_has_disclosure {
-                        rebuilt.insert(
-                            0,
-                            crate::suggest_method(
-                                "tools/list",
-                                "Reveal the next toolset tier for recovery.",
-                                "high",
-                                serde_json::json!({ "toolset": escalation_toolset }),
-                            ),
-                        );
-                    }
-                }
-
-                let mut seen = HashSet::new();
-                rebuilt.retain(|s| match serde_json::to_string(s) {
-                    Ok(key) => seen.insert(key),
-                    Err(_) => true,
-                });
-
+            // v1 invariant: suggestions[] are always empty.
+            if let Some(suggestions) = resp_obj
+                .get_mut("suggestions")
+                .and_then(|v| v.as_array_mut())
+            {
                 suggestions.clear();
-                suggestions.extend(rebuilt);
             }
         }
 
         if wants_lines {
+            let (tool_for_lines, args_for_lines) = if crate::tools_v1::is_v1_tool(tool) {
+                let cmd = args.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+                let mapped_tool = match tool {
+                    "status" => Some("status"),
+                    "workspace" => match cmd {
+                        "workspace.use" => Some("workspace_use"),
+                        "workspace.reset" => Some("workspace_reset"),
+                        _ => None,
+                    },
+                    "tasks" => match cmd {
+                        "tasks.macro.start" => Some("tasks_macro_start"),
+                        "tasks.macro.delegate" => Some("tasks_macro_delegate"),
+                        "tasks.macro.close.step" => Some("tasks_macro_close_step"),
+                        "tasks.snapshot" => Some("tasks_snapshot"),
+                        _ => None,
+                    },
+                    "jobs" => match cmd {
+                        "jobs.list" => Some("tasks_jobs_list"),
+                        "jobs.radar" => Some("tasks_jobs_radar"),
+                        "jobs.open" => Some("tasks_jobs_open"),
+                        "jobs.tail" => Some("tasks_jobs_tail"),
+                        "jobs.message" => Some("tasks_jobs_message"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+
+                let mut merged = args
+                    .get("args")
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(ws) = args.get("workspace") {
+                    merged
+                        .entry("workspace".to_string())
+                        .or_insert_with(|| ws.clone());
+                }
+                if let Some(fmt) = args.get("fmt") {
+                    merged
+                        .entry("fmt".to_string())
+                        .or_insert_with(|| fmt.clone());
+                }
+
+                (mapped_tool.unwrap_or(tool), Value::Object(merged))
+            } else {
+                (tool, args.clone())
+            };
+
             let omit_workspace = self.default_workspace.as_deref().is_some_and(|default_ws| {
-                args.get("workspace")
+                args_for_lines
+                    .get("workspace")
                     .and_then(|v| v.as_str())
                     .is_some_and(|ws| ws == default_ws)
             });
-            crate::apply_portal_line_format(tool, args, response, self.toolset, omit_workspace);
+            crate::apply_portal_line_format(
+                tool_for_lines,
+                &args_for_lines,
+                response,
+                self.toolset,
+                omit_workspace,
+            );
         }
     }
 
@@ -389,7 +467,7 @@ impl McpServer {
         }
     }
 
-    pub(super) fn enforce_project_guard(
+    pub(crate) fn enforce_project_guard(
         &mut self,
         workspace: &crate::WorkspaceId,
     ) -> Option<Value> {

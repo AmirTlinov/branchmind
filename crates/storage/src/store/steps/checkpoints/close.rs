@@ -257,41 +257,30 @@ impl SqliteStore {
             perf_confirmed,
             docs_confirmed,
         );
-        let verify_event = insert_event_tx(
+        let (verify_event, _verify_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            "step_verified",
-            &verify_payload_json,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "step_verified",
+                payload_json: &verify_payload_json,
+            },
         )?;
         let done_payload_json = build_step_done_payload(&task_id, &step_ref);
-        let done_event = insert_event_tx(
+        let (done_event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            "step_done",
-            &done_payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &verify_event,
-        )?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &done_event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "step_done",
+                payload_json: &done_payload_json,
+            },
         )?;
 
         let (snapshot_title, snapshot_completed) =

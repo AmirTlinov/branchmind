@@ -44,6 +44,12 @@ process that talks to BranchMind via MCP tools and/or shared store.
   - provides transactional guarantees,
   - indexes for fast lookups.
 - **MCP adapter:**
+  - validates inputs against contract schemas before touching storage,
+  - enforces output budgets and deterministic truncation signals,
+  - applies workspace + explicit targeting rules (no silent mis-target),
+  - maps domain errors to typed MCP errors with recovery hints,
+  - provides stable response envelopes and toolset filtering,
+  - performs no network I/O or external side effects.
   - validates input schemas,
   - enforces output budgets,
   - maps domain errors → typed MCP errors with recovery suggestions.

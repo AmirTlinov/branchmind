@@ -41,12 +41,14 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
     );
     let snap1_lines = snap1_text.lines().collect::<Vec<_>>();
     assert!(
-        snap1_lines.iter().any(|l| l.starts_with("think_card")),
-        "when anchor is missing, snapshot should prompt a think_card command, got:\n{snap1_text}"
+        snap1_lines
+            .iter()
+            .any(|l| l.starts_with("think ") && l.contains("cmd=think.card")),
+        "when anchor is missing, snapshot should prompt a think.card command via the think portal, got:\n{snap1_text}"
     );
     let think_line = snap1_lines
         .iter()
-        .find(|l| l.starts_with("think_card"))
+        .find(|l| l.starts_with("think ") && l.contains("cmd=think.card"))
         .copied()
         .unwrap_or("");
     assert!(

@@ -139,53 +139,8 @@ impl McpServer {
         }
 
         if method == "tools/list" {
-            let toolset = match request
-                .params
-                .as_ref()
-                .and_then(|v| v.as_object())
-                .and_then(|obj| obj.get("toolset"))
-            {
-                Some(v) => {
-                    let Some(label) = v.as_str() else {
-                        return Some(crate::json_rpc_error(
-                            request.id,
-                            -32602,
-                            "toolset must be a string",
-                        ));
-                    };
-                    match crate::Toolset::from_str(label) {
-                        Some(v) => v,
-                        None => {
-                            return Some(crate::json_rpc_error(
-                                request.id,
-                                -32602,
-                                "toolset must be one of: full|daily|core",
-                            ));
-                        }
-                    }
-                }
-                None => self.toolset,
-            };
-            let mut tools = crate::tools::tool_definitions(toolset);
-            // Flagship DX: when the server is configured with a default workspace, treat
-            // `workspace` as optional in tool schemas so agents aren't forced to pick it.
-            // (Explicit workspace is still supported and may be locked by workspace_lock.)
-            if self.default_workspace.is_some() {
-                for tool in &mut tools {
-                    let Some(schema_obj) =
-                        tool.get_mut("inputSchema").and_then(|v| v.as_object_mut())
-                    else {
-                        continue;
-                    };
-                    let Some(required) = schema_obj
-                        .get_mut("required")
-                        .and_then(|v| v.as_array_mut())
-                    else {
-                        continue;
-                    };
-                    required.retain(|v| v.as_str() != Some("workspace"));
-                }
-            }
+            // v1: strict surface = 10, toolset params are ignored (legacy clients may still send).
+            let tools = crate::tools_v1::tool_definitions();
             return Some(crate::json_rpc_response(
                 request.id,
                 json!({ "tools": tools }),
@@ -242,51 +197,37 @@ impl McpServer {
     pub(crate) fn call_tool(&mut self, name: &str, args: Value) -> Value {
         let raw_name = name.to_string();
         let name_norm = normalize_tool_name(&raw_name);
-        let mut args = args;
-        let original_args = args.clone();
         let name_ref = name_norm;
 
+        // v1 cutover: only the 10 advertised portal tools are callable.
+        // Legacy names (status, tasks_*, graph_*, etc.) are rejected to avoid UX entropy.
+        if !crate::tools_v1::is_v1_tool(name_ref) {
+            return crate::ops::error_unknown_tool(name_ref);
+        }
+
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if let Some(mut resp) = self.preprocess_args(name_ref, &mut args) {
-                // Even when we short-circuit during preprocessing (e.g. target normalization errors),
-                // we still want the same portal-first recovery UX and the same output formatting.
-                self.postprocess_response(name_ref, &args, &mut resp);
+            // Keep the existing server pipeline (workspace guards, budget discipline, etc.)
+            // to avoid dead subsystems and to preserve deterministic runtime behavior.
+            //
+            // v1 tools return v1-shaped responses; pipeline pre/post hooks still apply.
+            let mut args_mut = args.clone();
+            if let Some(pre) = self.preprocess_args(name_ref, &mut args_mut) {
+                let ws = args_mut.get("workspace").and_then(|v| v.as_str());
+                let mut resp = crate::ops::legacy_to_op_response(name_ref, ws, pre).into_value();
+                self.postprocess_response(name_ref, &args_mut, &mut resp);
                 return resp;
             }
-            let Some(mut resp) = crate::tools::dispatch_tool(self, name_ref, args.clone()) else {
-                let mut resp =
-                    crate::ai_error("UNKNOWN_TOOL", &format!("Unknown tool: {raw_name}"));
-                self.postprocess_response(name_ref, &args, &mut resp);
-                return resp;
-            };
-            if let Some((escalated_args, mut escalated_resp)) =
-                self.auto_escalate_budget_if_needed(name_ref, &original_args, &args, &resp)
-            {
-                self.postprocess_response(name_ref, &escalated_args, &mut escalated_resp);
-                return escalated_resp;
-            }
-            self.postprocess_response(name_ref, &args, &mut resp);
+
+            let mut resp = crate::tools_v1::dispatch_tool(self, name_ref, args_mut.clone())
+                .unwrap_or_else(|| crate::ops::error_unknown_tool(name_ref));
+            self.postprocess_response(name_ref, &args_mut, &mut resp);
             resp
         }));
 
         match result {
             Ok(resp) => resp,
             Err(_) => {
-                let mut resp = crate::ai_error_with(
-                    "INTERNAL_PANIC",
-                    &format!("Internal panic while handling {name_ref}"),
-                    Some("Retry the call. If it repeats, restart the server and capture logs."),
-                    Vec::new(),
-                );
-                let mut post_args = original_args.clone();
-                if super::portal::is_portal_tool(name_ref)
-                    && let Some(obj) = post_args.as_object_mut()
-                {
-                    obj.entry("fmt".to_string())
-                        .or_insert(Value::String("lines".to_string()));
-                }
-                self.postprocess_response(name_ref, &post_args, &mut resp);
-                resp
+                crate::ops::error_internal(format!("Internal panic while handling {name_ref}"))
             }
         }
     }
@@ -306,6 +247,11 @@ fn normalize_tool_name(name: &str) -> &str {
     }
     if let Some((prefix, suffix)) = name.split_once('.')
         && prefix == "branchmind"
+    {
+        return suffix;
+    }
+    if let Some((prefix, suffix)) = name.split_once('.')
+        && prefix == "bm"
     {
         return suffix;
     }

@@ -1,4 +1,4 @@
-# Contracts — Common Types & Error Model (v0)
+# Contracts — Common Types & Error Model (v1)
 
 This document defines shared types used across contracts.
 
@@ -11,6 +11,17 @@ All tools return a single stable envelope:
   "success": true,
   "intent": "tool_name_or_intent",
   "result": {},
+  "refs": [],
+  "actions": [
+    {
+      "action_id": "string",
+      "priority": "high|medium|low",
+      "tool": "tasks|think|...",
+      "args": { "...": "..." },
+      "why": "string",
+      "risk": "string"
+    }
+  ],
   "warnings": [],
   "suggestions": [],
   "context": {},
@@ -18,6 +29,11 @@ All tools return a single stable envelope:
   "timestamp": "2025-12-25T00:00:00Z"
 }
 ```
+
+Notes:
+
+- `actions[]` — единственный механизм “что дальше” (deterministic order).
+- `suggestions[]` в v1 всегда `[]` (зарезервировано).
 
 On failure: `success=false` and `error={code,message,recovery?}`.
 

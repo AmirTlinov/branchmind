@@ -26,16 +26,22 @@ pub(in crate::store) fn collect_step_subtree_ids_tx(
     Ok(out)
 }
 
+pub(in crate::store) fn collect_task_step_ids_tx(
+    tx: &Transaction<'_>,
+    workspace: &str,
+    task_id: &str,
+) -> Result<Vec<String>, StoreError> {
+    let mut stmt = tx.prepare("SELECT step_id FROM steps WHERE workspace=?1 AND task_id=?2")?;
+    let rows = stmt.query_map(params![workspace, task_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 pub(in crate::store) fn delete_task_rows_tx(
     tx: &Transaction<'_>,
     workspace: &str,
     task_id: &str,
 ) -> Result<(), StoreError> {
-    let step_ids = {
-        let mut stmt = tx.prepare("SELECT step_id FROM steps WHERE workspace=?1 AND task_id=?2")?;
-        let rows = stmt.query_map(params![workspace, task_id], |row| row.get::<_, String>(0))?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
+    let step_ids = collect_task_step_ids_tx(tx, workspace, task_id)?;
 
     for step_id in step_ids.iter() {
         tx.execute(

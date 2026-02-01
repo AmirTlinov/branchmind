@@ -415,7 +415,7 @@ fn try_handle_locally(
     body: &[u8],
     method: Option<&str>,
     expects_response: bool,
-    config: &SharedProxyConfig,
+    _config: &SharedProxyConfig,
 ) -> LocalHandling {
     let Some(method) = method else {
         return LocalHandling::NotHandled;
@@ -516,42 +516,10 @@ fn try_handle_locally(
             }
         }
         "tools/list" => {
-            let parsed = serde_json::from_slice::<Value>(body).ok();
-            let params_obj = parsed
-                .as_ref()
-                .and_then(|v| v.get("params"))
-                .and_then(|v| v.as_object());
-
-            let toolset = match params_obj.and_then(|obj| obj.get("toolset")) {
-                Some(v) => {
-                    let Some(label) = v.as_str() else {
-                        let resp = crate::json_rpc_error(id, -32602, "toolset must be a string");
-                        return match serde_json::to_vec(&resp) {
-                            Ok(bytes) => LocalHandling::Response(bytes),
-                            Err(_) => LocalHandling::NotHandled,
-                        };
-                    };
-                    match crate::Toolset::from_str(label) {
-                        Some(v) => v,
-                        None => {
-                            let resp = crate::json_rpc_error(
-                                id,
-                                -32602,
-                                "toolset must be one of: full|daily|core",
-                            );
-                            return match serde_json::to_vec(&resp) {
-                                Ok(bytes) => LocalHandling::Response(bytes),
-                                Err(_) => LocalHandling::NotHandled,
-                            };
-                        }
-                    }
-                }
-                None => config.toolset,
-            };
-
+            // v1: strict surface = 10, ignore toolset overrides from legacy clients.
             let resp = crate::json_rpc_response(
                 id,
-                json!({ "tools": crate::tools::tool_definitions(toolset) }),
+                json!({ "tools": crate::tools_v1::tool_definitions() }),
             );
             match serde_json::to_vec(&resp) {
                 Ok(bytes) => LocalHandling::Response(bytes),

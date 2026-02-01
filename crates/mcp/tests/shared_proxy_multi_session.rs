@@ -108,7 +108,15 @@ mod unix {
                 "jsonrpc": "2.0",
                 "id": id,
                 "method": "tools/call",
-                "params": { "name": "think_card", "arguments": { "workspace": workspace, "card": text } }
+                "params": {
+                    "name": "think",
+                    "arguments": {
+                        "workspace": workspace,
+                        "op": "call",
+                        "cmd": "think.card",
+                        "args": { "card": text }
+                    }
+                }
             }));
             assert_eq!(resp.get("id").and_then(|v| v.as_i64()), Some(id));
             let is_error = resp

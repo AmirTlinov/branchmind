@@ -3,6 +3,9 @@
 This project treats the MCP surface as the product UX. The goal is to keep portal outputs
 deterministic, low-noise, and copy/paste-safe for AI agents.
 
+> ✅ **v1 portal naming:** commands shown here use the historical legacy names as shorthand.
+> In v1, call the `tasks`/`think`/`jobs` portals with `op="call"` + `cmd="..."`.
+
 ## Quick checks
 
 - Portal flagship gates:
@@ -17,16 +20,14 @@ deterministic, low-noise, and copy/paste-safe for AI agents.
 - Default portal responses are 2 lines:
   - state line (untagged) includes `ref=<id>` (stable navigation handle)
   - command line is the primary next action
-- Progressive disclosure is 3 lines:
-  - state line
-  - `tools/list toolset=...`
-  - action command
+- v1 keeps “next action” portal-first. We do **not** rely on `tools/list toolset=...` disclosure
+  anymore: portals always emit copy/paste-ready commands.
 
 ## Navigation modes
 
-- `tasks_snapshot refs=true` may emit extra `REFERENCE:` lines and/or a bounded
+- `tasks` (`cmd="tasks.snapshot"`, `args.refs=true`) may emit extra `REFERENCE:` lines and/or a bounded
   `open ... max_chars=8000` jump line.
-- `tasks_snapshot delta=true` may emit extra `REFERENCE:` lines for diff-oriented navigation.
+- `tasks` (`cmd="tasks.snapshot"`, `args.delta=true`) may emit extra `REFERENCE:` lines for diff-oriented navigation.
 
 ## Changing portal output
 

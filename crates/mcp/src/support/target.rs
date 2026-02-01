@@ -46,7 +46,10 @@ pub(crate) fn normalize_target_map(
     }
     let (target_id, target_kind) = parse_target_ref(&target_value)?;
 
-    if tool.starts_with("tasks_") {
+    // v1 portals: `tasks` preserves the legacy tasks_* convention where `target`
+    // can be provided as an object and is normalized into `task`/`plan` fields for downstream
+    // handlers and schemas.
+    if tool.starts_with("tasks_") || tool == "tasks" {
         if args.contains_key("task") || args.contains_key("plan") {
             return Err(ai_error(
                 "INVALID_INPUT",

@@ -73,8 +73,10 @@ fn flagship_eval_snapshot_is_two_lines_and_ref_first() {
     );
 
     assert!(
-        lines[1].starts_with("think_card"),
-        "when anchor is missing, second line must be the canonical anchor attach command"
+        lines[1].starts_with("think ")
+            && lines[1].contains("op=call")
+            && lines[1].contains("cmd=think.card"),
+        "when anchor is missing, second line must be the canonical anchor attach command via think portal"
     );
     assert!(
         lines[1].contains("v:canon"),
@@ -85,7 +87,7 @@ fn flagship_eval_snapshot_is_two_lines_and_ref_first() {
         "when default workspace is configured, command line must omit workspace"
     );
     assert!(
-        state.contains("| backup tasks_macro_close_step"),
+        state.contains("| backup tasks ") && state.contains("cmd=tasks.macro.close.step"),
         "state line must preserve the progress action as a backup command"
     );
 }

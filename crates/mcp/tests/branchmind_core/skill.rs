@@ -31,11 +31,17 @@ fn branchmind_skill_is_budget_safe_and_line_protocol() {
         "skill call must not be an MCP error"
     );
 
-    let text = extract_tool_text_str(&resp);
-    assert!(
-        !text.trim_start().starts_with('{'),
-        "skill must return raw text (line protocol), not JSON envelopes"
+    let out = extract_tool_text(&resp);
+    assert_eq!(
+        out.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "skill must succeed"
     );
+
+    let text = out
+        .get("result")
+        .and_then(|v| v.as_str())
+        .expect("skill result must be a string");
     assert!(
         text.contains("skill profile=teamlead"),
         "skill output must identify the selected profile"

@@ -147,23 +147,17 @@ impl SqliteStore {
             task_items_replace_tx(&tx, workspace.as_str(), "task", &id, "depends_on", &items)?;
         }
 
-        let event = insert_event_tx(
+        let (event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(id.clone()),
-            None,
-            &event_type,
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, &id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &id,
+                kind: TaskKind::Task,
+                path: None,
+                event_type: &event_type,
+                payload_json: &event_payload_json,
+            },
         )?;
 
         let touched = Self::project_task_graph_task_node_tx(

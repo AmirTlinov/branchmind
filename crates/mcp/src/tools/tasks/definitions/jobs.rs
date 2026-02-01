@@ -17,6 +17,17 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "priority": { "type": "string" },
                     "task": { "type": "string" },
                     "anchor": { "type": "string" },
+                    "executor": { "type": "string", "enum": ["codex", "claude_code", "auto"] },
+                    "executor_profile": { "type": "string", "enum": ["fast", "deep", "audit"] },
+                    "policy": {
+                        "type": "object",
+                        "properties": {
+                            "prefer": { "type": "array", "items": { "type": "string" } },
+                            "forbid": { "type": "array", "items": { "type": "string" } },
+                            "min_profile": { "type": "string" }
+                        }
+                    },
+                    "expected_artifacts": { "type": "array", "items": { "type": "string" } },
                     "meta": { "type": "object" }
                 },
                 "required": ["workspace", "title", "prompt"]
@@ -195,6 +206,11 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "status": { "type": "string", "description": "idle|live" },
                     "active_job_id": { "type": "string" },
                     "lease_ttl_ms": { "type": "integer" },
+                    "executors": { "type": "array", "items": { "type": "string" } },
+                    "profiles": { "type": "array", "items": { "type": "string" } },
+                    "supports_artifacts": { "type": "array", "items": { "type": "string" } },
+                    "max_parallel": { "type": "integer" },
+                    "sandbox_policy": { "type": "string" },
                     "meta": { "type": "object" }
                 },
                 "required": ["workspace", "runner_id", "status"]

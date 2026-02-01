@@ -40,14 +40,17 @@ fn anchors_autoregister_from_canon_tagged_cards() {
         "params": { "name": "anchors_list", "arguments": { "workspace": "ws_anchors_autoregister", "limit": 50 } }
     }));
     let list_text = extract_tool_text(&list);
-    if let Some(s) = list_text.as_str() {
-        assert!(
-            s.contains("a:auto-anchor"),
-            "anchors_list lines output should mention the auto-registered anchor id"
-        );
-    } else {
-        panic!("anchors_list output is neither json nor text");
-    }
+    let anchors = list_text
+        .get("result")
+        .and_then(|v| v.get("anchors"))
+        .and_then(|v| v.as_array())
+        .expect("anchors_list result.anchors");
+    assert!(
+        anchors
+            .iter()
+            .any(|a| a.get("id").and_then(|v| v.as_str()) == Some("a:auto-anchor")),
+        "anchors_list should include the auto-registered anchor id"
+    );
 
     let opened = server.request(json!( {
         "jsonrpc": "2.0",

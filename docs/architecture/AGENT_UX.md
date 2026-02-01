@@ -2,6 +2,10 @@
 
 This is not a human UI project. The MCP surface *is* the UX.
 
+> ✅ **v1 portal naming:** The server exposes **10 tools** (`status/open/workspace/tasks/jobs/think/graph/vcs/docs/system`).
+> Legacy tool names in older docs/tests are **rejected** (`UNKNOWN_TOOL`). Use portals + `cmd`
+> (see `docs/contracts/V1_OVERVIEW.md`).
+
 ## 1) One-screen defaults
 
 - Provide compact, stable snapshots by default.

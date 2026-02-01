@@ -78,26 +78,17 @@ impl SqliteStore {
             }
         }
 
-        let event = insert_event_tx(
+        let (event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            match kind {
-                TaskKind::Plan => Some(id.clone()),
-                TaskKind::Task => Some(id.clone()),
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &id,
+                kind,
+                path: None,
+                event_type: &event_type,
+                payload_json: &event_payload_json,
             },
-            None,
-            &event_type,
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref = ensure_reasoning_ref_tx(&tx, workspace, &id, kind, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
         )?;
 
         if matches!(kind, TaskKind::Task) {

@@ -112,24 +112,17 @@ impl SqliteStore {
         let fields = presence.changed_fields();
         let event_payload_json =
             build_task_node_defined_payload(&task_id, &node_id, &path, &fields);
-        let event = insert_event_tx(
+        let (event, _reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            "task_node_defined",
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "task_node_defined",
+                payload_json: &event_payload_json,
+            },
         )?;
 
         if record_undo {

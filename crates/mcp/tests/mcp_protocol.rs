@@ -42,13 +42,25 @@ fn mcp_auto_init_allows_tools_list_without_notifications() {
         !names.is_empty(),
         "tools/list should return at least one tool"
     );
-    for required in [
-        "status",
-        "tasks_snapshot",
-        "tasks_macro_start",
-        "think_card",
+    // v1: advertised surface is fixed to the 10 portal tools.
+    let expected = [
+        "docs",
+        "graph",
+        "jobs",
         "open",
-    ] {
+        "status",
+        "system",
+        "tasks",
+        "think",
+        "vcs",
+        "workspace",
+    ];
+    assert_eq!(
+        names.len(),
+        expected.len(),
+        "tools/list must return the v1 surface only (exactly 10 tools)"
+    );
+    for required in expected {
         assert!(
             names.iter().any(|n| n == required),
             "tools/list must include required tool: {required}"
@@ -128,20 +140,26 @@ fn tools_schema_has_steps_items() {
     }));
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 
-    let tools_list =
-        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
-    let tools = tools_list
+    // v1: schema is discovered on-demand via system schema.get(cmd).
+    // `tasks.plan.create` is the v1 cmd alias for the legacy tasks_create shape.
+    let schema = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": { "op": "schema.get", "args": { "cmd": "tasks.plan.create" } }
+        }
+    }));
+    let schema_text = extract_tool_text(&schema);
+    assert_eq!(
+        schema_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "schema.get must succeed"
+    );
+    let steps_items = schema_text
         .get("result")
-        .and_then(|v| v.get("tools"))
-        .and_then(|v| v.as_array())
-        .expect("result.tools");
-
-    let tasks_create = tools
-        .iter()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_create"))
-        .expect("tasks_create tool");
-    let steps_items = tasks_create
-        .get("inputSchema")
+        .and_then(|v| v.get("args_schema"))
         .and_then(|v| v.get("properties"))
         .and_then(|v| v.get("steps"))
         .and_then(|v| v.get("items"));
@@ -163,30 +181,35 @@ fn tools_schema_focus_set_does_not_require_task() {
     }));
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 
-    let tools_list =
-        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
-    let tools = tools_list
+    // v1: schema is discovered on-demand via system schema.get(cmd).
+    let schema = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": { "op": "schema.get", "args": { "cmd": "tasks.focus.set" } }
+        }
+    }));
+    let schema_text = extract_tool_text(&schema);
+    assert_eq!(
+        schema_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "schema.get must succeed"
+    );
+    let required = schema_text
         .get("result")
-        .and_then(|v| v.get("tools"))
-        .and_then(|v| v.as_array())
-        .expect("result.tools");
-
-    let focus_set = tools
-        .iter()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_focus_set"))
-        .expect("tasks_focus_set tool");
-    let required = focus_set
-        .get("inputSchema")
+        .and_then(|v| v.get("args_schema"))
         .and_then(|v| v.get("required"))
         .and_then(|v| v.as_array())
-        .expect("tasks_focus_set inputSchema.required");
+        .expect("args_schema.required");
     let required = required
         .iter()
         .filter_map(|v| v.as_str())
         .collect::<Vec<_>>();
     assert!(
         !required.iter().any(|v| *v == "task" || *v == "plan"),
-        "tasks_focus_set must not require task/plan"
+        "tasks.focus.set must not require task/plan"
     );
 }
 
@@ -202,41 +225,46 @@ fn tools_schema_macro_start_supports_template() {
     }));
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 
-    let tools_list =
-        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
-    let tools = tools_list
+    // v1: schema is discovered on-demand via system schema.get(cmd).
+    let schema = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": { "op": "schema.get", "args": { "cmd": "tasks.macro.start" } }
+        }
+    }));
+    let schema_text = extract_tool_text(&schema);
+    assert_eq!(
+        schema_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "schema.get must succeed"
+    );
+    let properties = schema_text
         .get("result")
-        .and_then(|v| v.get("tools"))
-        .and_then(|v| v.as_array())
-        .expect("result.tools");
-
-    let macro_start = tools
-        .iter()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_macro_start"))
-        .expect("tasks_macro_start tool");
-
-    let properties = macro_start
-        .get("inputSchema")
+        .and_then(|v| v.get("args_schema"))
         .and_then(|v| v.get("properties"))
         .and_then(|v| v.as_object())
-        .expect("tasks_macro_start inputSchema.properties");
+        .expect("args_schema.properties");
     assert!(
         properties.contains_key("template"),
-        "tasks_macro_start must declare template"
+        "tasks.macro.start must declare template"
     );
     assert!(
         properties.contains_key("think"),
-        "tasks_macro_start must declare think passthrough"
+        "tasks.macro.start must declare think passthrough"
     );
 
-    let required = macro_start
-        .get("inputSchema")
+    let required = schema_text
+        .get("result")
+        .and_then(|v| v.get("args_schema"))
         .and_then(|v| v.get("required"))
         .and_then(|v| v.as_array())
-        .expect("tasks_macro_start inputSchema.required");
+        .expect("args_schema.required");
     assert!(
         !required.iter().any(|v| v.as_str() == Some("steps")),
-        "tasks_macro_start must not require steps (template is allowed)"
+        "tasks.macro.start must not require steps (template is allowed)"
     );
 }
 
@@ -252,26 +280,31 @@ fn tools_schema_macro_close_step_does_not_require_task() {
     }));
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 
-    let tools_list =
-        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
-    let tools = tools_list
+    // v1: schema is discovered on-demand via system schema.get(cmd).
+    let schema = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": { "op": "schema.get", "args": { "cmd": "tasks.macro.close.step" } }
+        }
+    }));
+    let schema_text = extract_tool_text(&schema);
+    assert_eq!(
+        schema_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "schema.get must succeed"
+    );
+    let required = schema_text
         .get("result")
-        .and_then(|v| v.get("tools"))
-        .and_then(|v| v.as_array())
-        .expect("result.tools");
-
-    let macro_close = tools
-        .iter()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_macro_close_step"))
-        .expect("tasks_macro_close_step tool");
-    let required = macro_close
-        .get("inputSchema")
+        .and_then(|v| v.get("args_schema"))
         .and_then(|v| v.get("required"))
         .and_then(|v| v.as_array())
-        .expect("tasks_macro_close_step inputSchema.required");
+        .expect("args_schema.required");
     assert!(
         !required.iter().any(|v| v.as_str() == Some("task")),
-        "tasks_macro_close_step must not require task (focus-first)"
+        "tasks.macro.close.step must not require task (focus-first)"
     );
 }
 
@@ -287,28 +320,32 @@ fn tools_schema_macro_close_step_declares_strict_override_shape() {
     }));
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 
-    let tools_list =
-        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
-    let tools = tools_list
+    // v1: schema is discovered on-demand via system schema.get(cmd).
+    let schema = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": { "op": "schema.get", "args": { "cmd": "tasks.macro.close.step" } }
+        }
+    }));
+    let schema_text = extract_tool_text(&schema);
+    assert_eq!(
+        schema_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "schema.get must succeed"
+    );
+    let input_schema = schema_text
         .get("result")
-        .and_then(|v| v.get("tools"))
-        .and_then(|v| v.as_array())
-        .expect("result.tools");
-
-    let macro_close = tools
-        .iter()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_macro_close_step"))
-        .expect("tasks_macro_close_step tool");
-
-    let input_schema = macro_close
-        .get("inputSchema")
+        .and_then(|v| v.get("args_schema"))
         .and_then(|v| v.as_object())
-        .expect("tasks_macro_close_step inputSchema");
+        .expect("args_schema");
 
     let required = input_schema
         .get("required")
         .and_then(|v| v.as_array())
-        .expect("tasks_macro_close_step inputSchema.required");
+        .expect("args_schema.required");
     assert!(
         !required.iter().any(|v| v.as_str() == Some("override")),
         "override must be optional at the top level"
@@ -317,11 +354,11 @@ fn tools_schema_macro_close_step_declares_strict_override_shape() {
     let properties = input_schema
         .get("properties")
         .and_then(|v| v.as_object())
-        .expect("tasks_macro_close_step inputSchema.properties");
+        .expect("args_schema.properties");
     let override_schema = properties
         .get("override")
         .and_then(|v| v.as_object())
-        .expect("tasks_macro_close_step override schema");
+        .expect("override schema");
     assert_eq!(
         override_schema.get("type").and_then(|v| v.as_str()),
         Some("object")
@@ -378,12 +415,18 @@ fn tools_schema_portal_tools_do_not_require_workspace() {
         .and_then(|v| v.as_array())
         .expect("result.tools");
 
+    // v1 portals: only the 10 tools are advertised, and workspace is optional at the tool level.
     for name in [
         "status",
-        "macro_branch_note",
-        "tasks_macro_start",
-        "tasks_macro_close_step",
-        "tasks_snapshot",
+        "open",
+        "workspace",
+        "tasks",
+        "jobs",
+        "think",
+        "graph",
+        "vcs",
+        "docs",
+        "system",
     ] {
         let tool = tools
             .iter()
@@ -403,38 +446,38 @@ fn tools_schema_portal_tools_do_not_require_workspace() {
 
 #[test]
 fn tools_schema_non_portal_tools_do_not_require_workspace_when_default_is_configured() {
-    // Flagship DX: when the server has a default workspace, schemas should not force callers
-    // to provide `workspace`.
-    let mut server = Server::start("tools_schema_non_portal_tools_do_not_require_workspace");
+    // v1 contract: workspace is part of the portal envelope (not the cmd args).
+    // When a default workspace is configured, schema.get should not force callers
+    // to include workspace in cmd args.
+    let mut server = Server::start_initialized_with_args(
+        "tools_schema_non_portal_tools_do_not_require_workspace",
+        &["--workspace", "ws_default"],
+    );
 
-    server.request(json!({
+    let schema = server.request(json!({
         "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": { "op": "schema.get", "args": { "cmd": "tasks.plan.create" } }
+        }
     }));
-    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
-
-    let tools_list =
-        server.request(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }));
-    let tools = tools_list
+    let schema_text = extract_tool_text(&schema);
+    assert_eq!(
+        schema_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "schema.get must succeed"
+    );
+    let required = schema_text
         .get("result")
-        .and_then(|v| v.get("tools"))
-        .and_then(|v| v.as_array())
-        .expect("result.tools");
-
-    let tool = tools
-        .iter()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_create"))
-        .expect("tasks_create tool");
-    let required = tool
-        .get("inputSchema")
+        .and_then(|v| v.get("args_schema"))
         .and_then(|v| v.get("required"))
         .and_then(|v| v.as_array())
-        .expect("inputSchema.required");
+        .expect("args_schema.required");
     assert!(
         !required.iter().any(|v| v.as_str() == Some("workspace")),
-        "tasks_create must not require workspace when default workspace is configured"
+        "cmd args must not require workspace in v1"
     );
 }
 
@@ -453,103 +496,40 @@ fn tools_list_daily_toolset_is_curated() {
         .and_then(|v| v.as_array())
         .expect("result.tools");
 
-    let has_snapshot = tools
+    // v1: tools/list always advertises the fixed 10-tool portal surface (toolset does not change the list).
+    let mut names = tools
         .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_snapshot"));
-    assert!(
-        has_snapshot,
-        "daily toolset must include tasks_snapshot (handoff/resume portal)"
-    );
+        .filter_map(|t| {
+            t.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect::<Vec<_>>();
+    names.sort();
 
-    let has_branch_note = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("macro_branch_note"));
-    assert!(
-        !has_branch_note,
-        "daily toolset should hide macro_branch_note (full only, to keep noise down)"
+    let expected = [
+        "docs",
+        "graph",
+        "jobs",
+        "open",
+        "status",
+        "system",
+        "tasks",
+        "think",
+        "vcs",
+        "workspace",
+    ];
+    assert_eq!(
+        names.len(),
+        expected.len(),
+        "v1 surface must be exactly 10 tools"
     );
-
-    let has_close_step = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_macro_close_step"));
-    assert!(
-        has_close_step,
-        "daily toolset must include tasks_macro_close_step (progress portal)"
-    );
-
-    let has_think_card = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("think_card"));
-    assert!(
-        has_think_card,
-        "daily toolset must include think_card (reasoning substrate)"
-    );
-
-    let has_think_playbook = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("think_playbook"));
-    assert!(
-        has_think_playbook,
-        "daily toolset should include think_playbook (skepticism + breakthrough prompts)"
-    );
-
-    let has_open = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("open"));
-    assert!(
-        has_open,
-        "daily toolset should include open (open-by-id convenience)"
-    );
-
-    let has_jobs_radar = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_jobs_radar"));
-    assert!(
-        has_jobs_radar,
-        "daily toolset should include tasks_jobs_radar (delegation inbox)"
-    );
-
-    let has_transcripts_open = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_open"));
-    assert!(
-        !has_transcripts_open,
-        "daily toolset should hide transcripts_open (full only, to keep noise down)"
-    );
-
-    let has_transcripts_search = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_search"));
-    assert!(
-        !has_transcripts_search,
-        "daily toolset should hide transcripts_search (full only, to keep noise down)"
-    );
-
-    let has_transcripts_digest = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("transcripts_digest"));
-    assert!(
-        !has_transcripts_digest,
-        "daily toolset should hide transcripts_digest (full only, to keep noise down)"
-    );
-
-    let has_context_pack_export = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("context_pack_export"));
-    assert!(
-        !has_context_pack_export,
-        "daily toolset should hide context_pack_export (full only, to keep noise down)"
-    );
-
-    let has_tag_delete = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tag_delete"));
-    assert!(!has_tag_delete, "daily toolset must hide tag_delete");
-
-    assert!(
-        tools.len() <= 13,
-        "daily toolset must stay small (<= 13 tools)"
-    );
+    for required in expected {
+        assert!(
+            names.iter().any(|n| n == required),
+            "tools/list must include {required}"
+        );
+    }
 }
 
 #[test]
@@ -566,9 +546,10 @@ fn tools_list_params_can_override_toolset() {
         .and_then(|v| v.get("tools"))
         .and_then(|v| v.as_array())
         .expect("daily result.tools");
-    assert!(
-        daily_tools.len() <= 13,
-        "server daily toolset should advertise <= 13 tools"
+    assert_eq!(
+        daily_tools.len(),
+        10,
+        "v1 surface must be exactly 10 tools (even in daily toolset)"
     );
 
     let full_list = server.request(json!({
@@ -582,15 +563,34 @@ fn tools_list_params_can_override_toolset() {
         .and_then(|v| v.get("tools"))
         .and_then(|v| v.as_array())
         .expect("full result.tools");
-    assert!(
-        full_tools.len() > daily_tools.len(),
-        "full override should reveal more tools than daily"
+    assert_eq!(
+        full_tools.len(),
+        10,
+        "v1 surface must remain exactly 10 tools even when overriding toolset"
     );
 
-    let has_edit = full_tools
+    let mut daily_names = daily_tools
         .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_edit"));
-    assert!(has_edit, "full override should include tasks_edit");
+        .filter_map(|t| {
+            t.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect::<Vec<_>>();
+    daily_names.sort();
+    let mut full_names = full_tools
+        .iter()
+        .filter_map(|t| {
+            t.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect::<Vec<_>>();
+    full_names.sort();
+    assert_eq!(
+        daily_names, full_names,
+        "tools/list must not drift across toolset overrides in v1"
+    );
 }
 
 #[test]
@@ -608,35 +608,11 @@ fn tools_list_core_toolset_is_minimal() {
         .and_then(|v| v.as_array())
         .expect("result.tools");
 
-    let has_snapshot = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_snapshot"));
-    assert!(has_snapshot, "core toolset must include tasks_snapshot");
-
-    let has_edit = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_edit"));
-    assert!(!has_edit, "core toolset must hide tasks_edit");
-
-    let has_branch_note = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("macro_branch_note"));
-    assert!(
-        !has_branch_note,
-        "core toolset must hide macro_branch_note (use full for branching)"
-    );
-
-    let has_close_step = tools
-        .iter()
-        .any(|t| t.get("name").and_then(|v| v.as_str()) == Some("tasks_macro_close_step"));
-    assert!(
-        !has_close_step,
-        "core toolset must hide tasks_macro_close_step (use daily for progress ops)"
-    );
-
-    assert!(
-        tools.len() <= 4,
-        "core toolset must be ultra-minimal (<= 4 tools)"
+    // v1: tools/list always advertises the fixed 10-tool portal surface.
+    assert_eq!(
+        tools.len(),
+        10,
+        "v1 surface must be exactly 10 tools (even in core toolset)"
     );
 }
 #[test]
@@ -651,12 +627,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
     }));
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }));
 
-    // Portals are context-first (BM-L1 lines), so for structured verification we use explicit view tools.
+    // v1: explicit portal call (workspace lives in envelope; legacy tools receive injected workspace).
     let context = server.request(json!({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_context", "arguments": { "workspace": "ws_auto" } }
+        "params": {
+            "name": "tasks",
+            "arguments": { "workspace": "ws_auto", "op": "call", "cmd": "tasks.context", "args": {} }
+        }
     }));
     let context_text = extract_tool_text(&context);
     assert_eq!(
@@ -676,7 +655,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_auto", "kind": "plan", "title": "Plan Auto" } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.plan.create",
+                "args": { "kind": "plan", "title": "Plan Auto" }
+            }
+        }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -690,7 +677,20 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_auto", "kind": "task", "parent": plan_id.clone(), "title": "Task Auto", "steps": [ { "title": "Step 1", "success_criteria": ["ok"] } ] } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.plan.create",
+                "args": {
+                    "kind": "task",
+                    "parent": plan_id.clone(),
+                    "title": "Task Auto",
+                    "steps": [ { "title": "Step 1", "success_criteria": ["ok"] } ]
+                }
+            }
+        }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -713,7 +713,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws_auto", "target": { "id": plan_id, "kind": "plan" } } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.focus.set",
+                "args": { "plan": plan_id }
+            }
+        }
     }));
     let focus_set_text = extract_tool_text(&focus_set);
     assert_eq!(
@@ -725,7 +733,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_auto", "target": { "id": task_id } } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.radar",
+                "args": { "task": task_id.clone() }
+            }
+        }
     }));
     let radar_text = extract_tool_text(&radar);
     assert_eq!(
@@ -737,7 +753,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws_auto", "target": { "id": task_id, "kind": "task" }, "content": "auto-init ok" } }
+        "params": {
+            "name": "vcs",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "vcs.notes.commit",
+                "args": { "target": task_id, "content": "auto-init ok" }
+            }
+        }
     }));
     let note_text = extract_tool_text(&note);
     assert_eq!(
@@ -749,7 +773,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "tasks_edit", "arguments": { "workspace": "ws_auto", "target": { "id": plan_id.clone(), "kind": "plan" }, "title": "Plan Auto (edited)" } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.edit",
+                "args": { "plan": plan_id.clone(), "title": "Plan Auto (edited)" }
+            }
+        }
     }));
     let edit_plan_text = extract_tool_text(&edit_plan);
     assert_eq!(
@@ -761,7 +793,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "tasks_complete", "arguments": { "workspace": "ws_auto", "target": { "id": plan_id, "kind": "plan" }, "status": "ACTIVE" } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.complete",
+                "args": { "plan": plan_id, "status": "ACTIVE" }
+            }
+        }
     }));
     let complete_plan_text = extract_tool_text(&complete_plan);
     assert_eq!(
@@ -773,7 +813,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws_auto", "target": { "id": task_id.clone(), "kind": "task" } } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.focus.set",
+                "args": { "task": task_id.clone() }
+            }
+        }
     }));
     let focus_task_text = extract_tool_text(&focus_task);
     assert_eq!(
@@ -785,7 +833,15 @@ fn auto_init_workspace_and_target_ref_aliases() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "tasks_note", "arguments": { "workspace": "ws_auto", "step_id": step_id, "note": "focus ok" } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_auto",
+                "op": "call",
+                "cmd": "tasks.note",
+                "args": { "task": task_id, "step_id": step_id, "note": "focus ok" }
+            }
+        }
     }));
     let note_focus_text = extract_tool_text(&note_focus);
     assert_eq!(
@@ -807,23 +863,19 @@ fn default_workspace_supports_portal_calls_without_workspace() {
         "method": "tools/call",
         "params": { "name": "status", "arguments": {} }
     }));
-    let status_text = extract_tool_text_str(&status);
+    let status_text = extract_tool_text(&status);
     assert_eq!(
-        status_text.lines().count(),
-        2,
-        "status portal output must stay 2 lines"
+        status_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "status portal call must succeed without explicit workspace when default is configured"
     );
-    assert!(
-        status_text.starts_with("ready checkout="),
-        "status must return a stable state summary"
-    );
-    assert!(
+    assert_eq!(
         status_text
-            .lines()
-            .nth(1)
-            .unwrap_or("")
-            .starts_with("tasks_snapshot"),
-        "status should include a low-noise next action"
+            .get("result")
+            .and_then(|v| v.get("workspace"))
+            .and_then(|v| v.as_str()),
+        Some("ws_default"),
+        "status must resolve workspace from --workspace default"
     );
 
     let start = server.request(json!({
@@ -831,12 +883,19 @@ fn default_workspace_supports_portal_calls_without_workspace() {
         "id": 3,
         "method": "tools/call",
         "params": {
-            "name": "tasks_macro_start",
+            "name": "tasks",
             "arguments": {
-                "plan_title": "DX default workspace plan",
-                "task_title": "DX default workspace",
-                "template": "principal-task",
-                "resume_max_chars": 4000
+                // Portal-grade macros default to BM-L1 lines; request JSON here so the test can
+                // assert on structured success fields deterministically.
+                "fmt": "json",
+                "op": "call",
+                "cmd": "tasks.macro.start",
+                "args": {
+                    "plan_title": "DX default workspace plan",
+                    "task_title": "DX default workspace",
+                    "template": "principal-task",
+                    "resume_max_chars": 4000
+                }
             }
         }
     }));
@@ -850,7 +909,10 @@ fn default_workspace_supports_portal_calls_without_workspace() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws_default" } }
+        "params": {
+            "name": "tasks",
+            "arguments": { "workspace": "ws_default", "op": "call", "cmd": "tasks.focus.get", "args": {} }
+        }
     }));
     let focus_text = extract_tool_text(&focus);
     let focused = focus_text
@@ -867,11 +929,11 @@ fn default_workspace_supports_portal_calls_without_workspace() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {} } }
     }));
-    let snapshot_text = extract_tool_text_str(&snapshot);
+    let snapshot_text = extract_tool_text(&snapshot);
     assert!(
-        !snapshot_text.starts_with("ERROR:"),
+        snapshot_text.get("success").and_then(|v| v.as_bool()) == Some(true),
         "snapshot portal call must succeed without explicit workspace/task when focus exists"
     );
 }
@@ -1146,7 +1208,10 @@ fn invalid_input_errors_include_hints_in_json_payloads() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_context", "arguments": "nope" }
+        "params": {
+            "name": "tasks",
+            "arguments": { "workspace": "ws_invalid", "op": "call", "cmd": "tasks.plan.create", "args": {} }
+        }
     }));
     let text = extract_tool_text(&resp);
     let err = text
@@ -1157,17 +1222,33 @@ fn invalid_input_errors_include_hints_in_json_payloads() {
         err.get("code").and_then(|v| v.as_str()),
         Some("INVALID_INPUT")
     );
-    let hints = err
-        .get("hints")
+
+    // v1 UX: INVALID_INPUT returns deterministic auto-actions:
+    // - system schema.get(cmd)
+    // - a minimal valid call example
+    let actions = text
+        .get("actions")
         .and_then(|v| v.as_array())
-        .expect("hints[]");
+        .expect("actions[]");
     assert!(
-        hints.iter().any(|h| {
-            h.get("kind").and_then(|v| v.as_str()) == Some("type")
-                && h.get("field").and_then(|v| v.as_str()) == Some("arguments")
-                && h.get("expected").and_then(|v| v.as_str()) == Some("object")
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("system")
+                && a.get("args")
+                    .and_then(|v| v.get("op"))
+                    .and_then(|v| v.as_str())
+                    == Some("schema.get")
         }),
-        "hints must include type expectation for arguments"
+        "INVALID_INPUT must include schema.get action"
+    );
+    assert!(
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("tasks")
+                && a.get("args")
+                    .and_then(|v| v.get("op"))
+                    .and_then(|v| v.as_str())
+                    == Some("call")
+        }),
+        "INVALID_INPUT must include example call action"
     );
 }
 
@@ -1179,7 +1260,15 @@ fn branchmind_focus_is_used_as_implicit_target() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_focus", "kind": "plan", "title": "Plan Focus" } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_focus",
+                "op": "call",
+                "cmd": "tasks.plan.create",
+                "args": { "kind": "plan", "title": "Plan Focus" }
+            }
+        }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -1193,7 +1282,15 @@ fn branchmind_focus_is_used_as_implicit_target() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_focus", "kind": "task", "parent": plan_id, "title": "Task Focus" } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_focus",
+                "op": "call",
+                "cmd": "tasks.plan.create",
+                "args": { "kind": "task", "parent": plan_id, "title": "Task Focus" }
+            }
+        }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -1208,7 +1305,15 @@ fn branchmind_focus_is_used_as_implicit_target() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws_focus", "target": { "id": task_id.clone(), "kind": "task" } } }
+        "params": {
+            "name": "tasks",
+            "arguments": {
+                "workspace": "ws_focus",
+                "op": "call",
+                "cmd": "tasks.focus.set",
+                "args": { "task": task_id.clone() }
+            }
+        }
     }));
     let focus_set_text = extract_tool_text(&focus_set);
     assert_eq!(
@@ -1220,7 +1325,15 @@ fn branchmind_focus_is_used_as_implicit_target() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws_focus", "content": "focus note" } }
+        "params": {
+            "name": "vcs",
+            "arguments": {
+                "workspace": "ws_focus",
+                "op": "call",
+                "cmd": "vcs.notes.commit",
+                "args": { "content": "focus note" }
+            }
+        }
     }));
     let note_text = extract_tool_text(&note);
     assert_eq!(
@@ -1240,7 +1353,15 @@ fn branchmind_focus_is_used_as_implicit_target() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws_focus", "doc_kind": "notes", "limit": 10 } }
+        "params": {
+            "name": "docs",
+            "arguments": {
+                "workspace": "ws_focus",
+                "op": "call",
+                "cmd": "docs.show",
+                "args": { "doc_kind": "notes", "limit": 10 }
+            }
+        }
     }));
     let show_text = extract_tool_text(&show);
     assert_eq!(
@@ -1266,7 +1387,10 @@ fn branchmind_focus_is_used_as_implicit_target() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "graph_query", "arguments": { "workspace": "ws_focus" } }
+        "params": {
+            "name": "graph",
+            "arguments": { "workspace": "ws_focus", "op": "call", "cmd": "graph.query", "args": {} }
+        }
     }));
     let graph_text = extract_tool_text(&graph);
     assert_eq!(

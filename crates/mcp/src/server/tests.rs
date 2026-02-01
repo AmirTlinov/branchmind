@@ -103,10 +103,10 @@ fn project_guard_mismatch_rebinds_when_enabled() {
 }
 
 #[test]
-fn portal_auto_budget_escalation_removes_budget_warnings() {
-    // This is an "anti-truncation" regression test: portals should feel "limitless" in
-    // day-to-day usage. We keep outputs bounded, but the server should auto-escalate budgets
-    // for safe-to-rerun portal reads so users don't have to juggle max_chars/context_budget.
+fn budget_profiles_can_avoid_truncation_warnings_for_large_reads() {
+    // v1 UX uses explicit budget profiles instead of hiding 100+ tools. This test ensures
+    // that large reads can be made "untruncated" deterministically by selecting a larger
+    // budget profile (without manual max_chars guessing).
     let dir = temp_dir();
     let store = SqliteStore::open(&dir).unwrap();
 
@@ -135,10 +135,10 @@ fn portal_auto_budget_escalation_removes_budget_warnings() {
     let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
     server.store.workspace_init(&workspace).unwrap();
 
-    // Create enough anchors so a reasonable default max_chars will truncate the list.
+    // Create enough anchors so the portal budget would truncate, but audit should not.
     let title = "T".repeat(120);
     let desc = "x".repeat(280);
-    for i in 0..200 {
+    for i in 0..80 {
         let id = format!("a:test-{i:03}");
         server
             .store
@@ -159,16 +159,34 @@ fn portal_auto_budget_escalation_removes_budget_warnings() {
             .unwrap();
     }
 
-    let resp = server.call_tool("anchors_list", json!({ "workspace": "demo", "limit": 200 }));
+    let resp = server.call_tool(
+        "think",
+        json!({
+            "workspace": "demo",
+            "op": "call",
+            "cmd": "think.anchor.list",
+            "args": { "limit": 80 },
+            "budget_profile": "audit",
+            "view": "compact"
+        }),
+    );
     assert_eq!(
         resp.get("success").and_then(|v| v.as_bool()),
         Some(true),
-        "expected anchors_list to succeed, got: {resp}"
+        "expected think(cmd=think.anchor.list) to succeed, got: {resp}"
     );
-    let rendered = resp.get("result").and_then(|v| v.as_str()).unwrap_or("");
+
+    let warnings = resp
+        .get("warnings")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     assert!(
-        !rendered.contains("BUDGET_TRUNCATED") && !rendered.contains("BUDGET_MINIMAL"),
-        "expected budget warnings to be auto-escalated away, got:\n{rendered}"
+        warnings.iter().all(|w| {
+            let code = w.get("code").and_then(|v| v.as_str());
+            code != Some("BUDGET_TRUNCATED") && code != Some("BUDGET_MINIMAL")
+        }),
+        "expected no budget truncation warnings under budget_profile=audit, got: {warnings:?}"
     );
 
     let _ = fs::remove_dir_all(&dir);

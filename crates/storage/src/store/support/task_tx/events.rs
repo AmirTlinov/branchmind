@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use super::super::super::{EventRow, StoreError};
+use super::super::super::{EventRow, ReasoningRefRow, StoreError};
+use super::super::{ensure_reasoning_ref_tx, ingest_task_event_tx};
+use bm_core::ids::WorkspaceId;
+use bm_core::model::TaskKind;
 use rusqlite::{Transaction, params};
 
 pub(in crate::store) fn insert_event_tx(
@@ -30,6 +33,50 @@ pub(in crate::store) fn insert_event_tx(
         event_type: event_type.to_string(),
         payload_json: payload_json.to_string(),
     })
+}
+
+pub(in crate::store) struct TaskEventEmitTxArgs<'a> {
+    pub(in crate::store) workspace: &'a WorkspaceId,
+    pub(in crate::store) now_ms: i64,
+    pub(in crate::store) task_id: &'a str,
+    pub(in crate::store) kind: TaskKind,
+    pub(in crate::store) path: Option<String>,
+    pub(in crate::store) event_type: &'a str,
+    pub(in crate::store) payload_json: &'a str,
+}
+
+pub(in crate::store) fn emit_task_event_tx(
+    tx: &Transaction<'_>,
+    args: TaskEventEmitTxArgs<'_>,
+) -> Result<(EventRow, ReasoningRefRow), StoreError> {
+    let TaskEventEmitTxArgs {
+        workspace,
+        now_ms,
+        task_id,
+        kind,
+        path,
+        event_type,
+        payload_json,
+    } = args;
+    let event = insert_event_tx(
+        tx,
+        workspace.as_str(),
+        now_ms,
+        Some(task_id.to_string()),
+        path,
+        event_type,
+        payload_json,
+    )?;
+
+    let reasoning_ref = ensure_reasoning_ref_tx(tx, workspace, task_id, kind, now_ms)?;
+    let _ = ingest_task_event_tx(
+        tx,
+        workspace.as_str(),
+        &reasoning_ref.branch,
+        &reasoning_ref.trace_doc,
+        &event,
+    )?;
+    Ok((event, reasoning_ref))
 }
 
 pub(in crate::store) struct OpsHistoryInsertTxArgs<'a> {

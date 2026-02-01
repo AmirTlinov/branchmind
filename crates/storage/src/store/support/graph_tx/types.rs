@@ -81,6 +81,15 @@ pub(in crate::store) struct GraphNodeUpsertTxArgs<'a> {
     pub(in crate::store) source_event_id: &'a str,
 }
 
+pub(in crate::store) struct GraphNodeDeleteTxArgs<'a> {
+    pub(in crate::store) workspace: &'a str,
+    pub(in crate::store) branch: &'a str,
+    pub(in crate::store) doc: &'a str,
+    pub(in crate::store) now_ms: i64,
+    pub(in crate::store) node_id: &'a str,
+    pub(in crate::store) source_event_id: &'a str,
+}
+
 pub(in crate::store) struct GraphEdgeUpsertTxArgs<'a> {
     pub(in crate::store) workspace: &'a str,
     pub(in crate::store) branch: &'a str,

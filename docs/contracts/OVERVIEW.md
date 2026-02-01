@@ -1,4 +1,4 @@
-# Contracts — Overview (v0)
+# Contracts — Overview (v1)
 
 This folder defines the **stable, versioned contracts** for the MCP tools exposed by this server.
 
@@ -12,7 +12,7 @@ This folder defines the **stable, versioned contracts** for the MCP tools expose
 
 ## Versioning
 
-- Contract version: **v0** (breaking changes allowed until v1).
+- Contract version: **v1** (breaking changes require a major bump).
 - Once v1 is declared, breaking changes require a major bump and migration notes.
 
 ## Naming constraints
@@ -21,8 +21,10 @@ Many MCP clients require tool names to match `^[a-zA-Z0-9_-]+$`.
 
 ## Contract index
 
-- `TYPES.md` — common types, budgets, error model, response envelope
-- `TASKS.md` — task execution surface (`tasks_*`)
+- `TYPES.md` — common types, budgets, error model, response envelope (v1)
+- `V1_COMMANDS.md` — v1 cmd registry + golden ops
+- `V1_MIGRATION.md` — old tool names → cmd
+- `TASKS.md` — legacy task surface (v0)
 - `MEMORY.md` — reasoning memory surface (branching, notes, graph, traces)
 - `ANCHORS.md` — meaning-map anchors surface (architecture-scoped memory)
 - `DELEGATION.md` — delegation jobs (runner protocol + tracking)

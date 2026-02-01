@@ -63,7 +63,15 @@ fn tasks_macro_start_with_think_pipeline() {
         .and_then(|v| v.get("cards"))
         .and_then(|v| v.as_array())
         .expect("resume_super memory.cards");
-    assert!(cards.len() >= 2, "think pipeline should create >= 2 cards");
+    let card_ids = cards
+        .iter()
+        .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+        .collect::<Vec<_>>();
+    assert!(
+        cards.len() >= 2,
+        "think pipeline should create >= 2 cards; got {}: {card_ids:?}",
+        cards.len()
+    );
 
     let notes = resume_text
         .get("result")

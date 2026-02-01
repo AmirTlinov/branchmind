@@ -81,6 +81,13 @@ impl Server {
     }
 
     pub(crate) fn request(&mut self, req: Value) -> Value {
+        let mut req = req;
+        rewrite_tool_call(&mut req);
+        self.send(req);
+        self.recv()
+    }
+
+    pub(crate) fn request_raw(&mut self, req: Value) -> Value {
         self.send(req);
         self.recv()
     }
@@ -120,6 +127,179 @@ impl Drop for Server {
             let _ = std::fs::remove_dir_all(&self.storage_dir);
         }
     }
+}
+
+pub(crate) fn rewrite_tool_call(req: &mut Value) {
+    let Some(obj) = req.as_object_mut() else {
+        return;
+    };
+    if obj.get("method").and_then(|v| v.as_str()) != Some("tools/call") {
+        return;
+    }
+    let Some(params) = obj.get_mut("params").and_then(|v| v.as_object_mut()) else {
+        return;
+    };
+    let raw_name = match params.get("name").and_then(|v| v.as_str()) {
+        Some(v) => v.to_string(),
+        None => return,
+    };
+    if raw_name.starts_with("bm.") {
+        return;
+    }
+    let name = normalize_legacy_tool_name(&raw_name);
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    if name == "status" {
+        params.insert("name".to_string(), json!("status"));
+        params.insert("arguments".to_string(), args);
+        return;
+    }
+    if name == "open" {
+        params.insert("name".to_string(), json!("open"));
+        params.insert("arguments".to_string(), args);
+        return;
+    }
+
+    if let Some((portal, cmd)) = legacy_tool_to_cmd(&name) {
+        let mut envelope = serde_json::Map::new();
+        if let Some(ws) = args.get("workspace").cloned() {
+            envelope.insert("workspace".to_string(), ws);
+        }
+        envelope.insert("op".to_string(), json!("call"));
+        envelope.insert("cmd".to_string(), json!(cmd));
+        envelope.insert("args".to_string(), args);
+        params.insert("name".to_string(), json!(portal));
+        params.insert("arguments".to_string(), Value::Object(envelope));
+    }
+}
+
+fn normalize_legacy_tool_name(raw: &str) -> String {
+    let mut name = raw.trim();
+    if let Some((_, suffix)) = name.rsplit_once('/') {
+        name = suffix;
+    }
+    if let Some((prefix, suffix)) = name.split_once('.')
+        && prefix == "branchmind"
+    {
+        name = suffix;
+    }
+    name.trim().to_string()
+}
+
+fn legacy_tool_to_cmd(name: &str) -> Option<(&'static str, String)> {
+    if name == "workspace_use" {
+        return Some(("workspace", "workspace.use".to_string()));
+    }
+    if name == "workspace_reset" {
+        return Some(("workspace", "workspace.reset".to_string()));
+    }
+
+    if matches!(name, "init" | "help" | "skill" | "diagnostics" | "storage") {
+        return Some(("system", format!("system.{name}")));
+    }
+
+    if name == "context_pack" {
+        return Some(("think", "think.context.pack".to_string()));
+    }
+    if name == "context_pack_export" {
+        return Some(("think", "think.context.pack.export".to_string()));
+    }
+
+    if name == "docs_list" {
+        return Some(("docs", "docs.list".to_string()));
+    }
+    if matches!(name, "show" | "diff" | "merge") {
+        return Some(("docs", format!("docs.{name}")));
+    }
+    if name.starts_with("transcripts_") {
+        let suffix = name.trim_start_matches("transcripts_");
+        return Some(("docs", format!("docs.transcripts.{}", dotted(suffix))));
+    }
+    if name == "export" {
+        return Some(("docs", "docs.export".to_string()));
+    }
+
+    if name == "tasks_runner_heartbeat" {
+        return Some(("jobs", "jobs.runner.heartbeat".to_string()));
+    }
+    if let Some(suffix) = name.strip_prefix("tasks_jobs_") {
+        return Some(("jobs", format!("jobs.{}", dotted(suffix))));
+    }
+
+    if let Some(suffix) = name.strip_prefix("tasks_") {
+        let cmd = match suffix {
+            "create" => "tasks.plan.create".to_string(),
+            "decompose" => "tasks.plan.decompose".to_string(),
+            "evidence_capture" => "tasks.evidence.capture".to_string(),
+            "close_step" => "tasks.step.close".to_string(),
+            _ => format!("tasks.{}", dotted(suffix)),
+        };
+        return Some(("tasks", cmd));
+    }
+
+    if let Some(suffix) = name.strip_prefix("graph_") {
+        return Some(("graph", format!("graph.{}", dotted(suffix))));
+    }
+
+    if let Some(suffix) = name.strip_prefix("branch_") {
+        return Some(("vcs", format!("vcs.branch.{}", dotted(suffix))));
+    }
+    if let Some(suffix) = name.strip_prefix("tag_") {
+        return Some(("vcs", format!("vcs.tag.{}", dotted(suffix))));
+    }
+    if name == "notes_commit" {
+        return Some(("vcs", "vcs.notes.commit".to_string()));
+    }
+    if matches!(name, "checkout" | "commit" | "log" | "reflog" | "reset") {
+        return Some(("vcs", format!("vcs.{name}")));
+    }
+
+    if name == "knowledge_list" {
+        return Some(("think", "think.knowledge.query".to_string()));
+    }
+    if name == "think_lint" {
+        return Some(("think", "think.knowledge.lint".to_string()));
+    }
+    if name == "think_template" {
+        return Some(("think", "think.reasoning.seed".to_string()));
+    }
+    if name == "think_pipeline" {
+        return Some(("think", "think.reasoning.pipeline".to_string()));
+    }
+    if name == "macro_branch_note" {
+        return Some(("think", "think.idea.branch.create".to_string()));
+    }
+    if name == "macro_anchor_note" {
+        return Some(("think", "think.macro.anchor.note".to_string()));
+    }
+    if let Some(suffix) = name.strip_prefix("anchors_") {
+        return Some(("think", format!("think.anchor.{}", dotted(suffix))));
+    }
+    if let Some(suffix) = name.strip_prefix("anchor_") {
+        return Some(("think", format!("think.anchor.{}", dotted(suffix))));
+    }
+    if let Some(suffix) = name.strip_prefix("think_") {
+        return Some(("think", format!("think.{}", dotted(suffix))));
+    }
+
+    if let Some(suffix) = name.strip_prefix("trace_") {
+        return Some(("think", format!("think.trace.{}", dotted(suffix))));
+    }
+    if let Some(suffix) = name.strip_prefix("context_pack_") {
+        return Some(("think", format!("think.context.pack.{}", dotted(suffix))));
+    }
+    if name == "context_pack" {
+        return Some(("think", "think.context.pack".to_string()));
+    }
+
+    None
+}
+
+fn dotted(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace('_', ".")
 }
 
 fn temp_dir(test_name: &str) -> PathBuf {

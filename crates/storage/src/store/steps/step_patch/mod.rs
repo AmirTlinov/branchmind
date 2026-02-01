@@ -164,24 +164,17 @@ impl SqliteStore {
             step_id: step_id.clone(),
             path: path.clone(),
         };
-        let event = insert_event_tx(
+        let (event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            "step_defined",
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "step_defined",
+                payload_json: &event_payload_json,
+            },
         )?;
 
         let (after_detail, after_completed_at_ms) =

@@ -39,7 +39,7 @@ fn tasks_snapshot_truncation_inserts_stable_reference_line_second() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000 } }
+        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000, "fmt": "lines" } }
     }));
     let text = extract_tool_text_str(&snapshot);
 
@@ -107,7 +107,8 @@ fn tasks_snapshot_truncation_prefers_cockpit_card_reference() {
             "name": "tasks_snapshot",
             "arguments": {
                 "workspace": "ws_snapshot_cockpit_ref",
-                "max_chars": 2000
+                "max_chars": 2000,
+                "fmt": "lines"
             }
         }
     }));

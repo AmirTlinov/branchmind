@@ -8,6 +8,20 @@ use std::thread::sleep;
 use std::time::Duration;
 
 fn task_id_from_focus_line(text: &str) -> Option<String> {
+    // v1 portals return structured JSON envelopes; most task macros surface `result.task_id`.
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+        let result = parsed.get("result");
+        let task_id = result
+            .and_then(|v| v.get("task_id").or_else(|| v.get("task")))
+            .and_then(|v| v.as_str())
+            .or_else(|| result.and_then(|v| v.get("focus")).and_then(|v| v.as_str()));
+        if let Some(id) = task_id
+            && id.starts_with("TASK-")
+        {
+            return Some(id.to_string());
+        }
+    }
+
     let first = text.lines().next()?.trim();
     if !first.starts_with("focus ") {
         return None;
@@ -173,10 +187,24 @@ fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
             }
         }
     }));
-    let snap = extract_tool_text_str(&snapshot);
+    let snap = extract_tool_text(&snapshot);
     assert!(
-        snap.lines().next().unwrap_or("").contains("job=JOB-"),
-        "expected job HUD in state line, got:\n{snap}"
+        snap.get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "tasks_snapshot must succeed: {snap}"
+    );
+    let hud_job_id = snap
+        .get("result")
+        .and_then(|v| v.get("capsule"))
+        .and_then(|v| v.get("where"))
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        hud_job_id,
+        Some(job_id.as_str()),
+        "expected active job HUD in snapshot capsule.where.job, got: {snap}"
     );
 
     let open_job = server.request(json!({
@@ -268,10 +296,15 @@ fn completed_jobs_are_hidden_from_snapshot_hud() {
         "method": "tools/call",
         "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws1", "max_chars": 3000 } }
     }));
-    let snap = extract_tool_text_str(&snapshot);
+    let snap = extract_tool_text(&snapshot);
+    let hud_job = snap
+        .get("result")
+        .and_then(|v| v.get("capsule"))
+        .and_then(|v| v.get("where"))
+        .and_then(|v| v.get("job"));
     assert!(
-        !snap.lines().next().unwrap_or("").contains("job=JOB-"),
-        "DONE jobs should not be shown in the HUD, got:\n{snap}"
+        hud_job.is_none(),
+        "DONE jobs should not be shown in the HUD (capsule.where.job), got: {snap}"
     );
 }
 
@@ -1468,11 +1501,8 @@ fn jobs_radar_includes_attention_and_last_event() {
         "method": "tools/call",
         "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10, "fmt": "lines" } }
     }));
-    let radar_lines_out = extract_tool_text(&radar_lines);
-    let radar_lines_text = radar_lines_out
-        .as_str()
-        .expect("fmt=lines must return text");
-    let job_line = radar_lines_text
+    let radar_text = extract_tool_text_str(&radar_lines);
+    let job_line = radar_text
         .lines()
         .find(|line| line.trim_start().starts_with(expected_ref.as_str()))
         .expect("expected the job row to be ref-first and start with JOB-...@seq");

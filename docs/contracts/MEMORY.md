@@ -1,5 +1,9 @@
 # Contracts — Reasoning Memory Surface (v0)
 
+> ⚠️ **v1 surface note:** In contract **v1**, legacy tool names like `think_card`, `think_*`, `anchors_*`
+> are **rejected** (`UNKNOWN_TOOL`). Use the **`think` portal** with `op="call"` + `cmd`
+> (e.g. `cmd="think.card"`, `cmd="think.anchor.snapshot"`). See `V1_OVERVIEW.md` + `V1_COMMANDS.md`.
+
 The reasoning subsystem is a durable, agent-first working memory:
 
 - append-only logs for “what happened and why”,

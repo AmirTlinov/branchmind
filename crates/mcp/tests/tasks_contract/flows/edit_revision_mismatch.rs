@@ -43,17 +43,19 @@ fn tasks_edit_revision_mismatch() {
         Some("REVISION_MISMATCH")
     );
 
-    let suggestions = mismatch_text
-        .get("suggestions")
+    let actions = mismatch_text
+        .get("actions")
         .and_then(|v| v.as_array())
-        .expect("suggestions");
+        .expect("actions");
     assert!(
-        !suggestions.is_empty(),
-        "REVISION_MISMATCH must include suggestions"
-    );
-    assert_eq!(
-        suggestions[0].get("target").and_then(|v| v.as_str()),
-        Some("tasks_context")
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("tasks")
+                && a.get("args")
+                    .and_then(|v| v.get("cmd"))
+                    .and_then(|v| v.as_str())
+                    == Some("tasks.context")
+        }),
+        "REVISION_MISMATCH must include an actionable follow-up (tasks.context)"
     );
 
     let delta = server.request(json!({

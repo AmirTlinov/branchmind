@@ -7,6 +7,7 @@ use std::collections::HashMap;
 mod util;
 use util::*;
 
+mod actions;
 mod branchmind;
 mod generic;
 
@@ -103,6 +104,65 @@ pub(crate) fn apply_portal_line_format(
             obj.insert("suggestions".to_string(), Value::Array(Vec::new()));
         }
     }
+}
+
+fn portalize_legacy_tool_call(
+    legacy_tool: &str,
+    args_value: Option<&Value>,
+    outer_workspace: Option<&str>,
+    omit_workspace: bool,
+) -> Option<String> {
+    let legacy_tool = legacy_tool.trim();
+    if legacy_tool.is_empty() {
+        return None;
+    }
+    // Already a v1 portal tool (or a method name like tools/list) — render directly.
+    if crate::tools_v1::is_v1_tool(legacy_tool) {
+        let args_str = args_value.and_then(render_kv_args).unwrap_or_default();
+        return Some(if args_str.is_empty() {
+            legacy_tool.to_string()
+        } else {
+            format!("{legacy_tool} {args_str}")
+        });
+    }
+
+    let registry = crate::ops::CommandRegistry::global();
+    let spec = registry.find_by_legacy_tool(legacy_tool)?;
+
+    let mut inner = args_value
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    // Portal UX: default checkpoint set when omitted (copy/paste-safe discipline).
+    if legacy_tool == "tasks_macro_close_step" && !inner.contains_key("checkpoints") {
+        inner.insert("checkpoints".to_string(), Value::String("gate".to_string()));
+    }
+
+    // Hygiene: strip duplicated workspace inside nested args when we already have an outer workspace.
+    if let Some(ws) = outer_workspace.map(|s| s.trim()).filter(|s| !s.is_empty())
+        && let Some(inner_ws) = inner.get("workspace").and_then(|v| v.as_str())
+        && inner_ws.trim() == ws
+    {
+        inner.remove("workspace");
+    }
+
+    let mut env = serde_json::Map::new();
+    if !omit_workspace && let Some(ws) = outer_workspace.map(|s| s.trim()).filter(|s| !s.is_empty())
+    {
+        env.insert("workspace".to_string(), Value::String(ws.to_string()));
+    }
+    env.insert("op".to_string(), Value::String("call".to_string()));
+    env.insert("cmd".to_string(), Value::String(spec.cmd.clone()));
+    env.insert("args".to_string(), Value::Object(inner));
+
+    let env_str = render_kv_args(&Value::Object(env)).unwrap_or_default();
+    let portal = spec.domain_tool.as_str();
+    Some(if env_str.is_empty() {
+        portal.to_string()
+    } else {
+        format!("{portal} {env_str}")
+    })
 }
 
 fn render_tasks_macro_start_lines(
@@ -1090,24 +1150,14 @@ fn render_tasks_resume_lines(
             .and_then(|v| v.get("purpose"))
             .and_then(|v| v.as_str()),
     );
-    let action_available = resume
-        .get("capsule")
-        .and_then(|v| v.get("action"))
-        .and_then(|v| v.get("available"))
-        .and_then(|v| v.as_bool());
     let action_args = resume
         .get("capsule")
         .and_then(|v| v.get("action"))
         .and_then(|v| v.get("args").or_else(|| v.get("args_hint")));
 
-    let action_cmd = action_tool.map(|tool| {
-        let args_str = action_args.and_then(render_kv_args).unwrap_or_default();
-        if args_str.is_empty() {
-            tool.to_string()
-        } else {
-            format!("{tool} {args_str}")
-        }
-    });
+    let outer_ws = args.get("workspace").and_then(|v| v.as_str());
+    let action_cmd = action_tool
+        .and_then(|tool| portalize_legacy_tool_call(tool, action_args, outer_ws, omit_workspace));
 
     let prep_tool = resume
         .get("capsule")
@@ -1123,14 +1173,8 @@ fn render_tasks_resume_lines(
         .get("capsule")
         .and_then(|v| v.get("prep_action"))
         .and_then(|v| v.get("args").or_else(|| v.get("args_hint")));
-    let prep_cmd = prep_tool.map(|tool| {
-        let args_str = prep_args.and_then(render_kv_args).unwrap_or_default();
-        if args_str.is_empty() {
-            tool.to_string()
-        } else {
-            format!("{tool} {args_str}")
-        }
-    });
+    let prep_cmd = prep_tool
+        .and_then(|tool| portalize_legacy_tool_call(tool, prep_args, outer_ws, omit_workspace));
 
     let map_tool = resume
         .get("capsule")
@@ -1146,26 +1190,8 @@ fn render_tasks_resume_lines(
         .get("capsule")
         .and_then(|v| v.get("map_action"))
         .and_then(|v| v.get("args").or_else(|| v.get("args_hint")));
-    let map_cmd = map_tool.map(|tool| {
-        let args_str = map_args.and_then(render_kv_args).unwrap_or_default();
-        if args_str.is_empty() {
-            tool.to_string()
-        } else {
-            format!("{tool} {args_str}")
-        }
-    });
-
-    let escalation_toolset = resume
-        .get("capsule")
-        .and_then(|v| v.get("escalation"))
-        .and_then(|v| v.get("toolset"))
-        .and_then(|v| v.as_str());
-    let escalation_required = resume
-        .get("capsule")
-        .and_then(|v| v.get("escalation"))
-        .and_then(|v| v.get("required"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let map_cmd = map_tool
+        .and_then(|tool| portalize_legacy_tool_call(tool, map_args, outer_ws, omit_workspace));
 
     let first_open_path = opt_str(
         resume
@@ -1200,14 +1226,9 @@ fn render_tasks_resume_lines(
     );
 
     let mut more_cmd = None;
+    let mut more_cmd_inner_args: Option<serde_json::Map<String, Value>> = None;
     if notes_more || trace_more || cards_more {
         let mut more_args = serde_json::Map::new();
-        if !omit_workspace
-            && let Some(ws) = args.get("workspace").and_then(|v| v.as_str())
-            && !ws.trim().is_empty()
-        {
-            more_args.insert("workspace".to_string(), Value::String(ws.to_string()));
-        }
         if notes_more && let Some(cursor) = notes_cursor {
             more_args.insert(
                 "notes_cursor".to_string(),
@@ -1228,13 +1249,15 @@ fn render_tasks_resume_lines(
         }
 
         // Continuation should be copy/paste-ready without asking the agent to "decode" cursors.
-        // Prefer the read-only snapshot portal for paging through memory.
-        let args_str = render_kv_args(&Value::Object(more_args)).unwrap_or_default();
-        if args_str.is_empty() {
-            more_cmd = Some("tasks_snapshot".to_string());
-        } else {
-            more_cmd = Some(format!("tasks_snapshot {args_str}"));
-        }
+        // Prefer the read-only snapshot entrypoint for paging through memory.
+        let more_value = Value::Object(more_args.clone());
+        more_cmd = portalize_legacy_tool_call(
+            "tasks_snapshot",
+            Some(&more_value),
+            outer_ws,
+            omit_workspace,
+        );
+        more_cmd_inner_args = Some(more_args);
     }
 
     let mut lines = Vec::new();
@@ -1719,12 +1742,24 @@ fn render_tasks_resume_lines(
         && was_trimmed
         && status == Some("DONE")
         && !has_action_cmd
-        && let Some(cmd) = more_cmd.as_mut()
-        && !cmd.contains("refs=")
+        && more_cmd_inner_args.is_some()
     {
         // For DONE tasks, keep continuation strictly 2 lines (state + command). If budget trimming
         // happened, upgrade the continuation into nav-mode so the next call yields REFERENCE lines.
-        cmd.push_str(" refs=true");
+        if let Some(inner) = more_cmd_inner_args.as_mut()
+            && !inner.contains_key("refs")
+        {
+            inner.insert("refs".to_string(), Value::Bool(true));
+        }
+        if let Some(inner) = more_cmd_inner_args.as_ref() {
+            let inner_value = Value::Object(inner.clone());
+            more_cmd = portalize_legacy_tool_call(
+                "tasks_snapshot",
+                Some(&inner_value),
+                outer_ws,
+                omit_workspace,
+            );
+        }
     } else if want_refs {
         append_budget_reference_lines(&mut lines, resume);
         let open_id = select_budget_reference_id(resume).or_else(|| {
@@ -1767,12 +1802,6 @@ fn render_tasks_resume_lines(
             lines.push(cmd);
         }
     } else if let Some(cmd) = action_cmd {
-        if action_available == Some(false)
-            && escalation_required
-            && let Some(toolset) = escalation_toolset
-        {
-            lines.push(format!("tools/list toolset={toolset}"));
-        }
         lines.push(cmd);
     } else if let Some(cmd) = more_cmd.clone() {
         // If there is no "next action" (e.g. focused task already DONE), but memory has more,

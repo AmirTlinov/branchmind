@@ -196,24 +196,24 @@ fn transcripts_open_suggests_capture_note_and_is_step_aware_when_focused() {
     }));
     let open_text = extract_tool_text(&open);
 
-    let suggestions = open_text
-        .get("suggestions")
+    // v1: suggestions are deprecated; recoveries are actions[] (copy/paste-ready).
+    let actions = open_text
+        .get("actions")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    assert!(
-        suggestions
-            .iter()
-            .any(|s| s.get("target").and_then(|v| v.as_str()) == Some("macro_branch_note")),
-        "expected macro_branch_note capture suggestion"
-    );
-
-    let capture = suggestions
+    let capture = actions
         .iter()
-        .find(|s| s.get("target").and_then(|v| v.as_str()) == Some("macro_branch_note"))
-        .expect("capture suggestion");
+        .find(|a| {
+            a.get("args")
+                .and_then(|v| v.get("cmd"))
+                .and_then(|v| v.as_str())
+                == Some("think.idea.branch.create")
+        })
+        .expect("expected think.idea.branch.create capture action");
     let step = capture
-        .get("params")
+        .get("args")
+        .and_then(|v| v.get("args"))
         .and_then(|v| v.get("meta"))
         .and_then(|v| v.get("step"))
         .and_then(|v| v.as_object())
@@ -672,16 +672,19 @@ fn transcripts_digest_empty_under_scan_budget_emits_warning_and_retry_suggestion
         "expected TRANSCRIPTS_SCAN_TRUNCATED warning"
     );
 
-    let suggestions = digest_text
-        .get("suggestions")
+    let actions = digest_text
+        .get("actions")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
     assert!(
-        suggestions
-            .iter()
-            .any(|s| s.get("target").and_then(|v| v.as_str()) == Some("transcripts_digest")),
-        "expected a retry suggestion"
+        actions.iter().any(|a| {
+            a.get("args")
+                .and_then(|v| v.get("cmd"))
+                .and_then(|v| v.as_str())
+                == Some("docs.transcripts.digest")
+        }),
+        "expected a retry action, got actions={actions:?}\nfull={digest_text:?}"
     );
 }
 

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod actions;
 mod budgets;
 mod lifecycle;
 mod pipeline;

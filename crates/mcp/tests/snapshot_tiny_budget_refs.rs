@@ -51,7 +51,7 @@ fn tasks_snapshot_tiny_budget_still_emits_openable_refs_and_prefers_open_task_ju
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 900, "refs": true } }
+        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 900, "refs": true, "fmt": "lines" } }
     }));
     let text = extract_tool_text_str(&snapshot);
     let lines = text.lines().collect::<Vec<_>>();

@@ -124,24 +124,17 @@ impl SqliteStore {
             perf_confirmed,
             docs_confirmed,
         );
-        let event = insert_event_tx(
+        let (event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            "step_verified",
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "step_verified",
+                payload_json: &event_payload_json,
+            },
         )?;
 
         let (snapshot_title, snapshot_completed) =

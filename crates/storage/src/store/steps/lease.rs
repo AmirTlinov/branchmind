@@ -202,14 +202,17 @@ impl SqliteStore {
             "takeover_from": takeover_from
         })
         .to_string();
-        let event = insert_event_tx(
+        let (event, _reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            event_type,
-            &payload_json,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type,
+                payload_json: &payload_json,
+            },
         )?;
 
         let expires_seq = event.seq + ttl_seq;
@@ -224,16 +227,6 @@ impl SqliteStore {
                 now_ms,
                 now_ms
             ],
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
         )?;
 
         tx.commit()?;
@@ -316,30 +309,23 @@ impl SqliteStore {
             "ttl_seq": ttl_seq
         })
         .to_string();
-        let event = insert_event_tx(
+        let (event, _reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            "step_lease_renewed",
-            &payload_json,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "step_lease_renewed",
+                payload_json: &payload_json,
+            },
         )?;
 
         let expires_seq = event.seq + ttl_seq;
         tx.execute(
             "UPDATE step_leases SET expires_seq=?4, updated_at_ms=?5 WHERE workspace=?1 AND step_id=?2 AND holder_agent_id=?3",
             params![workspace.as_str(), step_id, agent_id, expires_seq, now_ms],
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
         )?;
 
         tx.commit()?;
@@ -414,24 +400,17 @@ impl SqliteStore {
             "agent_id": agent_id
         })
         .to_string();
-        let event = insert_event_tx(
+        let (event, _reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            "step_lease_released",
-            &payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: "step_lease_released",
+                payload_json: &payload_json,
+            },
         )?;
 
         tx.commit()?;

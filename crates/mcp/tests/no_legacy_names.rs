@@ -28,19 +28,58 @@ fn branchmind_tools_are_unprefixed_and_legacy_names_are_rejected() {
         );
     }
 
-    let legacy = server.request(json!({
+    let legacy = server.request_raw(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
         "params": { "name": "branchmind_status", "arguments": { "workspace": "ws_legacy" } }
     }));
     let legacy_text = extract_tool_text(&legacy);
+    let legacy_code = legacy_text
+        .get("error")
+        .and_then(|v| v.get("code"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            legacy_text.as_str().and_then(|s| {
+                if s.contains("UNKNOWN_TOOL") {
+                    Some("UNKNOWN_TOOL".to_string())
+                } else {
+                    None
+                }
+            })
+        });
     assert_eq!(
-        legacy_text
-            .get("error")
-            .and_then(|v| v.get("code"))
-            .and_then(|v| v.as_str()),
+        legacy_code.as_deref(),
         Some("UNKNOWN_TOOL"),
         "legacy tool names must be rejected"
+    );
+
+    // v1 portal tools are unprefixed and callable directly.
+    let status_ok = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "status", "arguments": { "workspace": "ws_legacy" } }
+    }));
+    let status_text = extract_tool_text(&status_ok);
+    let status_code = status_text
+        .get("error")
+        .and_then(|v| v.get("code"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            status_text.as_str().and_then(|s| {
+                if s.contains("UNKNOWN_TOOL") {
+                    Some("UNKNOWN_TOOL".to_string())
+                } else {
+                    None
+                }
+            })
+        });
+    assert_ne!(
+        status_code.as_deref(),
+        Some("UNKNOWN_TOOL"),
+        "v1 status must be callable (not UNKNOWN_TOOL)"
     );
 }

@@ -4,6 +4,10 @@ This is a **productization plan** for turning BranchMind into a *flagship* AI-na
 agents resume by meaning in seconds, delegation scales to many long-running subagents, and managers
 stay in control with low-noise, deterministic outputs.
 
+> ✅ **v1 portal naming:** This repo has cut over to **10 tools**. When this doc mentions legacy
+> tool names (e.g. `tasks_snapshot`, `think_card`), read them as `tasks`/`think` portal calls with
+> `op="call"` + `cmd="tasks.snapshot"` / `cmd="think.card"`. Legacy tool names are rejected.
+
 This document is intentionally **detailed** and **actionable**:
 - contract-first (docs/contracts are the spec),
 - reversible (feature flags / soft defaults),

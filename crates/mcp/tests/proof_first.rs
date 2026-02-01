@@ -79,19 +79,22 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
         "snapshot state line must include ref=... for navigation"
     );
     assert!(
-        snap_lines[1].starts_with("think_card"),
-        "when anchor is missing, snapshot must suggest a canonical anchor attach command"
+        snap_lines[1].starts_with("think ")
+            && snap_lines[1].contains("op=call")
+            && snap_lines[1].contains("cmd=think.card"),
+        "when anchor is missing, snapshot must suggest a canonical anchor attach command via think portal"
     );
     assert!(
         snap_lines[1].contains("v:canon"),
         "anchor attach suggestion must be canonical (v:canon)"
     );
     assert!(
-        snap_lines[0].contains("| backup tasks_macro_close_step"),
+        snap_lines[0].contains("| backup tasks ")
+            && snap_lines[0].contains("cmd=tasks.macro.close.step"),
         "snapshot state line must preserve progress as a backup command"
     );
     assert!(
-        snap_lines[0].contains("proof=["),
+        snap_lines[0].contains("\"proof\""),
         "proof-required step must inject a proof placeholder into the backup progress command"
     );
 
@@ -111,11 +114,11 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
         "error must be typed as PROOF_REQUIRED"
     );
     assert!(
-        err_lines[1].starts_with("tasks_macro_close_step"),
+        err_lines[1].starts_with("tasks ") && err_lines[1].contains("cmd=tasks.macro.close.step"),
         "recovery must stay portal-first (retry macro)"
     );
     assert!(
-        err_lines[1].contains("proof="),
+        err_lines[1].contains("proof"),
         "recovery command should include a proof placeholder"
     );
 
@@ -353,11 +356,11 @@ fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
         "placeholder-only proof must be ignored (still PROOF_REQUIRED)"
     );
     assert!(
-        lines[1].starts_with("tasks_macro_close_step"),
+        lines[1].starts_with("tasks ") && lines[1].contains("cmd=tasks.macro.close.step"),
         "recovery must stay portal-first"
     );
     assert!(
-        lines[1].contains("proof="),
+        lines[1].contains("proof"),
         "recovery command must include proof template"
     );
 }

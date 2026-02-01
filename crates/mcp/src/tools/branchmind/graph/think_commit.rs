@@ -43,9 +43,11 @@ impl McpServer {
         // - note (and other free-form) default to draft to prevent long-term noise.
         if !tags_has(&parsed.tags, VIS_TAG_DRAFT) && !tags_has(&parsed.tags, VIS_TAG_CANON) {
             let default = match parsed.card_type.trim().to_ascii_lowercase().as_str() {
-                "decision" | "evidence" | "test" | "hypothesis" | "question" | "update" => {
-                    VIS_TAG_CANON
-                }
+                // "frame" is a durable context anchor (not chatter). Keep it visible in smart
+                // views so tasks_bootstrap/macro_start + think_pipeline produce an immediately
+                // useful memory set without requiring include_drafts/all_lanes.
+                "frame" | "decision" | "evidence" | "test" | "hypothesis" | "question"
+                | "update" => VIS_TAG_CANON,
                 _ => VIS_TAG_DRAFT,
             };
             parsed.tags.push(default.to_string());

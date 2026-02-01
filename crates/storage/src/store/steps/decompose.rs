@@ -96,24 +96,17 @@ impl SqliteStore {
         let parent_path_str = parent_path.map(|p| p.to_string());
         let event_payload_json =
             build_steps_added_payload(task_id, parent_path_str.as_deref(), &created_steps);
-        let event = insert_event_tx(
+        let (event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.to_string()),
-            parent_path_str,
-            "steps_added",
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id,
+                kind: TaskKind::Task,
+                path: parent_path_str,
+                event_type: "steps_added",
+                payload_json: &event_payload_json,
+            },
         )?;
 
         let mut graph_touched = false;

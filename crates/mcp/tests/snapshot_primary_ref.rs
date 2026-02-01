@@ -47,7 +47,8 @@ fn tasks_snapshot_state_line_surfaces_cockpit_card_ref_when_available() {
             "name": "tasks_snapshot",
             "arguments": {
                 "workspace": "ws_primary_ref",
-                "max_chars": 4000
+                "max_chars": 4000,
+                "fmt": "lines"
             }
         }
     }));

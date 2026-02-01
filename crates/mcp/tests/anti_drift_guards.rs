@@ -45,6 +45,8 @@ impl RawServer {
     }
 
     fn request(&mut self, req: serde_json::Value) -> serde_json::Value {
+        let mut req = req;
+        support::rewrite_tool_call(&mut req);
         self.send(req);
         self.recv()
     }
@@ -351,11 +353,17 @@ fn advertised_portal_toolsets_stay_minimal() {
         core_names,
         vec![
             "status",
-            "tasks_macro_start",
-            "tasks_snapshot",
-            "workspace_use"
+            "open",
+            "workspace",
+            "tasks",
+            "jobs",
+            "think",
+            "graph",
+            "vcs",
+            "docs",
+            "system",
         ],
-        "core toolset must stay the 4-tool golden path"
+        "core toolset must stay the 10-tool v1 surface"
     );
 
     let mut daily = Server::start_initialized_with_args(
@@ -376,19 +384,16 @@ fn advertised_portal_toolsets_stay_minimal() {
         daily_names,
         vec![
             "status",
-            "tasks_macro_start",
-            "tasks_snapshot",
-            "workspace_use",
             "open",
-            "skill",
-            "tasks_jobs_radar",
-            "tasks_lint",
-            "tasks_macro_close_step",
-            "tasks_macro_delegate",
-            "think_card",
-            "think_playbook",
-            "workspace_reset",
+            "workspace",
+            "tasks",
+            "jobs",
+            "think",
+            "graph",
+            "vcs",
+            "docs",
+            "system",
         ],
-        "daily toolset must stay the small portal set"
+        "daily toolset must stay the 10-tool v1 surface"
     );
 }

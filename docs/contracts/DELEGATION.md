@@ -1,5 +1,12 @@
 # Contracts — Delegation (Jobs) (v1.6)
 
+> ✅ **v1 portal naming:** v1 exposes only **10 tools**. Delegation uses the `jobs` portal
+> (`op="call"` + `cmd="jobs.*"`). Legacy tool names like `tasks_jobs_*` are **rejected**
+> (`UNKNOWN_TOOL`). Task views referenced here map as:
+> - `tasks_snapshot` → `tasks` + `cmd="tasks.snapshot"`
+> - `tasks_macro_delegate` → `tasks` + `cmd="tasks.macro.delegate"`
+> See `V1_OVERVIEW.md` + `V1_MIGRATION.md`.
+
 Goal: allow AI agents to **delegate complex work** and track progress/results **without losing narrative**,
 while keeping daily views low-noise under tight budgets.
 
@@ -36,6 +43,107 @@ Jobs are **logistics**, not “knowledge”:
 
 - The actual research results should land as **cards/evidence/tests** linked to anchors/tasks.
 - Job completion should reference those artifacts via stable refs (`CARD-*`, `notes_doc@seq`, `TASK-*`).
+
+## Multi-executor routing (v1)
+
+Jobs may request a specific executor or defer to policy-based auto routing.
+
+### Job meta (v1)
+
+- `executor`: `codex | claude_code | auto`
+- `executor_profile`: `fast | deep | audit`
+- `executor_model` (optional, for `executor=claude_code`): model selector string passed to the CLI (e.g. `sonnet`/`opus`)
+- `policy` (for `executor=auto`):
+  - `prefer`: ordered list of executors
+  - `forbid`: excluded executors
+  - `min_profile`: minimal acceptable profile
+- `expected_artifacts`: `report | diff | patch | bench | docs_update`
+
+#### Copy/paste: create a Claude Code job
+
+This pins the job to the `claude_code` executor and a specific model. The runner will pick it up when
+started with `--claude-bin` / `BM_CLAUDE_BIN`.
+
+```json
+{
+  "workspace": "<workspace>",
+  "op": "create",
+  "args": {
+    "title": "Investigate <topic>",
+    "prompt": "<what to do>",
+    "kind": "research",
+    "priority": "normal",
+    "task": "TASK-123",
+    "anchor": "a:core",
+    "executor": "claude_code",
+    "executor_profile": "fast",
+    "expected_artifacts": ["report"],
+    "meta": {
+      "executor_model": "sonnet",
+      "skill_profile": "research"
+    }
+  }
+}
+```
+
+Tip: `executor`/`executor_profile` are first-class args and are also persisted into `job.meta` for
+introspection and deterministic auto routing.
+
+#### Copy/paste: create an auto-routed job (prefer Claude Code)
+
+This keeps the intent high-level (`executor=auto`) but nudges routing deterministically via policy.
+If a `claude_code` runner is available it will be selected first; otherwise the job falls back to `codex`.
+
+```json
+{
+  "workspace": "<workspace>",
+  "op": "create",
+  "args": {
+    "title": "Implement <feature>",
+    "prompt": "<what to do>",
+    "kind": "codex_cli",
+    "priority": "high",
+    "task": "TASK-123",
+    "anchor": "a:core",
+    "executor": "auto",
+    "executor_profile": "deep",
+    "expected_artifacts": ["patch"],
+    "policy": {
+      "prefer": ["claude_code", "codex"],
+      "forbid": [],
+      "min_profile": "fast"
+    },
+    "meta": {
+      "executor_model": "opus",
+      "skill_profile": "strict"
+    }
+  }
+}
+```
+
+### Runner capabilities
+
+Runners advertise:
+
+- `runner_id`
+- `executors` + supported `profiles`
+- `max_parallel`
+- `supports_artifacts`
+- `sandbox_policy`
+
+First-party runner (`bm_runner`) executors:
+
+- `codex` is always available (configurable via `--codex-bin` / `BM_CODEX_BIN`).
+- `claude_code` is available when configured via `--claude-bin` or `BM_CLAUDE_BIN`
+  (uses the official Claude Code CLI in headless mode with structured JSON output).
+
+### Deterministic routing
+
+`auto` selection is deterministic:
+
+1. filter by capabilities + `forbid` + `min_profile` + `expected_artifacts`
+2. rank by `prefer` + availability + queue length
+3. tie-break by `runner_id` lexicographic
 
 ## Noise control (no agent_id dependency)
 
@@ -409,3 +517,39 @@ This repository ships a small external runner binary, `bm_runner`, to make deleg
 Operational note:
 
 - The server (`bm_mcp`) remains deterministic: `bm_runner` is the only component that executes anything.
+
+## Multi‑executor delegation (v1)
+
+Jobs can target multiple executors; routing is deterministic.
+
+### Job meta
+
+```json
+{
+  "executor": "codex|claude_code|auto",
+  "executor_profile": "fast|deep|audit",
+  "policy": {
+    "prefer": ["claude_code", "codex"],
+    "forbid": [],
+    "min_profile": "audit"
+  }
+}
+```
+
+### Runner capabilities
+
+Runners advertise:
+
+- `runner_id`
+- `executors: ["codex", "claude_code"]`
+- supported profiles per executor
+- `max_parallel`
+- `sandbox_policy`
+
+### Deterministic auto routing
+
+1. Filter by `capabilities` + `forbid` + `min_profile`.
+2. Rank by `prefer` then availability/queue length.
+3. Stable tie‑break: `runner_id` lexicographic.
+
+Routing decisions are pure + deterministic; tests lock behavior.

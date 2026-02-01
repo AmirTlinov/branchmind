@@ -1,5 +1,9 @@
 # Contracts — Parity Matrix (apply_task + branchmind)
 
+> ⚠️ **v1 surface note:** This parity matrix lists **legacy tool names** for ecosystem mapping.
+> In contract **v1**, those names are **rejected** by the server. Use the 10 portals + `cmd`
+> (see `V1_OVERVIEW.md` + `V1_MIGRATION.md`).
+
 This document defines the **parity target** for branchmind-rust: the union of
 the `apply_task` and `branchmind` tool surfaces used by agents in the ecosystem.
 

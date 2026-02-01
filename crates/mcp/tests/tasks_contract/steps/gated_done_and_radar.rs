@@ -114,13 +114,19 @@ fn tasks_steps_gated_done_and_radar() {
             .and_then(|v| v.as_str()),
         Some("CHECKPOINTS_NOT_CONFIRMED")
     );
-    let suggestions = done_text
-        .get("suggestions")
+    let actions = done_text
+        .get("actions")
         .and_then(|v| v.as_array())
-        .expect("suggestions");
-    assert_eq!(
-        suggestions[0].get("target").and_then(|v| v.as_str()),
-        Some("tasks_verify")
+        .expect("actions");
+    assert!(
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("tasks")
+                && a.get("args")
+                    .and_then(|v| v.get("cmd"))
+                    .and_then(|v| v.as_str())
+                    == Some("tasks.macro.close.step")
+        }),
+        "CHECKPOINTS_NOT_CONFIRMED should include tasks.macro.close.step recovery action"
     );
 
     let verify_step = server.request(json!({

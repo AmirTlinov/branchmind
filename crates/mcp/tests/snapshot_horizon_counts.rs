@@ -75,7 +75,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_in_state_line() {
         "method": "tools/call",
         "params": {
             "name": "tasks_snapshot",
-            "arguments": { "plan": plan_id, "max_chars": 1200 }
+            "arguments": { "plan": plan_id, "max_chars": 1200, "fmt": "lines" }
         }
     }));
     let text = extract_tool_text_str(&snapshot);

@@ -53,8 +53,10 @@ fn dx_dod_daily_status_is_state_plus_command() {
         "first line should be a stable state summary"
     );
     assert!(
-        lines[1].starts_with("tasks_snapshot"),
-        "second line should be a low-noise next action"
+        lines[1].starts_with("tasks ")
+            && lines[1].contains("op=call")
+            && lines[1].contains("cmd=tasks.snapshot"),
+        "second line should be a low-noise next action via the tasks portal"
     );
 }
 
@@ -96,8 +98,10 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "start state line should include ref=... for navigation"
     );
     assert!(
-        start_lines[1].starts_with("think_card"),
-        "when anchor is missing, start should suggest a canonical anchor attach command"
+        start_lines[1].starts_with("think ")
+            && start_lines[1].contains("op=call")
+            && start_lines[1].contains("cmd=think.card"),
+        "when anchor is missing, start should suggest a canonical anchor attach command via think portal"
     );
     assert!(
         !start_lines[1].contains("workspace="),
@@ -108,7 +112,8 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "anchor attach suggestion must be canonical (v:canon)"
     );
     assert!(
-        start_lines[0].contains("| backup tasks_macro_close_step"),
+        start_lines[0].contains("| backup tasks ")
+            && start_lines[0].contains("cmd=tasks.macro.close.step"),
         "start state line should preserve progress as a backup command"
     );
 
@@ -143,8 +148,10 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "snapshot state line should include ref=... for navigation"
     );
     assert!(
-        snap_lines[1].starts_with("think_card"),
-        "when anchor is missing, snapshot should suggest a canonical anchor attach command"
+        snap_lines[1].starts_with("think ")
+            && snap_lines[1].contains("op=call")
+            && snap_lines[1].contains("cmd=think.card"),
+        "when anchor is missing, snapshot should suggest a canonical anchor attach command via think portal"
     );
     assert!(
         !snap_lines[1].contains("workspace="),
@@ -155,7 +162,8 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "anchor attach suggestion must be canonical (v:canon)"
     );
     assert!(
-        snap_lines[0].contains("| backup tasks_macro_close_step"),
+        snap_lines[0].contains("| backup tasks ")
+            && snap_lines[0].contains("cmd=tasks.macro.close.step"),
         "snapshot state line should preserve progress as a backup command"
     );
 }
@@ -185,7 +193,9 @@ fn dx_dod_no_focus_recovery_is_typed_and_portal_first() {
         "no-focus recovery must be a typed error"
     );
     assert!(
-        lines[1].starts_with("tasks_macro_start"),
+        lines[1].starts_with("tasks ")
+            && lines[1].contains("op=call")
+            && lines[1].contains("cmd=tasks.macro.start"),
         "no-focus recovery must suggest the portal macro_start (no full disclosure)"
     );
     assert!(
@@ -245,8 +255,8 @@ fn dx_dod_progressive_disclosure_is_two_commands_only() {
 
     let lines = text.lines().collect::<Vec<_>>();
     assert!(
-        lines.len() == 3,
-        "progressive disclosure should be 3 lines (state + tools/list + action), got {}",
+        lines.len() == 2,
+        "progressive disclosure should stay 2 lines (state + action), got {}",
         lines.len()
     );
     assert!(
@@ -254,16 +264,14 @@ fn dx_dod_progressive_disclosure_is_two_commands_only() {
         "first line should be the state line"
     );
     assert!(
-        lines[1].starts_with("tools/list toolset=full"),
-        "first command must be toolset disclosure"
+        lines[1].starts_with("tasks ")
+            && lines[1].contains("op=call")
+            && lines[1].contains("cmd=tasks.plan.decompose"),
+        "second line should be a copy/paste-ready decompose action via tasks portal"
     );
     assert!(
-        lines[2].starts_with("tasks_decompose"),
-        "second command must be the hidden action"
-    );
-    assert!(
-        lines[2].contains("task=") && lines[2].contains("steps="),
-        "hidden action must include args_hint for copy/paste"
+        lines[1].contains("\"task\"") && lines[1].contains("\"steps\""),
+        "decompose action must include task and steps args for copy/paste"
     );
 }
 
@@ -383,7 +391,7 @@ fn dx_dod_prep_action_survives_budget_truncation_in_portal_lines() {
     );
     assert!(
         text.lines()
-            .any(|l| l.starts_with("tasks_macro_close_step")),
+            .any(|l| l.starts_with("tasks ") && l.contains("cmd=tasks.macro.close.step")),
         "portal lines must still include the progress macro command under truncation"
     );
 }
@@ -445,11 +453,13 @@ fn dx_dod_more_is_copy_paste_ready_when_no_action() {
         "continuation should stay 2 lines (state + command)"
     );
     assert!(
-        lines[1].starts_with("tasks_snapshot"),
-        "continuation must be a copy/paste-ready snapshot command"
+        lines[1].starts_with("tasks ")
+            && lines[1].contains("op=call")
+            && lines[1].contains("cmd=tasks.snapshot"),
+        "continuation must be a copy/paste-ready snapshot command via tasks portal"
     );
     assert!(
-        lines[1].contains("notes_cursor="),
+        lines[1].contains("notes_cursor"),
         "continuation command must include notes_cursor"
     );
     assert!(

@@ -51,7 +51,7 @@ fn tasks_snapshot_refs_flag_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "refs": true } }
+        "params": { "name": "tasks_snapshot", "arguments": { "refs": true, "fmt": "lines" } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

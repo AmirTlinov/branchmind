@@ -217,24 +217,17 @@ impl SqliteStore {
                 build_step_reopened_payload(&task_id, &step_ref, force),
             )
         };
-        let event = insert_event_tx(
+        let (event, reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            event_type,
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type,
+                payload_json: &event_payload_json,
+            },
         )?;
 
         if record_undo {
@@ -365,28 +358,21 @@ impl SqliteStore {
         };
         let event_payload_json =
             build_step_block_payload(&task_id, &step_ref, blocked, payload_reason.as_deref());
-        let event = insert_event_tx(
+        let (event, _reasoning_ref) = emit_task_event_tx(
             &tx,
-            workspace.as_str(),
-            now_ms,
-            Some(task_id.clone()),
-            Some(path.clone()),
-            if blocked {
-                "step_blocked"
-            } else {
-                "step_unblocked"
+            TaskEventEmitTxArgs {
+                workspace,
+                now_ms,
+                task_id: &task_id,
+                kind: TaskKind::Task,
+                path: Some(path.clone()),
+                event_type: if blocked {
+                    "step_blocked"
+                } else {
+                    "step_unblocked"
+                },
+                payload_json: &event_payload_json,
             },
-            &event_payload_json,
-        )?;
-
-        let reasoning_ref =
-            ensure_reasoning_ref_tx(&tx, workspace, &task_id, TaskKind::Task, now_ms)?;
-        let _ = ingest_task_event_tx(
-            &tx,
-            workspace.as_str(),
-            &reasoning_ref.branch,
-            &reasoning_ref.trace_doc,
-            &event,
         )?;
 
         if record_undo {
