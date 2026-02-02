@@ -153,7 +153,54 @@ Notes:
 
 ## think.knowledge.lint
 
-Lint knowledge density and propose consolidation actions.
+Lint knowledge key hygiene (precision-first) and propose consolidation actions.
+
+This command is intended to keep `think.knowledge.recall` cheap and high-signal across long-lived,
+research-heavy workspaces by helping agents:
+
+- detect high-confidence duplicate keys (same content under different keys),
+- spot potentially too-generic / overloaded keys via objective metrics (fanout / variants),
+- open the exact cards involved so consolidation is cheap.
+
+### Inputs (selected)
+
+- `limit` (int): max number of knowledge key index rows to scan (budget-capped).
+- `anchor` (string | string[]): optional anchor(s) to restrict lint to a subset (same format as
+  `think.knowledge.recall`).
+- `include_drafts` (bool): include draft-lane knowledge (default `false`).
+- `max_chars` (int): output budget knob (injected/clamped by budget profile if omitted).
+
+### Output (selected)
+
+- `result.stats`:
+  - `keys_scanned`, `has_more` (from key index pagination)
+  - `anchors`, `keys`, `cards_resolved`
+  - `issues_total` (before truncation)
+- `result.issues[]`: findings objects:
+  - `severity`: `warning|info`
+  - `code`: stable issue code
+  - `message`: human summary
+  - `evidence`: structured proof (anchor ids, key slugs, card ids)
+
+### Issue codes (precision-first)
+
+The linter is intentionally conservative: it only emits `warning` when there is strong evidence.
+
+- `KNOWLEDGE_DUPLICATE_CONTENT_SAME_ANCHOR` (`warning`):
+  two or more distinct keys under the same anchor resolve to identical normalized content.
+- `KNOWLEDGE_DUPLICATE_CONTENT_SAME_KEY_ACROSS_ANCHORS` (`info`):
+  the same key is present across multiple anchors with identical content (often a candidate for
+  shared/canonical knowledge).
+- `KNOWLEDGE_KEY_OVERLOADED_ACROSS_ANCHORS` (`info`):
+  the same key is present across multiple anchors with multiple distinct content variants (potentially
+  too-generic / bucketed key).
+
+### Actions (v1 UX)
+
+On success, `actions[]` may include deterministic “open helpers” such as:
+
+- `graph.query` for the exact `ids=[...]` involved in a duplicate set.
+- `think.knowledge.query` with `args.key=<key>` to review a reused/overloaded key across anchors.
 
 ## think.reasoning.seed
 

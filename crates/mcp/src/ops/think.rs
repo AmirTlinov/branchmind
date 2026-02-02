@@ -10,6 +10,8 @@ const KB_BRANCH: &str = "kb/main";
 const KB_GRAPH_DOC: &str = "kb-graph";
 const KB_TRACE_DOC: &str = "kb-trace";
 
+mod knowledge_lint;
+
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
     // v1 curated commands (custom UX layer).
     specs.push(CommandSpec {
@@ -144,12 +146,21 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "scope": { "type": "string" },
-                    "limit": { "type": "integer" }
+                    "scope": { "type": "string", "description": "Legacy/compat knob. Prefer anchor filter + limit." },
+                    "limit": { "type": "integer", "description": "Max knowledge key index rows to scan (budget-capped)." },
+                    "anchor": {
+                        "anyOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ],
+                        "description": "Optional anchor slug(s) to restrict lint. Same format as think.knowledge.recall."
+                    },
+                    "include_drafts": { "type": "boolean", "description": "Include draft-lane knowledge (default false)." },
+                    "max_chars": { "type": "integer", "description": "Output budget (clamped by budget profile)." }
                 },
                 "required": []
             }),
-            example_minimal_args: json!({}),
+            example_minimal_args: json!({ "anchor": "core" }),
         },
         op_aliases: vec!["knowledge.lint".to_string()],
         legacy_tool: None,
@@ -868,54 +879,7 @@ fn handle_knowledge_recall(server: &mut crate::McpServer, env: &Envelope) -> OpR
 }
 
 fn handle_knowledge_lint(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
-    let Some(mut args_obj) = env.args.as_object().cloned() else {
-        return OpResponse::error(
-            env.cmd.clone(),
-            OpError {
-                code: "INVALID_INPUT".to_string(),
-                message: "args must be an object".to_string(),
-                recovery: Some("Provide args={...}".to_string()),
-            },
-        );
-    };
-
-    args_obj
-        .entry("limit".to_string())
-        .or_insert_with(|| json!(50));
-    let legacy = crate::tools::dispatch_tool(server, "knowledge_list", Value::Object(args_obj))
-        .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "knowledge_list dispatch failed"));
-    let mut resp = crate::ops::legacy_to_op_response(&env.cmd, env.workspace.as_deref(), legacy);
-
-    let scope = env
-        .args
-        .get("scope")
-        .and_then(|v| v.as_str())
-        .unwrap_or("step");
-    if scope == "step" {
-        let count = resp
-            .result
-            .get("cards")
-            .and_then(|v| v.as_array())
-            .map(|cards| cards.len())
-            .unwrap_or(0);
-        if count > 20 {
-            resp.actions.push(crate::ops::Action {
-                action_id: "knowledge.consolidate.open".to_string(),
-                priority: crate::ops::ActionPriority::High,
-                tool: "think".to_string(),
-                args: json!({
-                    "op": "call",
-                    "cmd": "think.knowledge.query",
-                    "args": { "scope": "step", "limit": 20 }
-                }),
-                why: "Слишком много knowledge в scope=step — открыть список для консолидации."
-                    .to_string(),
-                risk: "Низкий".to_string(),
-            });
-        }
-    }
-
-    resp
+    knowledge_lint::handle(server, env)
 }
 
 fn handle_reasoning_seed(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
