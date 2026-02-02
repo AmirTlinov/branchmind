@@ -541,23 +541,324 @@ fn handle_knowledge_query(server: &mut crate::McpServer, env: &Envelope) -> OpRe
         .entry("limit".to_string())
         .or_insert_with(|| json!(12));
 
-    // Convenience: allow `key` in v1 args and translate into a stable tag filter.
-    if let Some(key) = args_obj.get("key").and_then(|v| v.as_str()) {
-        let candidate = if key.trim().starts_with(crate::KEY_TAG_PREFIX) {
-            key.trim().to_string()
-        } else {
-            format!("{}{}", crate::KEY_TAG_PREFIX, key.trim())
-        };
-        if let Some(tag) = crate::normalize_key_id_tag(&candidate) {
-            let mut tags_all = args_obj
-                .get("tags_all")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if !tags_all.iter().any(|v| v.as_str() == Some(tag.as_str())) {
-                tags_all.push(Value::String(tag));
+    // v1 UX defaults to the knowledge base scope *only when it exists* (back-compat: before
+    // kb/main is created, keep legacy behavior by reading from the default graph scope).
+    let kb_exists = server
+        .store
+        .branch_list(&workspace, 501)
+        .ok()
+        .is_some_and(|branches| branches.iter().any(|b| b.name == KB_BRANCH));
+    let desired_branch = args_obj
+        .get("ref")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .or_else(|| kb_exists.then_some(KB_BRANCH.to_string()));
+    let desired_graph_doc = args_obj
+        .get("graph_doc")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .or_else(|| kb_exists.then_some(KB_GRAPH_DOC.to_string()));
+    let use_kb_scope = kb_exists
+        && desired_branch.as_deref() == Some(KB_BRANCH)
+        && desired_graph_doc.as_deref() == Some(KB_GRAPH_DOC);
+
+    let limit = args_obj
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(12)
+        .clamp(1, 200);
+    let include_history = args_obj
+        .get("include_history")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let include_drafts = args_obj
+        .get("include_drafts")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let text = args_obj
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let max_chars = args_obj
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+
+    // Product UX: when a single key is requested (and history is not), use the knowledge key index
+    // to resolve the *latest* card_id per (anchor,key). This avoids returning historical duplicates.
+    if let Some(key_raw) = args_obj.get("key").and_then(|v| v.as_str()) {
+        let key_raw = key_raw.trim();
+        if use_kb_scope && !key_raw.is_empty() && !include_history {
+            let candidate = if key_raw.starts_with(crate::KEY_TAG_PREFIX) {
+                key_raw.to_string()
+            } else {
+                format!("{}{}", crate::KEY_TAG_PREFIX, key_raw)
+            };
+            let Some(key_tag) = crate::normalize_key_id_tag(&candidate) else {
+                return OpResponse::error(
+                    env.cmd.clone(),
+                    OpError {
+                        code: "INVALID_INPUT".to_string(),
+                        message: "key must be a valid slug (k:<slug>)".to_string(),
+                        recovery: Some(
+                            "Use key like: determinism | k:determinism | storage-locking"
+                                .to_string(),
+                        ),
+                    },
+                );
+            };
+            let key_slug = key_tag
+                .strip_prefix(crate::KEY_TAG_PREFIX)
+                .unwrap_or(key_tag.as_str())
+                .to_string();
+
+            let mut anchor_ids = Vec::<String>::new();
+            if let Some(anchor_value) = args_obj.get("anchor") {
+                match anchor_value {
+                    Value::String(s) => anchor_ids.push(s.to_string()),
+                    Value::Array(arr) => {
+                        for item in arr {
+                            let Some(s) = item.as_str() else {
+                                return OpResponse::error(
+                                    env.cmd.clone(),
+                                    OpError {
+                                        code: "INVALID_INPUT".to_string(),
+                                        message: "anchor must be a string or array of strings"
+                                            .to_string(),
+                                        recovery: Some(
+                                            "Use anchor:\"core\" or anchor:[\"core\",\"storage\"]"
+                                                .to_string(),
+                                        ),
+                                    },
+                                );
+                            };
+                            anchor_ids.push(s.to_string());
+                        }
+                    }
+                    _ => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "INVALID_INPUT".to_string(),
+                                message: "anchor must be a string or array of strings".to_string(),
+                                recovery: Some(
+                                    "Use anchor:\"core\" or anchor:[\"core\",\"storage\"]"
+                                        .to_string(),
+                                ),
+                            },
+                        );
+                    }
+                }
             }
-            args_obj.insert("tags_all".to_string(), Value::Array(tags_all));
+
+            let mut normalized_anchors = Vec::<String>::new();
+            for raw in anchor_ids {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    continue;
+                }
+                let candidate = if raw.starts_with(crate::ANCHOR_TAG_PREFIX) {
+                    raw.to_string()
+                } else {
+                    format!("{}{}", crate::ANCHOR_TAG_PREFIX, raw)
+                };
+                let Some(normalized) = crate::normalize_anchor_id_tag(&candidate) else {
+                    return OpResponse::error(
+                        env.cmd.clone(),
+                        OpError {
+                            code: "INVALID_INPUT".to_string(),
+                            message: "anchor must be a valid slug (a:<slug>)".to_string(),
+                            recovery: Some(
+                                "Use anchor like: core | a:core | storage-sqlite".to_string(),
+                            ),
+                        },
+                    );
+                };
+                let resolved = match server.store.anchor_resolve_id(&workspace, &normalized) {
+                    Ok(Some(v)) => v,
+                    Ok(None) => normalized,
+                    Err(bm_storage::StoreError::InvalidInput(msg)) => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "INVALID_INPUT".to_string(),
+                                message: msg.to_string(),
+                                recovery: None,
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "INTERNAL_ERROR".to_string(),
+                                message: format!("store error: {err}"),
+                                recovery: None,
+                            },
+                        );
+                    }
+                };
+                normalized_anchors.push(resolved);
+            }
+            normalized_anchors.sort();
+            normalized_anchors.dedup();
+
+            let keys = match server.store.knowledge_keys_list_by_key(
+                &workspace,
+                bm_storage::KnowledgeKeysListByKeyRequest {
+                    key: key_slug,
+                    anchor_ids: normalized_anchors,
+                    limit,
+                },
+            ) {
+                Ok(v) => v,
+                Err(bm_storage::StoreError::InvalidInput(msg)) => {
+                    return OpResponse::error(
+                        env.cmd.clone(),
+                        OpError {
+                            code: "INVALID_INPUT".to_string(),
+                            message: msg.to_string(),
+                            recovery: None,
+                        },
+                    );
+                }
+                Err(err) => {
+                    return OpResponse::error(
+                        env.cmd.clone(),
+                        OpError {
+                            code: "INTERNAL_ERROR".to_string(),
+                            message: format!("store error: {err}"),
+                            recovery: None,
+                        },
+                    );
+                }
+            };
+
+            let card_ids = keys
+                .items
+                .iter()
+                .map(|row| row.card_id.clone())
+                .collect::<Vec<_>>();
+
+            if card_ids.is_empty() {
+                return OpResponse::success(
+                    env.cmd.clone(),
+                    json!({
+                        "workspace": workspace.as_str(),
+                        "branch": desired_branch.as_deref().unwrap_or(KB_BRANCH),
+                        "graph_doc": desired_graph_doc.as_deref().unwrap_or(KB_GRAPH_DOC),
+                        "cards": [],
+                        "pagination": { "cursor": Value::Null, "next_cursor": Value::Null, "has_more": false, "limit": limit, "count": 0 },
+                        "truncated": false
+                    }),
+                );
+            }
+
+            let slice = match server.store.graph_query(
+                &workspace,
+                desired_branch.as_deref().unwrap_or(KB_BRANCH),
+                desired_graph_doc.as_deref().unwrap_or(KB_GRAPH_DOC),
+                bm_storage::GraphQueryRequest {
+                    ids: Some(card_ids.clone()),
+                    types: Some(vec!["knowledge".to_string()]),
+                    status: None,
+                    tags_any: None,
+                    tags_all: None,
+                    text,
+                    cursor: None,
+                    limit: card_ids.len().clamp(1, 200),
+                    include_edges: false,
+                    edges_limit: 0,
+                },
+            ) {
+                Ok(v) => v,
+                Err(bm_storage::StoreError::UnknownBranch) => {
+                    let mut resp = OpResponse::success(
+                        env.cmd.clone(),
+                        json!({
+                            "workspace": workspace.as_str(),
+                            "branch": desired_branch.as_deref().unwrap_or(KB_BRANCH),
+                            "graph_doc": desired_graph_doc.as_deref().unwrap_or(KB_GRAPH_DOC),
+                            "cards": [],
+                            "pagination": { "cursor": Value::Null, "next_cursor": Value::Null, "has_more": false, "limit": limit, "count": 0 },
+                            "truncated": false
+                        }),
+                    );
+                    resp.warnings.push(crate::warning(
+                        "KNOWLEDGE_BASE_MISSING",
+                        "Knowledge base branch is missing",
+                        "Create knowledge via think.knowledge.upsert (it will auto-create kb/main), then retry query.",
+                    ));
+                    return resp;
+                }
+                Err(bm_storage::StoreError::InvalidInput(msg)) => {
+                    return OpResponse::error(
+                        env.cmd.clone(),
+                        OpError {
+                            code: "INVALID_INPUT".to_string(),
+                            message: msg.to_string(),
+                            recovery: None,
+                        },
+                    );
+                }
+                Err(err) => {
+                    return OpResponse::error(
+                        env.cmd.clone(),
+                        OpError {
+                            code: "INTERNAL_ERROR".to_string(),
+                            message: format!("store error: {err}"),
+                            recovery: None,
+                        },
+                    );
+                }
+            };
+
+            let mut cards = crate::graph_nodes_to_cards(slice.nodes);
+            if !include_drafts {
+                cards.retain(|card| crate::card_value_visibility_allows(card, false, None));
+            }
+
+            // Prefer index ordering (recency-first by updated_at_ms).
+            let mut pos = std::collections::HashMap::<String, usize>::new();
+            for (idx, card_id) in card_ids.iter().enumerate() {
+                pos.insert(card_id.clone(), idx);
+            }
+            cards.sort_by(|a, b| {
+                let a_id = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let b_id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let a_pos = pos.get(a_id).cloned().unwrap_or(usize::MAX);
+                let b_pos = pos.get(b_id).cloned().unwrap_or(usize::MAX);
+                a_pos.cmp(&b_pos).then_with(|| a_id.cmp(b_id))
+            });
+            if cards.len() > limit {
+                cards.truncate(limit);
+            }
+            let count = cards.len();
+
+            let mut result = json!({
+                "workspace": workspace.as_str(),
+                "branch": desired_branch.as_deref().unwrap_or(KB_BRANCH),
+                "graph_doc": desired_graph_doc.as_deref().unwrap_or(KB_GRAPH_DOC),
+                "cards": cards,
+                "pagination": { "cursor": Value::Null, "next_cursor": Value::Null, "has_more": keys.has_more, "limit": limit, "count": count },
+                "truncated": false
+            });
+
+            if let Some(max_chars) = max_chars {
+                let (max_chars, clamped) = crate::clamp_budget_max(max_chars);
+                let (_used, truncated) =
+                    crate::enforce_graph_list_budget(&mut result, "cards", max_chars);
+                crate::set_truncated_flag(&mut result, truncated);
+                if truncated || clamped {
+                    let warnings = crate::budget_warnings(truncated, false, clamped);
+                    let mut resp = OpResponse::success(env.cmd.clone(), result);
+                    resp.warnings.extend(warnings);
+                    return resp;
+                }
+            }
+
+            return OpResponse::success(env.cmd.clone(), result);
         }
     }
 
@@ -567,9 +868,7 @@ fn handle_knowledge_query(server: &mut crate::McpServer, env: &Envelope) -> OpRe
     );
 
     // If the knowledge base branch exists, default reads to it (cross-session memory).
-    if let Ok(branches) = server.store.branch_list(&workspace, 501)
-        && branches.iter().any(|b| b.name == KB_BRANCH)
-    {
+    if kb_exists {
         args_obj
             .entry("ref".to_string())
             .or_insert_with(|| Value::String(KB_BRANCH.to_string()));

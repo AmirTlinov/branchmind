@@ -252,4 +252,107 @@ impl SqliteStore {
         tx.commit()?;
         Ok(KnowledgeKeysListResult { items, has_more })
     }
+
+    pub fn knowledge_keys_list_by_key(
+        &mut self,
+        workspace: &WorkspaceId,
+        request: KnowledgeKeysListByKeyRequest,
+    ) -> Result<KnowledgeKeysListResult, StoreError> {
+        let limit = request.limit.clamp(0, MAX_LIST_LIMIT);
+        if limit == 0 {
+            return Ok(KnowledgeKeysListResult {
+                items: Vec::new(),
+                has_more: false,
+            });
+        }
+        let query_limit = limit.saturating_add(1) as i64;
+
+        let key_raw = request.key.trim();
+        let key_raw = key_raw
+            .strip_prefix(KNOWLEDGE_KEY_TAG_PREFIX)
+            .unwrap_or(key_raw);
+        let key = normalize_key_slug(key_raw).ok_or_else(|| {
+            StoreError::InvalidInput(
+                "key must be a valid slug (<slug> or k:<slug>; lowercase letters/digits + '-')",
+            )
+        })?;
+
+        let mut anchor_ids = Vec::<String>::new();
+        for raw in request.anchor_ids.into_iter() {
+            if let Some(id) = normalize_anchor_id_from_tag(&raw) {
+                anchor_ids.push(id);
+            }
+        }
+        anchor_ids.sort();
+        anchor_ids.dedup();
+
+        let tx = self.conn.transaction()?;
+
+        let mut items = Vec::<KnowledgeKeyRow>::new();
+        if anchor_ids.is_empty() {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT anchor_id, key, card_id, created_at_ms, updated_at_ms
+                FROM knowledge_keys
+                WHERE workspace=?1 AND key=?2
+                ORDER BY updated_at_ms DESC, anchor_id ASC
+                LIMIT ?3
+                "#,
+            )?;
+            let mut rows = stmt.query(params![workspace.as_str(), key.as_str(), query_limit])?;
+            while let Some(row) = rows.next()? {
+                items.push(KnowledgeKeyRow {
+                    anchor_id: row.get(0)?,
+                    key: row.get(1)?,
+                    card_id: row.get(2)?,
+                    created_at_ms: row.get(3)?,
+                    updated_at_ms: row.get(4)?,
+                });
+            }
+        } else {
+            let mut placeholders = String::new();
+            for idx in 0..anchor_ids.len() {
+                if idx > 0 {
+                    placeholders.push(',');
+                }
+                placeholders.push('?');
+            }
+            let sql = format!(
+                r#"
+                SELECT anchor_id, key, card_id, created_at_ms, updated_at_ms
+                FROM knowledge_keys
+                WHERE workspace=? AND key=? AND anchor_id IN ({placeholders})
+                ORDER BY updated_at_ms DESC, anchor_id ASC
+                LIMIT ?
+                "#,
+                placeholders = placeholders
+            );
+
+            let mut params_vec = Vec::<rusqlite::types::Value>::new();
+            params_vec.push(rusqlite::types::Value::Text(workspace.as_str().to_string()));
+            params_vec.push(rusqlite::types::Value::Text(key.clone()));
+            for id in &anchor_ids {
+                params_vec.push(rusqlite::types::Value::Text(id.clone()));
+            }
+            params_vec.push(rusqlite::types::Value::Integer(query_limit));
+
+            let mut stmt = tx.prepare(&sql)?;
+            let mut rows = stmt.query(params_from_iter(params_vec))?;
+            while let Some(row) = rows.next()? {
+                items.push(KnowledgeKeyRow {
+                    anchor_id: row.get(0)?,
+                    key: row.get(1)?,
+                    card_id: row.get(2)?,
+                    created_at_ms: row.get(3)?,
+                    updated_at_ms: row.get(4)?,
+                });
+            }
+        }
+
+        let has_more = items.len() > limit;
+        items.truncate(limit);
+
+        tx.commit()?;
+        Ok(KnowledgeKeysListResult { items, has_more })
+    }
 }

@@ -16,6 +16,14 @@ pub struct KnowledgeKeysListAnyRequest {
 }
 
 #[derive(Clone, Debug)]
+pub struct KnowledgeKeysListByKeyRequest {
+    /// Knowledge key slug (`<slug>`) or tag (`k:<slug>`).
+    pub key: String,
+    pub anchor_ids: Vec<String>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct KnowledgeKeysListResult {
     pub items: Vec<KnowledgeKeyRow>,
     pub has_more: bool,

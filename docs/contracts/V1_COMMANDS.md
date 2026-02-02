@@ -162,6 +162,8 @@ Notes:
 - v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`).
 - Convenience filter: `args.key=<key>` limits results to a single knowledge key (useful for reviewing
   lint findings / consolidation candidates).
+- When `args.key` is present and `include_history=false`, the command uses the storage knowledge key
+  index to resolve the *latest* card per `(anchor,key)` (no historical duplicates).
 - Defaults are product-UX oriented:
   - `include_drafts=true` (management view; show what’s in the KB, not only what’s published)
   - `include_history=false` (latest-only; no duplicate historical versions unless explicitly requested)

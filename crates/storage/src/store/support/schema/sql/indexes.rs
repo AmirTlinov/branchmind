@@ -32,6 +32,8 @@ pub(super) const SQL: &str = r#"
           ON knowledge_keys(workspace, anchor_id, updated_at_ms DESC);
         CREATE INDEX IF NOT EXISTS idx_knowledge_keys_workspace_updated
           ON knowledge_keys(workspace, updated_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_keys_key_updated
+          ON knowledge_keys(workspace, key, updated_at_ms DESC);
         CREATE INDEX IF NOT EXISTS idx_knowledge_keys_card ON knowledge_keys(workspace, card_id);
         CREATE INDEX IF NOT EXISTS idx_jobs_status_updated ON jobs(workspace, status, updated_at_ms);
         CREATE INDEX IF NOT EXISTS idx_jobs_task_updated ON jobs(workspace, task_id, updated_at_ms);
