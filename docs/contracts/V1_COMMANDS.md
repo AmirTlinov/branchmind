@@ -81,6 +81,10 @@ Return NextEngine actions for the current focus.
 
 Create a delegation job (legacy `tasks_jobs_create`).
 
+Notes:
+- If the runner is offline and autostart is enabled, the server may auto-start `bm_runner`.
+- The response may include `runner_autostart` and (when needed) `runner_bootstrap` (copy/paste command).
+
 ## jobs.list
 
 List jobs (legacy `tasks_jobs_list`).

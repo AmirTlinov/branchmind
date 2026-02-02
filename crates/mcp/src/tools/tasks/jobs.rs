@@ -194,6 +194,62 @@ impl McpServer {
             "job": job_row_to_json(created.job),
             "event": job_event_to_json(created.created_event)
         });
+
+        // UX: try to auto-start the first-party runner when the job queue becomes non-empty.
+        // Without this, users can end up with jobs stuck in QUEUED until they discover runner setup.
+        //
+        // We intentionally keep this best-effort and budget-safe:
+        // - only attempt when runner is offline
+        // - throttle is handled by maybe_autostart_runner()
+        let now_ms = crate::support::now_ms_i64();
+        let runner_status = self.store.runner_status_snapshot(&workspace, now_ms).ok();
+        let runner_is_offline = runner_status
+            .as_ref()
+            .is_some_and(|s| s.status.as_str() == "offline");
+        let runner_autostart_active =
+            self.maybe_autostart_runner(&workspace, now_ms, 1, runner_is_offline);
+
+        let mut result = result;
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert(
+                "runner_autostart".to_string(),
+                json!({
+                    "active": runner_autostart_active
+                }),
+            );
+
+            // If autostart is disabled or failed, provide a copy/paste bootstrap hint.
+            if runner_is_offline && !runner_autostart_active {
+                let storage_dir = self.store.storage_dir();
+                let storage_dir = std::fs::canonicalize(storage_dir)
+                    .unwrap_or_else(|_| storage_dir.to_path_buf());
+                let mcp_bin =
+                    std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("bm_mcp"));
+                let runner_bin = mcp_bin
+                    .parent()
+                    .map(|dir| dir.join("bm_runner"))
+                    .filter(|p| p.exists())
+                    .unwrap_or_else(|| std::path::PathBuf::from("bm_runner"));
+
+                let cmd = format!(
+                    "\"{}\" --storage-dir \"{}\" --workspace \"{}\" --mcp-bin \"{}\"",
+                    runner_bin.to_string_lossy(),
+                    storage_dir.to_string_lossy(),
+                    workspace.as_str(),
+                    mcp_bin.to_string_lossy()
+                );
+                obj.insert(
+                    "runner_bootstrap".to_string(),
+                    json!({
+                        "cmd": cmd,
+                        "runner_bin": runner_bin.to_string_lossy(),
+                        "mcp_bin": mcp_bin.to_string_lossy(),
+                        "storage_dir": storage_dir.to_string_lossy()
+                    }),
+                );
+            }
+        }
+
         ai_ok("tasks_jobs_create", result)
     }
 

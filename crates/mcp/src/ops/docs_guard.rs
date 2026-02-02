@@ -53,6 +53,11 @@ pub(crate) fn doc_ref_anchor_exists(doc_ref: &DocRef) -> bool {
         format!("## {anchor}"),
         format!("### {anchor}"),
         format!("#### {anchor}"),
+        // Pandoc-style heading identifiers: `## Title {#my-anchor}`
+        format!("{{#{anchor}}}"),
+        // HTML-style identifiers (e.g. rendered docs).
+        format!("id=\"{anchor}\""),
+        format!("id='{anchor}'"),
     ];
     candidates.iter().any(|needle| content.contains(needle))
 }
