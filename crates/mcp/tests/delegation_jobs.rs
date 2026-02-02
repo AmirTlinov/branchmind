@@ -36,45 +36,6 @@ fn task_id_from_focus_line(text: &str) -> Option<String> {
     }
 }
 
-fn claim_job(
-    server: &mut Server,
-    workspace: &str,
-    job_id: &str,
-    runner_id: &str,
-    lease_ttl_ms: Option<i64>,
-    allow_stale: bool,
-) -> i64 {
-    let mut args = serde_json::Map::new();
-    args.insert("workspace".to_string(), json!(workspace));
-    args.insert("job".to_string(), json!(job_id));
-    args.insert("runner_id".to_string(), json!(runner_id));
-    if allow_stale {
-        args.insert("allow_stale".to_string(), json!(true));
-    }
-    if let Some(ttl) = lease_ttl_ms {
-        args.insert("lease_ttl_ms".to_string(), json!(ttl));
-    }
-
-    let resp = server.request(json!({
-        "jsonrpc": "2.0",
-        "id": 99,
-        "method": "tools/call",
-        "params": { "name": "tasks_jobs_claim", "arguments": serde_json::Value::Object(args) }
-    }));
-    let out = extract_tool_text(&resp);
-    assert!(
-        out.get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        "tasks_jobs_claim must succeed: {out}"
-    );
-    out.get("result")
-        .and_then(|v| v.get("job"))
-        .and_then(|v| v.get("revision"))
-        .and_then(|v| v.as_i64())
-        .expect("job.revision claim token")
-}
-
 #[test]
 fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
     let mut server =

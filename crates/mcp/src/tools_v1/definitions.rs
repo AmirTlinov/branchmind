@@ -44,6 +44,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                     "id": { "type": "string" },
                     "limit": { "type": "integer" },
                     "include_drafts": { "type": "boolean" },
+                    "include_content": { "type": "boolean" },
                     "budget_profile": { "type": "string", "enum": ["portal", "default", "audit"] },
                     "view": { "type": "string", "enum": ["compact", "smart", "audit"] }
                 },
@@ -63,7 +64,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "jobs",
             "description": "Delegation jobs operations (v1).",
-            "inputSchema": ops_schema(&["create", "list", "radar", "open"])
+            "inputSchema": ops_schema(&["create", "list", "radar", "open", "runner.start"])
         }),
         json!({
             "name": "think",
@@ -86,7 +87,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "vcs",
             "description": "VCS operations (v1).",
-            "inputSchema": ops_schema(&["branch.create", "branch.merge"])
+            "inputSchema": ops_schema(&["branch.create"])
         }),
         json!({
             "name": "docs",
@@ -96,7 +97,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "system",
             "description": "System operations (v1).",
-            "inputSchema": ops_schema(&["schema.get", "migration.lookup"])
+            "inputSchema": ops_schema(&["schema.get", "ops.summary", "cmd.list", "migration.lookup"])
         }),
     ]
 }

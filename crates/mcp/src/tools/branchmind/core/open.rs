@@ -60,6 +60,9 @@ fn parse_response_verbosity(
 fn compact_open_result(id: &str, result: &Value) -> Value {
     let mut out = serde_json::Map::new();
     out.insert("id".to_string(), Value::String(id.to_string()));
+    if let Some(workspace) = result.get("workspace") {
+        out.insert("workspace".to_string(), workspace.clone());
+    }
     if let Some(kind) = result.get("kind") {
         out.insert("kind".to_string(), kind.clone());
     }
@@ -68,6 +71,9 @@ fn compact_open_result(id: &str, result: &Value) -> Value {
     }
     if let Some(reasoning_ref) = result.get("reasoning_ref") {
         out.insert("reasoning_ref".to_string(), reasoning_ref.clone());
+    }
+    if let Some(content) = result.get("content") {
+        out.insert("content".to_string(), content.clone());
     }
     if let Some(card) = result.get("card") {
         if let Some(card_id) = card.get("id") {
@@ -261,6 +267,10 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let include_drafts = match optional_bool(args_obj, "include_drafts") {
+            Ok(v) => v.unwrap_or(false),
+            Err(resp) => return resp,
+        };
+        let include_content = match optional_bool(args_obj, "include_content") {
             Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
@@ -640,7 +650,7 @@ impl McpServer {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            json!({
+            let mut out = json!({
                 "workspace": workspace.as_str(),
                 "kind": target_kind,
                 "id": id,
@@ -650,7 +660,29 @@ impl McpServer {
                 "step_focus": resume.get("step_focus").cloned().unwrap_or(Value::Null),
                 "degradation": resume.get("degradation").cloned().unwrap_or(Value::Null),
                 "truncated": truncated
-            })
+            });
+
+            // Portal UX: optionally include the most-used content blocks for the target so
+            // agents don't have to bounce between `open` and `tasks.snapshot` for the common
+            // “what’s next + what changed” loop.
+            if include_content && let Some(obj) = out.as_object_mut() {
+                let mut content = serde_json::Map::new();
+                for key in [
+                    "radar",
+                    "steps",
+                    "signals",
+                    "memory",
+                    "timeline",
+                    "graph_diff",
+                ] {
+                    if let Some(v) = resume.get(key) {
+                        content.insert(key.to_string(), v.clone());
+                    }
+                }
+                obj.insert("content".to_string(), Value::Object(content));
+            }
+
+            out
         } else if let Some((job_id, seq)) = parse_job_event_ref(&id) {
             let job_row = match self
                 .store
@@ -1030,6 +1062,12 @@ impl McpServer {
                         changed |= drop_fields_at(v, &["entry"], &["content"]);
                         changed |= drop_fields_at(v, &["entry"], &["payload"]);
                         changed |= drop_fields_at(v, &[], &["prompt"]);
+                        changed |= drop_fields_at(v, &["content", "memory"], &["cards"]);
+                        changed |=
+                            drop_fields_at(v, &["content", "memory", "trace"], &["sequential"]);
+                        changed |= drop_fields_at(v, &["content", "memory", "trace"], &["entries"]);
+                        changed |= drop_fields_at(v, &["content", "memory", "notes"], &["entries"]);
+                        changed |= drop_fields_at(v, &["content", "timeline"], &["events"]);
                         changed |= compact_card_fields_at(v, &["cards"], 160, true, false, true);
                     }
                     if json_len_chars(v) > limit {
@@ -1086,6 +1124,15 @@ impl McpServer {
                     }
                     if json_len_chars(v) > limit {
                         changed |= drop_fields_at(v, &[], &["events"]);
+                    }
+                    if json_len_chars(v) > limit {
+                        changed |= drop_fields_at(v, &["content"], &["signals"]);
+                    }
+                    if json_len_chars(v) > limit {
+                        changed |= drop_fields_at(v, &["content"], &["steps"]);
+                    }
+                    if json_len_chars(v) > limit {
+                        changed |= drop_fields_at(v, &["content"], &["radar"]);
                     }
                     if json_len_chars(v) > limit {
                         changed |= drop_fields_at(v, &["anchor"], &["description", "refs"]);

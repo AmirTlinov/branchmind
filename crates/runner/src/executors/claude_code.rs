@@ -35,18 +35,17 @@ pub(crate) fn spawn_exec(
         .arg("--no-session-persistence")
         // Flagship DX: avoid interactive permission prompts (runner must never hang).
         .arg("--dangerously-skip-permissions")
-        // Keep turns bounded even if a slice runs long.
-        .arg("--max-turns")
-        .arg("50")
         // Keep tool execution rooted in the repo.
-        .arg("--cwd")
-        .arg(cfg.repo_root.to_string_lossy().to_string())
         .arg("--add-dir")
         .arg(cfg.repo_root.to_string_lossy().to_string());
 
     if let Some(model) = model {
         cmd.arg("--model").arg(model);
     }
+
+    // `claude` does not accept a `--cwd` flag (as of 2.x); set the process working directory
+    // directly to keep file operations deterministic and within the repo.
+    cmd.current_dir(&cfg.repo_root);
 
     let child = cmd
         .arg(prompt)

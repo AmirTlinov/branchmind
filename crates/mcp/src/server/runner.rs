@@ -6,6 +6,95 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
 
 impl McpServer {
+    pub(crate) fn runner_bootstrap_json(&self, workspace: &crate::WorkspaceId) -> Value {
+        let storage_dir = self.store.storage_dir();
+        let storage_dir =
+            std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
+        let mcp_bin =
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("bm_mcp"));
+        let runner_bin = mcp_bin
+            .parent()
+            .map(|dir| dir.join("bm_runner"))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("bm_runner"));
+
+        let cmd = format!(
+            "\"{}\" --storage-dir \"{}\" --workspace \"{}\" --mcp-bin \"{}\"",
+            runner_bin.to_string_lossy(),
+            storage_dir.to_string_lossy(),
+            workspace.as_str(),
+            mcp_bin.to_string_lossy()
+        );
+
+        json!({
+            "cmd": cmd,
+            "runner_bin": runner_bin.to_string_lossy(),
+            "mcp_bin": mcp_bin.to_string_lossy(),
+            "storage_dir": storage_dir.to_string_lossy()
+        })
+    }
+
+    pub(crate) fn start_runner_on_demand(
+        &mut self,
+        workspace: &crate::WorkspaceId,
+        now_ms: i64,
+    ) -> std::io::Result<bool> {
+        let key = workspace.as_str().to_string();
+
+        {
+            let mut state = self
+                .runner_autostart
+                .lock()
+                .expect("runner_autostart mutex poisoned");
+            let entry =
+                state
+                    .entries
+                    .entry(key.clone())
+                    .or_insert_with(|| crate::RunnerAutostartEntry {
+                        last_attempt_ms: 0,
+                        last_attempt_ok: false,
+                        child: None,
+                    });
+
+            // Reap finished children to avoid zombies. If still running, treat as started.
+            if let Some(child) = entry.child.as_mut() {
+                match child.try_wait() {
+                    Ok(Some(_)) => entry.child = None,
+                    Ok(None) => return Ok(true),
+                    Err(_) => entry.child = None,
+                }
+            }
+        }
+
+        let spawn_result = self.spawn_runner_for_autostart(workspace);
+        let mut state = self
+            .runner_autostart
+            .lock()
+            .expect("runner_autostart mutex poisoned");
+        let entry = state
+            .entries
+            .entry(key)
+            .or_insert_with(|| crate::RunnerAutostartEntry {
+                last_attempt_ms: 0,
+                last_attempt_ok: false,
+                child: None,
+            });
+
+        entry.last_attempt_ms = now_ms;
+        match spawn_result {
+            Ok(child) => {
+                entry.child = Some(child);
+                entry.last_attempt_ok = true;
+                Ok(true)
+            }
+            Err(err) => {
+                entry.last_attempt_ok = false;
+                entry.child = None;
+                Err(err)
+            }
+        }
+    }
+
     pub(crate) fn maybe_autostart_runner(
         &mut self,
         workspace: &crate::WorkspaceId,

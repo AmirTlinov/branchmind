@@ -237,3 +237,98 @@ fn skill_budget_can_be_overridden_or_disabled_by_job_meta() {
 
     assert_eq!(select_skill_max_chars(None, &cfg), 1200);
 }
+
+fn write_stub_exe(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, "#!/bin/sh\necho ok\n").expect("write stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod");
+    }
+    path
+}
+
+fn temp_dir(prefix: &str) -> std::path::PathBuf {
+    let base = std::env::temp_dir();
+    let pid = std::process::id();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let dir = base.join(format!("{prefix}_{pid}_{nonce}"));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+#[test]
+fn auto_executor_prefers_claude_for_deep_when_available() {
+    let dir = temp_dir("bm_runner_exec_select");
+    let codex = write_stub_exe(&dir, "codex");
+    let claude = write_stub_exe(&dir, "claude");
+
+    let cfg = RunnerConfig {
+        workspace: "ws".to_string(),
+        storage_dir: dir.clone(),
+        repo_root: dir.clone(),
+        runner_id: "r".to_string(),
+        poll_ms: 1000,
+        heartbeat_ms: 1000,
+        max_runtime_s: 10,
+        slice_s: 1,
+        slice_grace_s: 0,
+        stale_after_s: 1,
+        max_failures: 1,
+        once: true,
+        dry_run: true,
+        mcp_bin: "bm_mcp".to_string(),
+        codex_bin: codex.to_string_lossy().to_string(),
+        claude_bin: Some(claude.to_string_lossy().to_string()),
+        skill_profile: "strict".to_string(),
+        skill_max_chars: 1200,
+    };
+
+    let meta = json!({"executor":"auto","executor_profile":"deep"});
+    let (kind, profile, _model) = resolve_job_executor_plan(Some(&meta), &cfg).expect("plan");
+    assert_eq!(profile, "deep");
+    assert_eq!(kind, executors::ExecutorKind::ClaudeCode);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auto_executor_prefers_codex_for_fast_when_both_available() {
+    let dir = temp_dir("bm_runner_exec_select2");
+    let codex = write_stub_exe(&dir, "codex");
+    let claude = write_stub_exe(&dir, "claude");
+
+    let cfg = RunnerConfig {
+        workspace: "ws".to_string(),
+        storage_dir: dir.clone(),
+        repo_root: dir.clone(),
+        runner_id: "r".to_string(),
+        poll_ms: 1000,
+        heartbeat_ms: 1000,
+        max_runtime_s: 10,
+        slice_s: 1,
+        slice_grace_s: 0,
+        stale_after_s: 1,
+        max_failures: 1,
+        once: true,
+        dry_run: true,
+        mcp_bin: "bm_mcp".to_string(),
+        codex_bin: codex.to_string_lossy().to_string(),
+        claude_bin: Some(claude.to_string_lossy().to_string()),
+        skill_profile: "strict".to_string(),
+        skill_max_chars: 1200,
+    };
+
+    let meta = json!({"executor":"auto","executor_profile":"fast"});
+    let (kind, profile, _model) = resolve_job_executor_plan(Some(&meta), &cfg).expect("plan");
+    assert_eq!(profile, "fast");
+    assert_eq!(kind, executors::ExecutorKind::Codex);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

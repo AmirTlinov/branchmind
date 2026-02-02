@@ -29,22 +29,71 @@ fn is_runner_internal_message(message: &str) -> bool {
 }
 
 fn pick_last_meaningful_job_event(events_newest_first: &[JobEventRow]) -> Option<JobEventRow> {
-    // Prefer the newest non-heartbeat, non-runner-internal event for daily supervision.
-    // Fallbacks keep the stream usable even when a runner is the only writer.
+    // Prefer the newest *actionable* event for daily supervision (manager inbox):
+    // - if a question is outstanding (question > manager), show the question,
+    // - if a proof gate is outstanding (proof_gate > max(checkpoint, manager_with_proof)), show it,
+    // - if an error is outstanding (error > checkpoint), show it,
+    // - otherwise show the newest non-heartbeat, non-runner-internal event (including progress),
+    //   so the UX doesn't get "stuck" on a stale historical error.
+    //
+    // NOTE: `events_newest_first` is newest-first by seq.
+    let last_checkpoint_seq = events_newest_first
+        .iter()
+        .find(|e| e.kind == "checkpoint")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_manager_seq = events_newest_first
+        .iter()
+        .find(|e| e.kind == "manager")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_manager_proof_seq = events_newest_first
+        .iter()
+        .find(|e| e.kind == "manager" && !e.refs.is_empty())
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_question_seq = events_newest_first
+        .iter()
+        .find(|e| e.kind == "question")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_error_seq = events_newest_first
+        .iter()
+        .find(|e| e.kind == "error")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+    let last_proof_gate_seq = events_newest_first
+        .iter()
+        .find(|e| e.kind == "proof_gate")
+        .map(|e| e.seq)
+        .unwrap_or(0);
+
+    let needs_manager = last_question_seq > last_manager_seq;
+    let needs_proof = last_proof_gate_seq > last_checkpoint_seq.max(last_manager_proof_seq);
+    let has_error = last_error_seq > last_checkpoint_seq;
+
+    if needs_manager {
+        return events_newest_first
+            .iter()
+            .find(|e| e.kind == "question")
+            .cloned();
+    }
+    if needs_proof {
+        return events_newest_first
+            .iter()
+            .find(|e| e.kind == "proof_gate")
+            .cloned();
+    }
+    if has_error {
+        return events_newest_first
+            .iter()
+            .find(|e| e.kind == "error")
+            .cloned();
+    }
+
     events_newest_first
         .iter()
-        .find(|e| {
-            e.kind != "heartbeat"
-                && matches!(
-                    e.kind.as_str(),
-                    "error" | "question" | "manager" | "proof_gate"
-                )
-        })
-        .or_else(|| {
-            events_newest_first
-                .iter()
-                .find(|e| e.kind != "heartbeat" && !is_runner_internal_message(&e.message))
-        })
+        .find(|e| e.kind != "heartbeat" && !is_runner_internal_message(&e.message))
         .or_else(|| events_newest_first.iter().find(|e| e.kind != "heartbeat"))
         .or_else(|| events_newest_first.first())
         .cloned()

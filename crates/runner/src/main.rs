@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod bin_detect;
 mod defaults;
 mod executors;
 mod mcp_client;
@@ -46,6 +47,8 @@ USAGE:\n\
             [--skill-profile PROFILE] [--skill-max-chars N]\n\n\
 NOTES:\n\
   - bm_mcp stays deterministic; this runner executes jobs out-of-process.\n\
+  - If `claude` is on PATH, `claude_code` is auto-detected (no flags needed).\n\
+    Use `--claude-bin` / `BM_CLAUDE_BIN` to override.\n\
   - `--dry-run` claims a job and completes it immediately (smoke test).\n\
   - long jobs: the runner sends heartbeats and can time-slice Codex runs.\n"
 }
@@ -185,21 +188,51 @@ fn resolve_job_executor_plan(
     job_meta: Option<&Value>,
     cfg: &RunnerConfig,
 ) -> Result<(executors::ExecutorKind, &'static str, Option<String>), String> {
-    let executor = job_meta_selected_executor(job_meta).unwrap_or("codex");
-    let kind = if executor.eq_ignore_ascii_case("claude_code") {
-        executors::ExecutorKind::ClaudeCode
-    } else {
-        // Fallback for unknown/auto: codex.
-        executors::ExecutorKind::Codex
-    };
     let profile = normalize_executor_profile(job_meta_executor_profile(job_meta));
 
-    if kind == executors::ExecutorKind::ClaudeCode && cfg.claude_bin.is_none() {
-        return Err(
-            "claude_code executor requested but runner is not configured (set --claude-bin or BM_CLAUDE_BIN)"
-                .to_string(),
-        );
-    }
+    let executor = job_meta_selected_executor(job_meta).unwrap_or("auto");
+    let codex_available = crate::bin_detect::can_resolve_command(&cfg.codex_bin);
+    let claude_available = cfg
+        .claude_bin
+        .as_deref()
+        .is_some_and(crate::bin_detect::can_resolve_command);
+
+    let kind = if executor.eq_ignore_ascii_case("codex") {
+        executors::ExecutorKind::Codex
+    } else if executor.eq_ignore_ascii_case("claude_code") {
+        if !claude_available {
+            return Err(
+                "claude_code executor requested but the runner cannot resolve the Claude CLI (install `claude` or set --claude-bin / BM_CLAUDE_BIN)"
+                    .to_string(),
+            );
+        }
+        executors::ExecutorKind::ClaudeCode
+    } else {
+        // executor=auto (or unknown): deterministic local selection.
+        //
+        // The store may already contain a deterministic `routing.selected_executor` chosen by the
+        // server. If it doesn't (e.g. job created before any runner lease existed), we fall back
+        // to a simple, stable policy:
+        // - prefer Claude Code for deep/audit when available,
+        // - otherwise prefer Codex,
+        // - if only one executor is available, use it.
+        if !codex_available && claude_available {
+            executors::ExecutorKind::ClaudeCode
+        } else if codex_available && !claude_available {
+            executors::ExecutorKind::Codex
+        } else if codex_available && claude_available {
+            if matches!(profile, "deep" | "audit") {
+                executors::ExecutorKind::ClaudeCode
+            } else {
+                executors::ExecutorKind::Codex
+            }
+        } else {
+            return Err(
+                "no executors available (install `codex` and/or `claude`, or configure --codex-bin/--claude-bin)"
+                    .to_string(),
+            );
+        }
+    };
 
     let model = if kind == executors::ExecutorKind::ClaudeCode {
         job_meta_executor_model(job_meta).map(|v| v.to_string())
@@ -223,8 +256,15 @@ fn send_runner_heartbeat(
     if let Some(job) = active_job_id {
         args.insert("active_job_id".to_string(), json!(job));
     }
-    let mut execs = vec!["codex"];
-    if cfg.claude_bin.is_some() {
+    let mut execs = Vec::<&str>::new();
+    if crate::bin_detect::can_resolve_command(&cfg.codex_bin) {
+        execs.push("codex");
+    }
+    if cfg
+        .claude_bin
+        .as_deref()
+        .is_some_and(crate::bin_detect::can_resolve_command)
+    {
         execs.push("claude_code");
     }
     args.insert("executors".to_string(), json!(execs));
@@ -602,7 +642,7 @@ fn parse_args() -> Result<RunnerConfig, String> {
     let runner_id = runner_id.unwrap_or_else(|| format!("bm_runner:{}", std::process::id()));
     let mcp_bin = mcp_bin.unwrap_or_else(default_mcp_bin);
     let codex_bin = codex_bin.unwrap_or_else(|| "codex".to_string());
-    let claude_bin = claude_bin;
+    let claude_bin = crate::bin_detect::resolve_optional_bin(claude_bin, "claude");
     let skill_profile = skill_profile.unwrap_or_else(|| "strict".to_string());
     let skill_profile = normalize_skill_profile(&skill_profile)
         .ok_or("invalid --skill-profile (expected daily|strict|research|teamlead)")?;

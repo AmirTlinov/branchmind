@@ -62,7 +62,7 @@ Jobs may request a specific executor or defer to policy-based auto routing.
 #### Copy/paste: create a Claude Code job
 
 This pins the job to the `claude_code` executor and a specific model. The runner will pick it up when
-started with `--claude-bin` / `BM_CLAUDE_BIN`.
+`claude` is available on PATH (auto-detected) or when explicitly configured via `--claude-bin` / `BM_CLAUDE_BIN`.
 
 ```json
 {
@@ -134,8 +134,8 @@ Runners advertise:
 First-party runner (`bm_runner`) executors:
 
 - `codex` is always available (configurable via `--codex-bin` / `BM_CODEX_BIN`).
-- `claude_code` is available when configured via `--claude-bin` or `BM_CLAUDE_BIN`
-  (uses the official Claude Code CLI in headless mode with structured JSON output).
+- `claude_code` is available when the `claude` CLI is on PATH (**auto-detected**) or when configured via
+  `--claude-bin` / `BM_CLAUDE_BIN` (uses the official Claude Code CLI in headless mode with structured JSON output).
 
 ### Deterministic routing
 

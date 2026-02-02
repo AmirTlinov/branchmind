@@ -95,6 +95,75 @@ fn tasks_lint_patch_suggestions_seed_missing_criteria() {
 }
 
 #[test]
+fn tasks_lint_patch_suggestions_prioritize_next_action_and_proof_when_truncated() {
+    let mut server = Server::start_initialized(
+        "tasks_lint_patch_suggestions_prioritize_next_action_and_proof_when_truncated",
+    );
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_bootstrap",
+            "arguments": {
+                "workspace": "ws1",
+                "plan_title": "Plan Lint",
+                "task_title": "Task Lint",
+                "steps": [
+                    { "title": "Implement: thing", "success_criteria": ["c1"], "tests": ["t1"] }
+                ]
+            }
+        }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id");
+
+    // Force truncation to exercise patch prioritization. This task has multiple issues that
+    // generate multiple patches (confirm criteria/tests + next_action + proof + missing anchor).
+    let lint = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "tasks_lint",
+            "arguments": { "workspace": "ws1", "task": task_id, "patches_limit": 2 }
+        }
+    }));
+    let lint_text = extract_tool_text(&lint);
+    let patches = lint_text
+        .get("result")
+        .and_then(|v| v.get("patches"))
+        .and_then(|v| v.as_array())
+        .expect("patches array");
+
+    assert!(
+        patches.iter().any(|patch| {
+            patch
+                .get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| id.contains(":set_next_action"))
+        }),
+        "expected :set_next_action patch to survive truncation, got:\n{lint_text}"
+    );
+
+    assert!(
+        patches.iter().any(|patch| {
+            patch
+                .get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| id.contains(":require_proof_tests"))
+        }),
+        "expected :require_proof_tests patch to survive truncation, got:\n{lint_text}"
+    );
+}
+
+#[test]
 fn tasks_lint_patch_suggestions_active_limit_exceeded() {
     let mut server =
         Server::start_initialized("tasks_lint_patch_suggestions_active_limit_exceeded");

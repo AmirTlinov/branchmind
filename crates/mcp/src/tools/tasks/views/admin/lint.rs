@@ -61,19 +61,36 @@ impl McpServer {
         if id.contains("mark_done") {
             return 2;
         }
-        if id.contains("seed_steps") {
+
+        // When `patches_limit` truncates, prioritize what keeps the task executable and provable
+        // in the agent loop (next_action + proof + meaning binding) over “nice to have” confirms.
+        if id.contains("set_next_action") {
             return 3;
         }
-        if id.contains("seed_success_criteria") || id.contains("confirm_criteria") {
+        if id.contains("require_proof_tests") {
             return 4;
         }
-        if id.contains("seed_tests") || id.contains("confirm_tests") {
+        if id.contains("missing_anchor") {
             return 5;
         }
-        if id.contains("missing_anchor") {
+
+        if id.contains("seed_steps") {
             return 6;
         }
-        7
+        if id.contains("seed_success_criteria") {
+            return 7;
+        }
+        if id.contains("seed_tests") {
+            return 8;
+        }
+        if id.contains("confirm_criteria") {
+            return 9;
+        }
+        if id.contains("confirm_tests") {
+            return 10;
+        }
+
+        11
     }
 
     fn select_patches(mut patches: Vec<Value>, limit: usize) -> Vec<Value> {

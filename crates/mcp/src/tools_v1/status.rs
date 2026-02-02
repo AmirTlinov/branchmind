@@ -2,6 +2,7 @@
 
 use crate::ops::{Action, ActionPriority, OpError, OpResponse};
 use serde_json::{Value, json};
+use std::sync::atomic::Ordering;
 
 pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
     let Some(args_obj) = args.as_object() else {
@@ -93,6 +94,14 @@ pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
     }
 
     let report = crate::ops::derive_next(server, &workspace_id);
+    let now_ms = crate::support::now_ms_i64();
+    let inbox = server.store.jobs_status_counts(&workspace_id).ok();
+    let runner = server
+        .store
+        .runner_status_snapshot(&workspace_id, now_ms)
+        .ok();
+    let runner_autostart_enabled = server.runner_autostart_enabled.load(Ordering::Relaxed);
+
     let mut out = OpResponse::success(
         "status".to_string(),
         json!({
@@ -105,6 +114,22 @@ pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
             "focus": report.focus_id,
             "checkout": report.checkout,
             "state_fingerprint": report.state_fingerprint,
+            "jobs": {
+                "queued": inbox.as_ref().map(|v| v.queued).unwrap_or(0),
+                "running": inbox.as_ref().map(|v| v.running).unwrap_or(0)
+            },
+            "runner": runner.as_ref().map(|s| json!({
+                "status": s.status,
+                "live_count": s.live_count,
+                "idle_count": s.idle_count,
+                "offline_count": s.offline_count,
+                "runner_id": s.runner_id,
+                "active_job_id": s.active_job_id,
+                "lease_expires_at_ms": s.lease_expires_at_ms
+            })).unwrap_or(Value::Null),
+            "runner_autostart": {
+                "enabled": runner_autostart_enabled
+            }
         }),
     );
     out.refs = report.refs;

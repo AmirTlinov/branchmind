@@ -16,11 +16,21 @@ Return the schema bundle for a command (`args_schema`, `example_minimal_args`,
 `example_valid_call`, `doc_ref`).
 
 Notes:
-- Runtime is **fail-open**: if `doc_ref` points to a missing doc/anchor, the server still returns the schema bundle and emits `warnings[]` with `code="DOCS_DRIFT"`. CI keeps hard drift guards.
+- Runtime is **fail-open**: the server always returns the schema bundle even if local docs are unavailable.
+  Docs drift is enforced by CI/test guards (not in the agent UX loop).
 
 ## system.cmd.list
 
 List all registered `cmd` names (SSOT registry).
+
+## system.ops.summary
+
+Return a small, low-noise summary of the v1 UX surface:
+
+- tool surface count + names (must be 10),
+- golden ops count (as advertised in `tools/list`),
+- cmd registry count (and cmd-by-domain counts),
+- unplugged ops (if any) to detect “advertised but not dispatchable” drift.
 
 ## system.migration.lookup
 
@@ -100,6 +110,15 @@ Low-noise job radar (legacy `tasks_jobs_radar`).
 
 Open a job record (legacy `tasks_jobs_open`).
 
+## jobs.runner.start
+
+Explicitly start the first-party `bm_runner` for the workspace (best-effort).
+
+Notes:
+- This is allowed because `bm_mcp` may auto-start the first-party runner (see `DELEGATION.md`).
+- Runtime is **fail-open**: on failure, the server returns `runner_bootstrap` (copy/paste command)
+  and emits `warnings[]` with `code="RUNNER_START_FAILED"`.
+
 ## jobs.runner.heartbeat
 
 Runner heartbeat + capabilities (legacy `tasks_runner_heartbeat`).
@@ -153,10 +172,6 @@ Merge graph changes (legacy `graph_merge`).
 ## vcs.branch.create
 
 Create a branch (legacy `branch_create`).
-
-## vcs.branch.merge
-
-Merge a branch (graph merge fallback).
 
 ---
 

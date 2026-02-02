@@ -3,7 +3,6 @@
 mod actions;
 mod dispatch;
 mod docs;
-mod docs_guard;
 mod envelope;
 mod graph;
 mod jobs;
@@ -21,13 +20,15 @@ mod workspace;
 
 pub(crate) use actions::*;
 pub(crate) use dispatch::*;
-pub(crate) use docs_guard::doc_ref_exists;
 pub(crate) use envelope::*;
 pub(crate) use legacy_bridge::legacy_to_op_response;
 pub(crate) use next_engine::*;
 pub(crate) use normalize::*;
 pub(crate) use registry::*;
 pub(crate) use schema::*;
+
+#[cfg(test)]
+mod docs_guard;
 
 #[cfg(test)]
 mod tests;

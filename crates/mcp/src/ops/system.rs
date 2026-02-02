@@ -2,8 +2,7 @@
 
 use crate::ops::{
     BudgetPolicy, CommandRegistry, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError,
-    OpResponse, Safety, SchemaSource, Stability, Tier, ToolName, doc_ref_exists,
-    schema_bundle_for_cmd,
+    OpResponse, Safety, SchemaSource, Stability, Tier, ToolName, schema_bundle_for_cmd,
 };
 use serde_json::json;
 
@@ -37,6 +36,35 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         handler: Some(handle_schema_get),
     });
 
+    // system.ops.summary (custom)
+    specs.push(CommandSpec {
+        cmd: "system.ops.summary".to_string(),
+        domain_tool: ToolName::SystemOps,
+        tier: Tier::Gold,
+        stability: Stability::Stable,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#system.ops.summary".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: true,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Custom {
+            args_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+            example_minimal_args: json!({}),
+        },
+        op_aliases: vec!["ops.summary".to_string()],
+        legacy_tool: None,
+        handler: Some(handle_ops_summary),
+    });
+
     // system.cmd.list (custom)
     specs.push(CommandSpec {
         cmd: "system.cmd.list".to_string(),
@@ -65,7 +93,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             }),
             example_minimal_args: json!({ "prefix": "tasks." }),
         },
-        op_aliases: Vec::new(),
+        op_aliases: vec!["cmd.list".to_string()],
         legacy_tool: None,
         handler: Some(handle_cmd_list),
     });
@@ -173,10 +201,9 @@ fn handle_schema_get(_server: &mut crate::McpServer, env: &Envelope) -> OpRespon
 
     // UX: schema-on-demand must be fail-open at runtime.
     //
-    // Docs drift is a CI/maintainer concern (we keep hard guards in tests), but agents need
-    // schema.get to work *even when docs anchors drift locally*. Return the schema bundle and
-    // surface the drift as a warning instead of a hard error.
-    let mut resp = OpResponse::success(
+    // Docs drift is a CI/maintainer concern (we keep hard guards in tests). At runtime the agent
+    // should always get a schema bundle even if local docs are missing/unavailable.
+    OpResponse::success(
         env.cmd.clone(),
         json!({
             "cmd": bundle.cmd,
@@ -193,16 +220,116 @@ fn handle_schema_get(_server: &mut crate::McpServer, env: &Envelope) -> OpRespon
                 "idempotent": bundle.safety.idempotent
             }
         }),
+    )
+}
+
+fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+    let registry = CommandRegistry::global();
+
+    // Surface: 10 tools (fixed by contract).
+    let surface = crate::tools_v1::tool_definitions();
+    let mut surface_names = surface
+        .iter()
+        .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    surface_names.sort();
+
+    // Count cmd by domain prefix (tasks.*, think.*, ...).
+    let mut cmd_by_domain = std::collections::BTreeMap::<String, usize>::new();
+    for cmd in registry.list_cmds() {
+        let domain = cmd.split('.').next().unwrap_or("cmd").to_string();
+        *cmd_by_domain.entry(domain).or_insert(0) += 1;
+    }
+
+    // Count golden ops as advertised in tools/list (inputSchema.properties.op.enum),
+    // and verify they are wired to the registry aliases (no unplugged ops).
+    let mut golden_ops_total: usize = 0;
+    let mut golden_ops_by_tool = std::collections::BTreeMap::<String, usize>::new();
+    let mut unplugged = Vec::<String>::new();
+
+    for tool in surface.iter() {
+        let Some(name) = tool.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(op_enum) = tool
+            .get("inputSchema")
+            .and_then(|v| v.get("properties"))
+            .and_then(|v| v.get("op"))
+            .and_then(|v| v.get("enum"))
+            .and_then(|v| v.as_array())
+        else {
+            continue;
+        };
+
+        let tool_name = match name {
+            "workspace" => Some(ToolName::WorkspaceOps),
+            "tasks" => Some(ToolName::TasksOps),
+            "jobs" => Some(ToolName::JobsOps),
+            "think" => Some(ToolName::ThinkOps),
+            "graph" => Some(ToolName::GraphOps),
+            "vcs" => Some(ToolName::VcsOps),
+            "docs" => Some(ToolName::DocsOps),
+            "system" => Some(ToolName::SystemOps),
+            _ => None,
+        };
+
+        let mut count = 0usize;
+        for op in op_enum.iter().filter_map(|v| v.as_str()) {
+            if op == "call" {
+                continue;
+            }
+            count += 1;
+            golden_ops_total += 1;
+            if let Some(tool_name) = tool_name
+                && registry.find_by_alias(tool_name, op).is_none()
+            {
+                unplugged.push(format!("{name}.{op}"));
+            }
+        }
+        if count > 0 {
+            golden_ops_by_tool.insert(name.to_string(), count);
+        }
+    }
+
+    unplugged.sort();
+    unplugged.dedup();
+
+    let mut resp = OpResponse::success(
+        env.cmd.clone(),
+        json!({
+            "surface": {
+                "tools": {
+                    "count": surface_names.len(),
+                    "names": surface_names
+                },
+                "golden_ops": {
+                    "count": golden_ops_total,
+                    "by_tool": golden_ops_by_tool,
+                    "unplugged": unplugged
+                }
+            },
+            "registry": {
+                "cmd": {
+                    "count": registry.list_cmds().len(),
+                    "by_domain": cmd_by_domain
+                }
+            }
+        }),
     );
 
-    if !doc_ref_exists(&bundle.doc_ref) {
+    if let Some(arr) = resp
+        .result
+        .get("surface")
+        .and_then(|v| v.get("golden_ops"))
+        .and_then(|v| v.get("unplugged"))
+        .and_then(|v| v.as_array())
+        && !arr.is_empty()
+    {
         resp.warnings.push(crate::warning(
-            "DOCS_DRIFT",
-            &format!(
-                "doc_ref missing: {} ({})",
-                bundle.doc_ref.path, bundle.doc_ref.anchor
-            ),
-            "Fix docs/contracts/V1_COMMANDS.md anchors or registry doc_ref (CI will enforce).",
+            "UNPLUGGED_OPS",
+            "Some ops are advertised in tools/list but not wired to the cmd registry.",
+            "Fix tools_v1/definitions.rs or add missing op_aliases in ops/* registry.",
         ));
     }
 

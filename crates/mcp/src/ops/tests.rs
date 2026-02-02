@@ -21,7 +21,7 @@ fn registry_has_doc_and_schema_for_all_cmds() {
     for spec in registry.specs() {
         assert!(!spec.cmd.trim().is_empty(), "cmd must be non-empty");
         assert!(
-            doc_ref_exists(&spec.doc_ref),
+            super::docs_guard::doc_ref_exists(&spec.doc_ref),
             "doc_ref missing for {}",
             spec.cmd
         );
