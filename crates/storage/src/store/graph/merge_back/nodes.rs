@@ -85,16 +85,44 @@ pub(super) fn apply_node_candidate_tx(
         return Ok(());
     }
 
-    // Diverged: create conflict.
-    let preview = build_conflict_preview_node(
+    // Diverged: conflict (unless it was already resolved).
+    let mut preview = build_conflict_preview_node(
         &ctx.preview_ctx,
         &key,
         base.as_ref(),
         Some(theirs),
         ours.as_ref(),
     );
-    if !ctx.dry_run {
-        let _ = graph_conflict_create_node_tx(
+
+    // First: stable conflict identity by signature (excludes ours_seq).
+    //
+    // This prevents "zombie" conflicts that re-surface after `use_from` (ours changes => seq changes).
+    if let Some(existing) = graph_conflict_status_row_by_signature_tx(
+        tx,
+        GraphConflictSignatureArgs {
+            workspace: ctx.workspace,
+            from_branch: ctx.from_branch,
+            into_branch: ctx.into_branch,
+            doc: ctx.doc,
+            kind: "node",
+            key: key.as_str(),
+            base_cutoff_seq: ctx.preview_ctx.base_cutoff_seq,
+            theirs_seq: theirs.last_seq,
+        },
+    )? {
+        // Once a conflict is resolved, we intentionally do not re-surface it in future merges.
+        // Otherwise, `use_into` resolutions would loop forever (divergence stays by design).
+        if existing.status == "resolved" {
+            state.skipped += 1;
+            return Ok(());
+        }
+
+        preview.conflict_id = existing.conflict_id;
+        preview.status = existing.status;
+        preview.created_at_ms = existing.created_at_ms;
+        preview.resolved_at_ms = existing.resolved_at_ms;
+    } else if !ctx.dry_run {
+        let created = graph_conflict_create_node_tx(
             tx,
             &ctx.create_ctx,
             &key,
@@ -102,9 +130,12 @@ pub(super) fn apply_node_candidate_tx(
             Some(theirs),
             ours.as_ref(),
         )?;
+        if created.inserted {
+            state.conflicts_created += 1;
+        }
     }
 
-    state.conflicts_created += 1;
+    state.conflicts_detected += 1;
     state.conflict_ids.push(preview.conflict_id.clone());
     state.conflicts.push(preview);
 

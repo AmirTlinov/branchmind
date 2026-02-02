@@ -12,7 +12,6 @@ pub(super) fn graph_conflict_id(args: GraphConflictIdArgs<'_>) -> String {
         key,
         base_cutoff_seq,
         theirs_seq,
-        ours_seq,
     } = args;
 
     const FNV_OFFSET: u64 = 14695981039346656037;
@@ -48,7 +47,6 @@ pub(super) fn graph_conflict_id(args: GraphConflictIdArgs<'_>) -> String {
         update_str(hash, key);
         update_i64(hash, base_cutoff_seq);
         update_i64(hash, theirs_seq);
-        update_i64(hash, ours_seq);
         *hash ^= offset as u64;
         *hash = hash.wrapping_mul(FNV_PRIME);
     }

@@ -123,6 +123,11 @@ pub struct GraphDiffSlice {
 pub struct GraphMergeResult {
     pub merged: usize,
     pub skipped: usize,
+    /// Diverged candidates requiring conflict handling (open/preview conflicts).
+    ///
+    /// Note: this can be > conflicts_created when conflicts already exist (or when dry_run=true).
+    pub conflicts_detected: usize,
+    /// New conflict rows inserted into storage.
     pub conflicts_created: usize,
     pub conflict_ids: Vec<String>,
     pub conflicts: Vec<GraphConflictDetail>,

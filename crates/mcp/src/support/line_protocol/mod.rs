@@ -413,6 +413,9 @@ fn render_tasks_jobs_radar_lines(
             == 0
         {
             head_parts.push("runners=none".to_string());
+        } else if live_count.saturating_add(idle_count) > 0 {
+            // Product UX: offline leases are usually historical noise when a live/idle runner exists.
+            head_parts.push(format!("runners=live:{live_count} idle:{idle_count}"));
         } else {
             head_parts.push(format!(
                 "runners=live:{live_count} idle:{idle_count} offline:{offline_count}"
@@ -1438,6 +1441,10 @@ fn render_tasks_resume_lines(
             if live_count + idle_count + offline_count == 0 {
                 // No known runner leases exist. Keep the display unambiguous and compact.
                 state.push_str(" runners=none");
+            } else if live_count + idle_count > 0 {
+                // Product UX: hide offline leases when at least one runner is live/idle. Offline
+                // leases are usually historical noise in that case.
+                state.push_str(&format!(" runners=live:{live_count} idle:{idle_count}"));
             } else {
                 state.push_str(&format!(
                     " runners=live:{live_count} idle:{idle_count} offline:{offline_count}"

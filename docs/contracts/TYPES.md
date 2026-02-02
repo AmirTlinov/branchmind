@@ -410,6 +410,12 @@ Recommended `error.code` values:
 - `CONFLICT`
 - `BUDGET_EXCEEDED`
 
+Notes:
+
+- When `error.code="BUDGET_EXCEEDED"` and the server can identify the target command, it should attach
+  an actions-first retry (e.g. `recover.budget.clamp::<cmd>`) that re-runs the same tool call with
+  offending budget knobs clamped to the selected `budget_profile` caps.
+
 Every error should include:
 
 - `message` (human-readable)

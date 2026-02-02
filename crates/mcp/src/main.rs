@@ -135,12 +135,49 @@ pub(crate) struct McpServerConfig {
     runner_autostart: Arc<Mutex<RunnerAutostartState>>,
 }
 
+fn usage() -> &'static str {
+    "bm_mcp — BranchMind MCP server (Rust, deterministic, stdio-first)\n\n\
+USAGE:\n\
+  bm_mcp [--storage-dir DIR] [--workspace WS] [--toolset daily|full|core]\n\
+        [--shared|--daemon] [--socket PATH]\n\
+\n\
+FLAGS:\n\
+  -h, --help       Print this help and exit\n\
+  -V, --version    Print version/build and exit\n\
+\n\
+NOTES:\n\
+  - Repo-local store default: <repo>/.agents/mcp/.branchmind/\n\
+  - For full config/env vars, see README.md\n"
+}
+
+fn version_line() -> String {
+    format!(
+        "bm_mcp {SERVER_VERSION} build={}",
+        crate::build_fingerprint()
+    )
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = std::env::args().collect::<Vec<_>>();
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+    {
+        print!("{}", usage());
+        return Ok(());
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-V" | "--version"))
+    {
+        println!("{}", version_line());
+        return Ok(());
+    }
+
     // Ensure the compatibility fingerprint is computed at process start.
     // This prevents a long-lived daemon from accidentally observing a replaced on-disk binary
     // and reporting a misleading "new" fingerprint while still running old code.
     let _ = build_fingerprint();
-    let args = std::env::args().collect::<Vec<_>>();
     let kind = if args.iter().any(|arg| arg.as_str() == "--daemon") {
         "daemon"
     } else if args.iter().any(|arg| arg.as_str() == "--shared") {

@@ -13,7 +13,6 @@ pub(in crate::store) fn build_conflict_preview_node(
     ours: Option<&GraphNodeRow>,
 ) -> GraphConflictDetail {
     let theirs_seq = theirs.map(|n| n.last_seq).unwrap_or(0);
-    let ours_seq = ours.map(|n| n.last_seq).unwrap_or(0);
     let conflict_id = graph_conflict_id(GraphConflictIdArgs {
         workspace: ctx.workspace,
         from_branch: ctx.from_branch,
@@ -23,7 +22,6 @@ pub(in crate::store) fn build_conflict_preview_node(
         key,
         base_cutoff_seq: ctx.base_cutoff_seq,
         theirs_seq,
-        ours_seq,
     });
 
     GraphConflictDetail {
@@ -53,7 +51,6 @@ pub(in crate::store) fn build_conflict_preview_edge(
     ours: Option<&GraphEdgeRow>,
 ) -> GraphConflictDetail {
     let theirs_seq = theirs.map(|n| n.last_seq).unwrap_or(0);
-    let ours_seq = ours.map(|n| n.last_seq).unwrap_or(0);
     let key_str = format!("{}|{}|{}", key.from, key.rel, key.to);
     let conflict_id = graph_conflict_id(GraphConflictIdArgs {
         workspace: ctx.workspace,
@@ -64,7 +61,6 @@ pub(in crate::store) fn build_conflict_preview_edge(
         key: &key_str,
         base_cutoff_seq: ctx.base_cutoff_seq,
         theirs_seq,
-        ours_seq,
     });
 
     GraphConflictDetail {

@@ -38,7 +38,7 @@ fn jobs_radar_fmt_lines_includes_bounded_runner_lines() {
         header.contains("runner=")
             && header.contains("runners=live:")
             && header.contains("idle:")
-            && header.contains("offline:"),
+            && !header.contains("offline:"),
         "expected runner summary in header, got:\n{text}"
     );
     assert!(

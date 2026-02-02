@@ -83,10 +83,27 @@ pub(crate) fn analyze_duplicate_content_same_anchor(
     (issues, duplicate_groups)
 }
 
-pub(crate) fn analyze_duplicate_content_same_key_across_anchors(entries: &[Entry]) -> Vec<Value> {
+pub(crate) fn analyze_duplicate_content_same_key_across_anchors(
+    entries: &[Entry],
+) -> (Vec<Value>, Vec<CrossDuplicateGroup>) {
     let mut issues = Vec::<Value>::new();
+    let mut groups = Vec::<CrossDuplicateGroup>::new();
 
     // Duplicate content for the same key across anchors (often “shared knowledge”).
+    //
+    // IMPORTANT: We only report this when a content-hash is represented under a *single key*
+    // across anchors. If the same hash appears under multiple keys, we treat that as key drift
+    // (handled by `analyze_duplicate_content_across_anchors_multiple_keys`) and avoid doubling
+    // the surface area (noise).
+    let mut keys_by_hash =
+        std::collections::BTreeMap::<u64, std::collections::BTreeSet<String>>::new();
+    for entry in entries.iter() {
+        keys_by_hash
+            .entry(entry.content_hash)
+            .or_default()
+            .insert(entry.key.clone());
+    }
+
     let mut by_key_hash = std::collections::BTreeMap::<(String, u64), Vec<Entry>>::new();
     for entry in entries.iter().cloned() {
         by_key_hash
@@ -94,7 +111,21 @@ pub(crate) fn analyze_duplicate_content_same_key_across_anchors(entries: &[Entry
             .or_default()
             .push(entry);
     }
-    for ((key, content_hash), group) in by_key_hash {
+    for ((key, content_hash), mut group) in by_key_hash {
+        let keys_for_hash = keys_by_hash
+            .get(&content_hash)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        if keys_for_hash > 1 {
+            continue;
+        }
+
+        group.sort_by(|a, b| {
+            a.created_at_ms
+                .cmp(&b.created_at_ms)
+                .then_with(|| a.anchor_id.cmp(&b.anchor_id))
+                .then_with(|| a.card_id.cmp(&b.card_id))
+        });
         let anchors = group
             .iter()
             .map(|e| e.anchor_id.clone())
@@ -113,25 +144,43 @@ pub(crate) fn analyze_duplicate_content_same_key_across_anchors(entries: &[Entry
             .collect::<Vec<_>>();
         let anchors_sample = anchors.iter().take(12).cloned().collect::<Vec<_>>();
         let card_ids_sample = card_ids.iter().take(12).cloned().collect::<Vec<_>>();
+        let recommended_anchor_id = group
+            .first()
+            .map(|e| e.anchor_id.clone())
+            .unwrap_or_else(|| anchors[0].clone());
+        let recommended_key = key.clone();
+        let key_for_issue = key.clone();
+        let recommended_anchor_id_for_issue = recommended_anchor_id.clone();
+
         issues.push(json!({
             "severity": "info",
             "code": "KNOWLEDGE_DUPLICATE_CONTENT_SAME_KEY_ACROSS_ANCHORS",
             "message": format!(
                 "Key is reused across anchors with identical content: k:{} appears in {} anchors.",
-                key,
+                key_for_issue,
                 anchor_count
             ),
             "evidence": {
-                "key": key,
+                "key": key_for_issue,
                 "anchor_count": anchor_count,
                 "anchors_sample": anchors_sample,
                 "card_ids_sample": card_ids_sample,
+                "recommended_anchor_id": recommended_anchor_id_for_issue,
                 "content_hash": format!("{content_hash:016x}")
             }
         }));
+
+        groups.push(CrossDuplicateGroup {
+            content_hash,
+            anchors,
+            keys: vec![key],
+            card_ids,
+            recommended_anchor_id,
+            recommended_key,
+        });
     }
 
-    issues
+    (issues, groups)
 }
 
 pub(crate) fn analyze_duplicate_content_across_anchors_multiple_keys(

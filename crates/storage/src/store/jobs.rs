@@ -1578,6 +1578,113 @@ impl SqliteStore {
         Ok(JobCompleteResult { job, event })
     }
 
+    pub fn job_cancel(
+        &mut self,
+        workspace: &WorkspaceId,
+        request: JobCancelRequest,
+    ) -> Result<JobCancelResult, StoreError> {
+        let id = normalize_job_id(&request.id)?;
+        let now_ms = now_ms();
+        let summary = normalize_job_summary(request.reason.clone())?;
+        let refs = normalize_event_refs(request.refs)?;
+        let meta_json = request.meta_json.clone();
+
+        let tx = self.conn.transaction()?;
+
+        let current: Option<(i64, String)> = tx
+            .query_row(
+                "SELECT revision, status FROM jobs WHERE workspace=?1 AND id=?2",
+                params![workspace.as_str(), id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((revision, status)) = current else {
+            return Err(StoreError::UnknownId);
+        };
+        if matches!(status.as_str(), "DONE" | "FAILED" | "CANCELED") {
+            return Err(StoreError::JobAlreadyTerminal { job_id: id, status });
+        }
+        if status != "QUEUED" {
+            return Err(StoreError::JobNotCancelable { job_id: id, status });
+        }
+
+        let next_rev = revision + 1;
+        if meta_json.is_some() {
+            tx.execute(
+                r#"
+                UPDATE jobs
+                SET revision=?3, status='CANCELED', runner=NULL, claim_expires_at_ms=NULL, summary=?4, meta_json=?5, updated_at_ms=?6, completed_at_ms=?7
+                WHERE workspace=?1 AND id=?2 AND status='QUEUED' AND revision=?8
+                "#,
+                params![
+                    workspace.as_str(),
+                    id.as_str(),
+                    next_rev,
+                    summary,
+                    meta_json,
+                    now_ms,
+                    now_ms,
+                    revision
+                ],
+            )?;
+        } else {
+            tx.execute(
+                r#"
+                UPDATE jobs
+                SET revision=?3, status='CANCELED', runner=NULL, claim_expires_at_ms=NULL, summary=?4, updated_at_ms=?5, completed_at_ms=?6
+                WHERE workspace=?1 AND id=?2 AND status='QUEUED' AND revision=?7
+                "#,
+                params![
+                    workspace.as_str(),
+                    id.as_str(),
+                    next_rev,
+                    summary,
+                    now_ms,
+                    now_ms,
+                    revision
+                ],
+            )?;
+        }
+
+        let reason = request
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let message = if let Some(reason) = reason {
+            normalize_event_message(&format!("canceled: {reason}"))?
+        } else {
+            "canceled".to_string()
+        };
+
+        let event = insert_job_event_tx(
+            &tx,
+            workspace.as_str(),
+            id.as_str(),
+            InsertJobEventTxArgs {
+                ts_ms: now_ms,
+                kind: "canceled",
+                message: &message,
+                percent: None,
+                refs: &refs,
+                meta_json: request.meta_json,
+            },
+        )?;
+
+        let job: JobRow = tx.query_row(
+            r#"
+            SELECT revision, status, title, kind, priority, task_id, anchor_id, runner, claim_expires_at_ms, summary, created_at_ms, updated_at_ms, completed_at_ms
+            FROM jobs
+            WHERE workspace=?1 AND id=?2
+            "#,
+            params![workspace.as_str(), id.as_str()],
+            |row| read_job_row(row, id.clone()),
+        )?;
+
+        tx.commit()?;
+        Ok(JobCancelResult { job, event })
+    }
+
     pub fn job_requeue(
         &mut self,
         workspace: &WorkspaceId,

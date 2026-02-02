@@ -91,7 +91,7 @@ fn jobs_radar_is_glanceable_with_multirunner_and_needs_manager() {
             && header.contains("runner=")
             && header.contains("runners=live:")
             && header.contains("idle:")
-            && header.contains("offline:"),
+            && !header.contains("offline:"),
         "expected runner summary in header, got:\n{text}"
     );
 

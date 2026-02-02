@@ -22,6 +22,9 @@ pub(crate) fn format_store_error(err: StoreError) -> String {
         StoreError::JobNotRunning { job_id, status } => {
             format!("Job not running: job_id={job_id} status={status}")
         }
+        StoreError::JobNotCancelable { job_id, status } => {
+            format!("Job not cancelable: job_id={job_id} status={status}")
+        }
         StoreError::JobClaimMismatch {
             job_id,
             expected_runner_id,

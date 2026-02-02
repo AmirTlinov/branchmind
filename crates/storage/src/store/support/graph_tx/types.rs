@@ -111,7 +111,17 @@ pub(in crate::store) struct GraphConflictIdArgs<'a> {
     pub(in crate::store) key: &'a str,
     pub(in crate::store) base_cutoff_seq: i64,
     pub(in crate::store) theirs_seq: i64,
-    pub(in crate::store) ours_seq: i64,
+}
+
+pub(in crate::store) struct GraphConflictSignatureArgs<'a> {
+    pub(in crate::store) workspace: &'a str,
+    pub(in crate::store) from_branch: &'a str,
+    pub(in crate::store) into_branch: &'a str,
+    pub(in crate::store) doc: &'a str,
+    pub(in crate::store) kind: &'a str,
+    pub(in crate::store) key: &'a str,
+    pub(in crate::store) base_cutoff_seq: i64,
+    pub(in crate::store) theirs_seq: i64,
 }
 
 pub(in crate::store) struct GraphConflictPreviewCtx<'a> {

@@ -72,6 +72,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 "type": "object",
                 "properties": {
                     "scope": { "type": "string" },
+                    "key": { "type": "string" },
                     "limit": { "type": "integer" },
                     "tags": { "type": "array", "items": { "type": "string" } }
                 },

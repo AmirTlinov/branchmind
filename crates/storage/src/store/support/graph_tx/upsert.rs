@@ -13,6 +13,36 @@ use super::types::{
 use super::validate::{validate_graph_node_id, validate_graph_rel, validate_graph_type};
 use super::versions::{insert_graph_edge_version_tx, insert_graph_node_version_tx};
 use rusqlite::Transaction;
+use serde_json::Value;
+
+const RESERVED_META_KEYS: [&str; 3] = ["_merge", "_meta", "_meta_raw"];
+
+fn meta_json_semantic_eq(left: Option<&str>, right: Option<&str>) -> bool {
+    normalize_meta_json(left) == normalize_meta_json(right)
+}
+
+fn normalize_meta_json(value: Option<&str>) -> Option<Value> {
+    let trimmed = value.map(str::trim).filter(|s| !s.is_empty())?;
+
+    let mut v: Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return Some(Value::String(trimmed.to_string())),
+    };
+    strip_reserved_meta_keys(&mut v);
+
+    match v {
+        Value::Null => None,
+        Value::Object(ref map) if map.is_empty() => None,
+        _ => Some(v),
+    }
+}
+
+fn strip_reserved_meta_keys(value: &mut Value) {
+    let Value::Object(map) = value else { return };
+    for k in RESERVED_META_KEYS {
+        map.remove(k);
+    }
+}
 
 pub(in crate::store) fn graph_upsert_node_tx(
     tx: &Transaction<'_>,
@@ -257,7 +287,7 @@ pub(in crate::store) fn graph_node_semantic_eq(
                 && a.text == b.text
                 && a.tags == b.tags
                 && a.status == b.status
-                && a.meta_json.as_deref().map(str::trim) == b.meta_json.as_deref().map(str::trim)
+                && meta_json_semantic_eq(a.meta_json.as_deref(), b.meta_json.as_deref())
         }
     }
 }
@@ -274,7 +304,7 @@ pub(in crate::store) fn graph_edge_semantic_eq(
                 && a.rel == b.rel
                 && a.to == b.to
                 && a.deleted == b.deleted
-                && a.meta_json.as_deref().map(str::trim) == b.meta_json.as_deref().map(str::trim)
+                && meta_json_semantic_eq(a.meta_json.as_deref(), b.meta_json.as_deref())
         }
     }
 }
@@ -300,9 +330,10 @@ pub(in crate::store) fn count_node_field_changes(
     if base.and_then(|n| n.status.as_deref()) != theirs.status.as_deref() {
         changed += 1;
     }
-    if base.and_then(|n| n.meta_json.as_deref()).map(str::trim)
-        != theirs.meta_json.as_deref().map(str::trim)
-    {
+    if !meta_json_semantic_eq(
+        base.and_then(|n| n.meta_json.as_deref()),
+        theirs.meta_json.as_deref(),
+    ) {
         changed += 1;
     }
     if base.map(|n| n.deleted) != Some(theirs.deleted) {
@@ -316,9 +347,10 @@ pub(in crate::store) fn count_edge_field_changes(
     theirs: &GraphEdgeRow,
 ) -> usize {
     let mut changed = 0usize;
-    if base.and_then(|e| e.meta_json.as_deref()).map(str::trim)
-        != theirs.meta_json.as_deref().map(str::trim)
-    {
+    if !meta_json_semantic_eq(
+        base.and_then(|e| e.meta_json.as_deref()),
+        theirs.meta_json.as_deref(),
+    ) {
         changed += 1;
     }
     if base.map(|e| e.deleted) != Some(theirs.deleted) {

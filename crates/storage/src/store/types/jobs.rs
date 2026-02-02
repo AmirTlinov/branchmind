@@ -168,6 +168,20 @@ pub struct JobCompleteResult {
 }
 
 #[derive(Clone, Debug)]
+pub struct JobCancelRequest {
+    pub id: String,
+    pub reason: Option<String>,
+    pub refs: Vec<String>,
+    pub meta_json: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct JobCancelResult {
+    pub job: JobRow,
+    pub event: JobEventRow,
+}
+
+#[derive(Clone, Debug)]
 pub struct JobOpenRequest {
     pub id: String,
     pub include_prompt: bool,

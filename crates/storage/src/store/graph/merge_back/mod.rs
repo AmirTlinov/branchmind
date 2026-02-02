@@ -23,6 +23,7 @@ pub(super) struct MergeBackCtx<'a> {
 pub(super) struct MergeBackState {
     pub merged: usize,
     pub skipped: usize,
+    pub conflicts_detected: usize,
     pub conflicts_created: usize,
     pub conflict_ids: Vec<String>,
     pub conflicts: Vec<GraphConflictDetail>,
@@ -35,6 +36,7 @@ impl MergeBackState {
         Self {
             merged: 0,
             skipped: 0,
+            conflicts_detected: 0,
             conflicts_created: 0,
             conflict_ids: Vec::new(),
             conflicts: Vec::new(),
@@ -49,7 +51,7 @@ impl MergeBackState {
     }
 
     fn reached_limit(&self, limit: i64) -> bool {
-        self.merged as i64 + self.skipped as i64 + self.conflicts_created as i64 >= limit
+        self.merged as i64 + self.skipped as i64 + self.conflicts_detected as i64 >= limit
     }
 }
 
@@ -157,6 +159,7 @@ impl SqliteStore {
         Ok(GraphMergeResult {
             merged: state.merged,
             skipped: state.skipped,
+            conflicts_detected: state.conflicts_detected,
             conflicts_created: state.conflicts_created,
             conflict_ids: state.conflict_ids,
             conflicts: state.conflicts,

@@ -5,6 +5,7 @@ use crate::WorkspaceId;
 use crate::ops::{Action, ActionPriority, BudgetProfile, CommandRegistry, ToolName};
 use crate::support::now_rfc3339;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Envelope {
@@ -140,17 +141,18 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
         Err(err) => {
             let mut resp = OpResponse::error("error".to_string(), err.clone());
 
-            // UX: any INVALID_INPUT should be actionable. If the caller provided a cmd (op=call),
-            // attach schema-on-demand recovery actions even when parsing fails before dispatch.
-            if err.code == "INVALID_INPUT"
-                && let Some(args_obj) = raw_args_for_err.as_object()
-                && args_obj.get("op").and_then(|v| v.as_str()) == Some("call")
-                && let Some(cmd_raw) = args_obj.get("cmd").and_then(|v| v.as_str())
-                && let Ok(cmd) = crate::ops::normalize_cmd(cmd_raw)
-                && registry.find_by_cmd(&cmd).is_some()
-            {
+            // UX: parse-time errors should still be actionable (schema-on-demand + safe retry).
+            if let Some(args_obj) = raw_args_for_err.as_object() {
                 let workspace = args_obj.get("workspace").and_then(|v| v.as_str());
-                crate::ops::append_schema_actions(&mut resp, &cmd, workspace);
+                let cmd = cmd_for_error_recovery(tool, args_obj, registry);
+                if let Some(cmd) = cmd.as_deref() {
+                    if err.code == "INVALID_INPUT" {
+                        crate::ops::append_schema_actions(&mut resp, cmd, workspace);
+                    } else if err.code == "BUDGET_EXCEEDED" {
+                        append_budget_exceeded_actions(&mut resp, tool, cmd, args_obj, registry);
+                        crate::ops::append_schema_actions(&mut resp, cmd, workspace);
+                    }
+                }
             }
 
             return resp.into_value();
@@ -225,6 +227,109 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
     response.into_value()
 }
 
+fn cmd_for_error_recovery(
+    tool: ToolName,
+    args_obj: &serde_json::Map<String, Value>,
+    registry: &CommandRegistry,
+) -> Option<String> {
+    let op = args_obj.get("op").and_then(|v| v.as_str())?;
+    if op == "call" {
+        let cmd_raw = args_obj.get("cmd").and_then(|v| v.as_str())?;
+        let cmd = crate::ops::normalize_cmd(cmd_raw).ok()?;
+        if registry.find_by_cmd(&cmd).is_some() {
+            Some(cmd)
+        } else {
+            None
+        }
+    } else {
+        registry
+            .find_by_alias(tool, op)
+            .map(|spec| spec.cmd.clone())
+    }
+}
+
+fn append_budget_exceeded_actions(
+    resp: &mut OpResponse,
+    tool: ToolName,
+    cmd: &str,
+    args_obj: &serde_json::Map<String, Value>,
+    registry: &CommandRegistry,
+) {
+    let Some(spec) = registry.find_by_cmd(cmd) else {
+        return;
+    };
+
+    let budget_profile = args_obj
+        .get("budget_profile")
+        .and_then(|v| v.as_str())
+        .and_then(BudgetProfile::from_str)
+        .unwrap_or(spec.budget.default_profile);
+    let caps = spec.budget.caps_for(budget_profile);
+
+    let mut retry_env = args_obj.clone();
+    retry_env.insert(
+        "budget_profile".to_string(),
+        Value::String(budget_profile.as_str().to_string()),
+    );
+
+    let Some(retry_args_obj) = retry_env.get_mut("args").and_then(|v| v.as_object_mut()) else {
+        return;
+    };
+
+    let mut clamped = false;
+    if let Some(max_chars) = caps.max_chars
+        && let Some(v) = retry_args_obj.get("max_chars").and_then(|v| v.as_u64())
+        && v as usize > max_chars
+    {
+        retry_args_obj.insert("max_chars".to_string(), Value::Number(max_chars.into()));
+        clamped = true;
+    }
+    if let Some(context_budget) = caps.context_budget
+        && let Some(v) = retry_args_obj
+            .get("context_budget")
+            .and_then(|v| v.as_u64())
+        && v as usize > context_budget
+    {
+        retry_args_obj.insert(
+            "context_budget".to_string(),
+            Value::Number(context_budget.into()),
+        );
+        clamped = true;
+    }
+    if let Some(limit) = caps.limit
+        && let Some(v) = retry_args_obj.get("limit").and_then(|v| v.as_u64())
+        && v as usize > limit
+    {
+        retry_args_obj.insert("limit".to_string(), Value::Number(limit.into()));
+        clamped = true;
+    }
+    if !clamped {
+        // If we can't deterministically identify the offending knob, don't emit a misleading retry.
+        return;
+    }
+
+    let mut seen = BTreeSet::<String>::new();
+    for a in resp.actions.iter() {
+        seen.insert(a.action_id.clone());
+    }
+
+    let action_id = format!("recover.budget.clamp::{cmd}");
+    if !seen.insert(action_id.clone()) {
+        return;
+    }
+
+    resp.actions.push(Action {
+        action_id,
+        priority: ActionPriority::High,
+        tool: tool.as_str().to_string(),
+        args: Value::Object(retry_env),
+        why: "Retry with budget-safe caps (auto-clamped to the selected budget profile)."
+            .to_string(),
+        risk: "Output may be truncated; consider switching to a larger budget_profile when needed."
+            .to_string(),
+    });
+}
+
 fn parse_envelope(
     server: &mut McpServer,
     tool: ToolName,
@@ -285,12 +390,18 @@ fn parse_envelope(
     };
 
     let args_value = args_obj.get("args").cloned().unwrap_or(Value::Null);
-    let Some(args_obj_inner) = args_value.as_object() else {
-        return Err(OpError {
-            code: "INVALID_INPUT".to_string(),
-            message: "args must be an object".to_string(),
-            recovery: Some("Provide args as a JSON object.".to_string()),
-        });
+    let args_obj_inner = match args_value {
+        Value::Null => serde_json::Map::new(),
+        Value::Object(map) => map,
+        _ => {
+            return Err(OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "args must be an object".to_string(),
+                recovery: Some(
+                    "Provide args as a JSON object (or null/missing for empty).".to_string(),
+                ),
+            });
+        }
     };
 
     let view = args_obj

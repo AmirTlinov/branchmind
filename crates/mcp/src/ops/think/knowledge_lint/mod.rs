@@ -331,12 +331,13 @@ pub(super) fn handle(server: &mut crate::McpServer, env: &Envelope) -> OpRespons
     }
 
     let (mut issues, duplicate_groups) = analysis::analyze_duplicate_content_same_anchor(&entries);
-    issues.extend(analysis::analyze_duplicate_content_same_key_across_anchors(
-        &entries,
-    ));
-    let (cross_issues, cross_groups) =
+    let (same_key_issues, mut cross_groups) =
+        analysis::analyze_duplicate_content_same_key_across_anchors(&entries);
+    issues.extend(same_key_issues);
+    let (cross_issues, cross_groups_multi) =
         analysis::analyze_duplicate_content_across_anchors_multiple_keys(&entries);
     issues.extend(cross_issues);
+    cross_groups.extend(cross_groups_multi);
     let overloaded = analysis::analyze_overloaded_keys(&entries);
     issues.extend(overloaded.issues);
 

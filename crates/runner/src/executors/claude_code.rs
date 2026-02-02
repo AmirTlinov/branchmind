@@ -3,6 +3,7 @@
 use crate::RunnerConfig;
 use serde_json::Value;
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
@@ -47,13 +48,20 @@ pub(crate) fn spawn_exec(
     // directly to keep file operations deterministic and within the repo.
     cmd.current_dir(&cfg.repo_root);
 
-    let child = cmd
-        .arg(prompt)
-        .stdin(Stdio::null())
+    let mut child = cmd
+        // Claude Code requires the structured input via stdin when using `--print` / JSON output.
+        // Passing the prompt as argv is brittle (ARG_MAX, quoting) and fails on some versions.
+        .stdin(Stdio::piped())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file))
         .spawn()
         .map_err(|e| format!("failed to spawn claude ({claude_bin}): {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .map_err(|e| format!("write claude stdin failed: {e}"))?;
+    }
 
     Ok(child)
 }
@@ -80,4 +88,86 @@ pub(crate) fn read_output(out_path: &Path) -> Result<Value, String> {
     }
 
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Read;
+
+    fn mk_tmp_dir(prefix: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        dir.push(format!("{prefix}_{pid}_{ts}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_code_prompt_is_sent_via_stdin() {
+        let tmp = mk_tmp_dir("bm_runner_claude_stdin");
+        let seen_path = tmp.join("seen_prompt.txt");
+        let out_path = tmp.join("out.json");
+        let stderr_path = tmp.join("err.txt");
+
+        // A tiny shim executable that:
+        // 1) reads stdin into `seen_prompt.txt`
+        // 2) prints a valid Claude JSON wrapper to stdout (captured by spawn_exec)
+        let shim_path = tmp.join("claude_shim.sh");
+        let shim = format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+cat - > "{seen}"
+printf '%s\n' '{{"type":"result","structured_output":{{"ok":true}}}}'
+"#,
+            seen = seen_path.to_string_lossy()
+        );
+        fs::write(&shim_path, shim).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&shim_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&shim_path, perms).unwrap();
+        }
+
+        let cfg = crate::RunnerConfig {
+            workspace: "ws_test".to_string(),
+            storage_dir: tmp.clone(),
+            repo_root: tmp.clone(),
+            runner_id: "runner_test".to_string(),
+            poll_ms: 10,
+            heartbeat_ms: 10,
+            max_runtime_s: 1,
+            slice_s: 1,
+            slice_grace_s: 1,
+            stale_after_s: 1,
+            max_failures: 1,
+            once: true,
+            dry_run: true,
+            mcp_bin: "bm_mcp".to_string(),
+            codex_bin: "codex".to_string(),
+            claude_bin: Some(shim_path.to_string_lossy().to_string()),
+            skill_profile: "deep".to_string(),
+            skill_max_chars: 1000,
+        };
+
+        let prompt = "hello from stdin";
+        let mut child =
+            spawn_exec(&cfg, "{}", &out_path, &stderr_path, prompt, None).expect("spawn_exec");
+        let _ = child.wait();
+
+        let mut got = String::new();
+        fs::File::open(&seen_path)
+            .unwrap()
+            .read_to_string(&mut got)
+            .unwrap();
+        assert_eq!(got, prompt);
+    }
 }

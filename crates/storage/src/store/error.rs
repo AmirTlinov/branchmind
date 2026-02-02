@@ -22,6 +22,10 @@ pub enum StoreError {
         job_id: String,
         status: String,
     },
+    JobNotCancelable {
+        job_id: String,
+        status: String,
+    },
     JobClaimMismatch {
         job_id: String,
         expected_runner_id: Option<String>,
@@ -96,6 +100,9 @@ impl std::fmt::Display for StoreError {
             }
             Self::JobNotRunning { job_id, status } => {
                 write!(f, "job not running (job_id={job_id}, status={status})")
+            }
+            Self::JobNotCancelable { job_id, status } => {
+                write!(f, "job not cancelable (job_id={job_id}, status={status})")
             }
             Self::JobClaimMismatch {
                 job_id,

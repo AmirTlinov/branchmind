@@ -111,6 +111,91 @@ fn knowledge_lint_reports_duplicate_content_same_anchor() {
 }
 
 #[test]
+fn knowledge_lint_reports_duplicate_content_same_key_across_anchors() {
+    let mut server = Server::start_initialized(
+        "knowledge_lint_reports_duplicate_content_same_key_across_anchors",
+    );
+
+    // Same key + same content, but in 2 different anchors.
+    let _ = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_dup_key",
+                "op": "knowledge.upsert",
+                "args": {
+                    "anchor": "core",
+                    "key": "determinism",
+                    "card": { "title": "Determinism", "text": "Must be deterministic." }
+                }
+            }
+        }
+    }));
+
+    let _ = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_dup_key",
+                "op": "knowledge.upsert",
+                "args": {
+                    "anchor": "storage",
+                    "key": "determinism",
+                    "card": { "title": "Determinism", "text": "Must be deterministic." }
+                }
+            }
+        }
+    }));
+
+    let lint = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_dup_key",
+                "op": "knowledge.lint",
+                "args": { "limit": 50 }
+            }
+        }
+    }));
+    let text = extract_tool_text(&lint);
+    assert_eq!(text.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let issues = text
+        .get("result")
+        .and_then(|v| v.get("issues"))
+        .and_then(|v| v.as_array())
+        .expect("issues");
+    let dup = issues.iter().find(|issue| {
+        issue.get("code").and_then(|v| v.as_str())
+            == Some("KNOWLEDGE_DUPLICATE_CONTENT_SAME_KEY_ACROSS_ANCHORS")
+    });
+    assert!(dup.is_some(), "expected same-key-across-anchors issue");
+
+    let actions = text
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .expect("actions");
+    assert!(
+        actions.iter().any(|a| {
+            a.get("action_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .starts_with("knowledge.lint.duplicate.content.open::")
+        }),
+        "expected open-helper action for same-key duplicates"
+    );
+}
+
+#[test]
 fn knowledge_lint_does_not_flag_non_duplicates() {
     let mut server = Server::start_initialized("knowledge_lint_does_not_flag_non_duplicates");
 

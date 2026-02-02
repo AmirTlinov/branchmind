@@ -176,9 +176,15 @@ impl McpServer {
             ));
             suggestions.push(suggest_call(
                 "graph_conflict_resolve",
-                "Resolve the first conflict (pick ours/theirs).",
+                "Resolve using the from-branch version (use_from).",
                 "medium",
-                json!({ "workspace": workspace.as_str(), "conflict_id": conflict_id, "resolution": "ours" }),
+                json!({ "workspace": workspace.as_str(), "conflict_id": conflict_id, "resolution": "use_from" }),
+            ));
+            suggestions.push(suggest_call(
+                "graph_conflict_resolve",
+                "Resolve using the into-branch version (use_into).",
+                "medium",
+                json!({ "workspace": workspace.as_str(), "conflict_id": conflict_id, "resolution": "use_into" }),
             ));
         }
 
@@ -189,6 +195,7 @@ impl McpServer {
             "doc": doc,
             "merged": merged.merged,
             "skipped": merged.skipped,
+            "conflicts_detected": merged.conflicts_detected,
             "conflicts_created": merged.conflicts_created,
             "conflict_ids": merged.conflict_ids,
             "conflicts": conflicts,

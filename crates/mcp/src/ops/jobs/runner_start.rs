@@ -1,114 +1,9 @@
 #![forbid(unsafe_code)]
 
-use crate::ops::{
-    BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError, OpResponse, Safety,
-    SchemaSource, Stability, Tier, ToolName, legacy_to_cmd_segments,
-};
+use crate::ops::{Action, ActionPriority, Envelope, OpError, OpResponse, ToolName};
 use serde_json::json;
 
-pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
-    // v1: jobs.runner.start (custom, explicit runner bootstrap)
-    specs.push(CommandSpec {
-        cmd: "jobs.runner.start".to_string(),
-        domain_tool: ToolName::JobsOps,
-        tier: Tier::Gold,
-        stability: Stability::Stable,
-        doc_ref: DocRef {
-            path: "docs/contracts/V1_COMMANDS.md".to_string(),
-            anchor: "#jobs.runner.start".to_string(),
-        },
-        safety: Safety {
-            destructive: false,
-            confirm_level: ConfirmLevel::None,
-            idempotent: true,
-        },
-        budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Custom {
-            args_schema: json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-            example_minimal_args: json!({}),
-        },
-        op_aliases: vec!["runner.start".to_string()],
-        legacy_tool: None,
-        handler: Some(handle_runner_start),
-    });
-
-    for def in crate::tools::tool_definitions(crate::Toolset::Full) {
-        let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
-            continue;
-        };
-
-        if name == "tasks_runner_heartbeat" {
-            specs.push(CommandSpec {
-                cmd: "jobs.runner.heartbeat".to_string(),
-                domain_tool: ToolName::JobsOps,
-                tier: Tier::Advanced,
-                stability: Stability::Stable,
-                doc_ref: DocRef {
-                    path: "docs/contracts/V1_COMMANDS.md".to_string(),
-                    anchor: "#jobs.runner.heartbeat".to_string(),
-                },
-                safety: Safety {
-                    destructive: false,
-                    confirm_level: ConfirmLevel::None,
-                    idempotent: true,
-                },
-                budget: BudgetPolicy::standard(),
-                schema: SchemaSource::Legacy,
-                op_aliases: Vec::new(),
-                legacy_tool: Some(name.to_string()),
-                handler: None,
-            });
-            continue;
-        }
-
-        if !name.starts_with("tasks_jobs_") {
-            continue;
-        }
-        let suffix = &name["tasks_jobs_".len()..];
-        let cmd = format!("jobs.{}", legacy_to_cmd_segments(suffix));
-
-        let mut op_aliases = Vec::<String>::new();
-        if matches!(suffix, "create" | "list" | "radar" | "open") {
-            op_aliases.push(suffix.to_string());
-        }
-
-        let doc_ref_anchor = if matches!(suffix, "create" | "list" | "radar" | "open") {
-            format!("#{cmd}")
-        } else {
-            "#cmd-index".to_string()
-        };
-        specs.push(CommandSpec {
-            cmd,
-            domain_tool: ToolName::JobsOps,
-            tier: Tier::Advanced,
-            stability: Stability::Stable,
-            doc_ref: DocRef {
-                path: "docs/contracts/V1_COMMANDS.md".to_string(),
-                anchor: doc_ref_anchor,
-            },
-            safety: Safety {
-                destructive: matches!(suffix, "complete" | "requeue"),
-                confirm_level: if matches!(suffix, "complete" | "requeue") {
-                    ConfirmLevel::Soft
-                } else {
-                    ConfirmLevel::None
-                },
-                idempotent: matches!(suffix, "list" | "radar" | "open" | "tail"),
-            },
-            budget: BudgetPolicy::standard(),
-            schema: SchemaSource::Legacy,
-            op_aliases,
-            legacy_tool: Some(name.to_string()),
-            handler: None,
-        });
-    }
-}
-
-fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+pub(super) fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
     let Some(ws) = env.workspace.as_deref() else {
         return OpResponse::error(
             env.cmd.clone(),
@@ -226,9 +121,9 @@ fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope) -> OpRespo
 
     // Provide a cheap follow-up action (watch the queue / lease) when jobs are present.
     if queued > 0 || running > 0 {
-        resp.actions.push(crate::ops::Action {
+        resp.actions.push(Action {
             action_id: "next::jobs.radar".to_string(),
-            priority: crate::ops::ActionPriority::Medium,
+            priority: ActionPriority::Medium,
             tool: ToolName::JobsOps.as_str().to_string(),
             args: json!({
                 "workspace": workspace.as_str(),

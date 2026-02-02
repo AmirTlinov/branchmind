@@ -110,6 +110,23 @@ Low-noise job radar (legacy `tasks_jobs_radar`).
 
 Open a job record (legacy `tasks_jobs_open`).
 
+## jobs.cancel
+
+Cancel a **queued** job (QUEUED → CANCELED).
+
+Notes:
+- This is **queued-only**. If a job is RUNNING, the tool returns `error.code="CONFLICT"` and provides
+  actions to (a) `jobs.open` and (b) `jobs.complete status=CANCELED` with prefilled `runner_id` + `claim_revision`.
+- Use `system` → `schema.get(cmd)` for the exact arguments.
+
+## jobs.wait
+
+Wait for a job to reach a terminal status (DONE/FAILED/CANCELED), bounded by `timeout_ms`.
+
+Notes:
+- On timeout, the tool returns `success=true` with `result.done=false` (not an error).
+- Use `system` → `schema.get(cmd)` for the exact arguments.
+
 ## jobs.runner.start
 
 Explicitly start the first-party `bm_runner` for the workspace (best-effort).
@@ -142,6 +159,8 @@ List knowledge cards (bounded, step-aware).
 
 Notes:
 - v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`).
+- Convenience filter: `args.key=<key>` limits results to a single knowledge key (useful for reviewing
+  lint findings / consolidation candidates).
 
 ## think.knowledge.recall
 
@@ -159,6 +178,7 @@ This command is intended to keep `think.knowledge.recall` cheap and high-signal 
 research-heavy workspaces by helping agents:
 
 - detect high-confidence duplicate keys (same content under different keys),
+- detect same-key duplicate content across anchors (same `(key,content)` in multiple anchors),
 - spot potentially too-generic / overloaded keys via objective metrics (fanout / variants),
 - open the exact cards involved so consolidation is cheap.
 
@@ -239,6 +259,16 @@ Query graph view (legacy `graph_query`).
 ## graph.merge
 
 Merge graph changes (legacy `graph_merge`).
+
+Notes:
+
+- **Resolved conflicts do not re-surface.** Once a conflict is resolved (`status="resolved"`), subsequent
+  `graph.merge` calls treat it as handled even if the underlying divergence still exists (e.g. `use_into`),
+  preventing “infinite conflict loops”.
+- Result counters:
+  - `conflicts_detected`: diverged candidates that produced an **open/preview** conflict in the response.
+  - `conflicts_created`: new conflict rows inserted into storage (can be `0` in `dry_run=true`, or when
+    conflicts already exist).
 
 ---
 
