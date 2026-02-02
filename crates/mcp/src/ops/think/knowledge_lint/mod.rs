@@ -1,7 +1,13 @@
 #![forbid(unsafe_code)]
 
-use crate::ops::{Action, ActionPriority, Envelope, OpError, OpResponse, ToolName};
+use crate::ops::{Envelope, OpError, OpResponse};
 use serde_json::{Value, json};
+
+mod actions;
+mod analysis;
+mod model;
+
+use model::Entry;
 
 pub(super) fn handle(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
     let Some(ws) = env.workspace.as_deref() else {
@@ -296,15 +302,6 @@ pub(super) fn handle(server: &mut crate::McpServer, env: &Envelope) -> OpRespons
         }
     }
 
-    #[derive(Clone, Debug)]
-    struct Entry {
-        anchor_id: String,
-        key: String,
-        card_id: String,
-        created_at_ms: i64,
-        content_hash: u64,
-    }
-
     let mut missing_cards = 0usize;
     let mut invisible_cards = 0usize;
     let mut entries = Vec::<Entry>::new();
@@ -333,168 +330,15 @@ pub(super) fn handle(server: &mut crate::McpServer, env: &Envelope) -> OpRespons
         });
     }
 
-    #[derive(Clone, Debug)]
-    struct DuplicateGroup {
-        anchor_id: String,
-        content_hash: u64,
-        keys: Vec<String>,
-        card_ids: Vec<String>,
-        recommended_key: String,
-    }
-
-    let mut issues = Vec::<Value>::new();
-    let mut duplicate_groups = Vec::<DuplicateGroup>::new();
-
-    // 1) High-confidence duplicates: same normalized content, same anchor, different keys.
-    let mut by_anchor_hash = std::collections::BTreeMap::<(String, u64), Vec<Entry>>::new();
-    for entry in entries.iter().cloned() {
-        by_anchor_hash
-            .entry((entry.anchor_id.clone(), entry.content_hash))
-            .or_default()
-            .push(entry);
-    }
-    for ((anchor_id, content_hash), mut group) in by_anchor_hash {
-        group.sort_by(|a, b| {
-            a.created_at_ms
-                .cmp(&b.created_at_ms)
-                .then_with(|| a.key.cmp(&b.key))
-                .then_with(|| a.card_id.cmp(&b.card_id))
-        });
-        let mut keys = group
-            .iter()
-            .map(|e| e.key.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if keys.len() < 2 {
-            continue;
-        }
-        keys.sort();
-        let mut card_ids = group
-            .iter()
-            .map(|e| e.card_id.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        card_ids.sort();
-
-        let recommended = group.first().expect("non-empty group");
-        let recommended_key = recommended.key.clone();
-        let recommended_card_id = recommended.card_id.clone();
-
-        issues.push(json!({
-            "severity": "warning",
-            "code": "KNOWLEDGE_DUPLICATE_CONTENT_SAME_ANCHOR",
-            "message": format!(
-                "Duplicate knowledge content under one anchor: {} has multiple keys with identical content.",
-                anchor_id
-            ),
-            "evidence": {
-                "anchor_id": anchor_id,
-                "keys": keys,
-                "card_ids": card_ids,
-                "content_hash": format!("{content_hash:016x}"),
-                "recommended_key": recommended_key,
-                "recommended_card_id": recommended_card_id
-            }
-        }));
-
-        duplicate_groups.push(DuplicateGroup {
-            anchor_id,
-            content_hash,
-            keys,
-            card_ids,
-            recommended_key,
-        });
-    }
-
-    // 2) Duplicate content for the same key across anchors (often “shared knowledge”).
-    let mut by_key_hash = std::collections::BTreeMap::<(String, u64), Vec<Entry>>::new();
-    for entry in entries.iter().cloned() {
-        by_key_hash
-            .entry((entry.key.clone(), entry.content_hash))
-            .or_default()
-            .push(entry);
-    }
-    for ((key, content_hash), group) in by_key_hash {
-        let anchors = group
-            .iter()
-            .map(|e| e.anchor_id.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let anchor_count = anchors.len();
-        if anchor_count < 2 {
-            continue;
-        }
-        let card_ids = group
-            .iter()
-            .map(|e| e.card_id.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let anchors_sample = anchors.iter().take(12).cloned().collect::<Vec<_>>();
-        let card_ids_sample = card_ids.iter().take(12).cloned().collect::<Vec<_>>();
-        issues.push(json!({
-            "severity": "info",
-            "code": "KNOWLEDGE_DUPLICATE_CONTENT_SAME_KEY_ACROSS_ANCHORS",
-            "message": format!(
-                "Key is reused across anchors with identical content: k:{} appears in {} anchors.",
-                key,
-                anchor_count
-            ),
-            "evidence": {
-                "key": key,
-                "anchor_count": anchor_count,
-                "anchors_sample": anchors_sample,
-                "card_ids_sample": card_ids_sample,
-                "content_hash": format!("{content_hash:016x}")
-            }
-        }));
-    }
-
-    // 3) Potentially too-generic keys: reused across anchors with multiple distinct content variants.
-    let mut key_stats = std::collections::BTreeMap::<
-        String,
-        (
-            std::collections::BTreeSet<String>,
-            std::collections::BTreeSet<u64>,
-        ),
-    >::new();
-    for entry in entries.iter() {
-        let slot = key_stats.entry(entry.key.clone()).or_insert_with(|| {
-            (
-                std::collections::BTreeSet::new(),
-                std::collections::BTreeSet::new(),
-            )
-        });
-        slot.0.insert(entry.anchor_id.clone());
-        slot.1.insert(entry.content_hash);
-    }
-    for (key, (anchors, variants)) in key_stats.iter() {
-        let anchor_count = anchors.len();
-        let variant_count = variants.len();
-        if anchor_count < 2 || variant_count < 2 {
-            continue;
-        }
-        let anchors_sample = anchors.iter().take(12).cloned().collect::<Vec<_>>();
-        issues.push(json!({
-            "severity": "info",
-            "code": "KNOWLEDGE_KEY_OVERLOADED_ACROSS_ANCHORS",
-            "message": format!(
-                "Key may be overloaded (reused with different content): k:{} has {} anchors and {} variants.",
-                key,
-                anchor_count,
-                variant_count
-            ),
-            "evidence": {
-                "key": key,
-                "anchor_count": anchor_count,
-                "variant_count": variant_count,
-                "anchors_sample": anchors_sample
-            }
-        }));
-    }
+    let (mut issues, duplicate_groups) = analysis::analyze_duplicate_content_same_anchor(&entries);
+    issues.extend(analysis::analyze_duplicate_content_same_key_across_anchors(
+        &entries,
+    ));
+    let (cross_issues, cross_groups) =
+        analysis::analyze_duplicate_content_across_anchors_multiple_keys(&entries);
+    issues.extend(cross_issues);
+    let overloaded = analysis::analyze_overloaded_keys(&entries);
+    issues.extend(overloaded.issues);
 
     // Deterministic ordering (severity first is handled by stable sort below).
     issues.sort_by(|a, b| {
@@ -546,82 +390,32 @@ pub(super) fn handle(server: &mut crate::McpServer, env: &Envelope) -> OpRespons
     let mut resp = OpResponse::success(env.cmd.clone(), result);
     resp.warnings.extend(warnings);
 
-    // Actions: open helpers for the top duplicate groups (bounded).
-    duplicate_groups.sort_by(|a, b| {
-        b.keys
-            .len()
-            .cmp(&a.keys.len())
-            .then_with(|| a.anchor_id.cmp(&b.anchor_id))
-            .then_with(|| a.content_hash.cmp(&b.content_hash))
-    });
-    for group in duplicate_groups.into_iter().take(5) {
-        let ids_limit = group.card_ids.len().clamp(1, 50);
-        resp.actions.push(Action {
-            action_id: format!(
-                "knowledge.lint.duplicate.open::{}::{:016x}",
-                group.anchor_id, group.content_hash
-            ),
-            priority: ActionPriority::High,
-            tool: ToolName::GraphOps.as_str().to_string(),
-            args: json!({
-                "op": "call",
-                "cmd": "graph.query",
-                "args": {
-                    "workspace": workspace.as_str(),
-                    "branch": super::KB_BRANCH,
-                    "doc": super::KB_GRAPH_DOC,
-                    "ids": group.card_ids,
-                    "types": ["knowledge"],
-                    "limit": ids_limit,
-                    "include_edges": false,
-                    "edges_limit": 0
-                },
-                "budget_profile": "portal",
-                "view": "compact"
-            }),
-            why: format!(
-                "Открыть дубль-набор для консолидации: {} → k:{} ({} keys).",
-                group.anchor_id,
-                group.recommended_key,
-                group.keys.len()
-            ),
-            risk: "Низкий".to_string(),
-        });
-    }
-
-    // Actions: open top potentially-overloaded keys (info only, bounded).
-    let mut overloaded = key_stats
-        .into_iter()
-        .filter_map(|(key, (anchors, variants))| {
-            if anchors.len() < 2 || variants.len() < 2 {
-                return None;
-            }
-            Some((anchors.len(), variants.len(), key))
-        })
-        .collect::<Vec<_>>();
-    overloaded.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| b.1.cmp(&a.1))
-            .then_with(|| a.2.cmp(&b.2))
-    });
-    for (_anchor_count, _variants, key) in overloaded.into_iter().take(3) {
-        resp.actions.push(Action {
-            action_id: format!("knowledge.lint.key.open::{key}"),
-            priority: ActionPriority::Low,
-            tool: ToolName::ThinkOps.as_str().to_string(),
-            args: json!({
-                "op": "call",
-                "cmd": "think.knowledge.query",
-                "args": { "key": key, "limit": 20 },
-                "budget_profile": "portal",
-                "view": "compact"
-            }),
-            why: format!(
-                "Открыть k:{key} across anchors (проверить перегруженность/консолидацию)."
-            ),
-            risk: "Низкий".to_string(),
-        });
-    }
+    actions::push_duplicate_group_actions(
+        &mut resp,
+        workspace.as_str(),
+        super::KB_BRANCH,
+        super::KB_GRAPH_DOC,
+        duplicate_groups,
+    );
+    actions::push_cross_duplicate_group_actions(
+        &mut resp,
+        workspace.as_str(),
+        super::KB_BRANCH,
+        super::KB_GRAPH_DOC,
+        cross_groups,
+    );
+    actions::push_overloaded_outliers_actions(
+        &mut resp,
+        workspace.as_str(),
+        super::KB_BRANCH,
+        super::KB_GRAPH_DOC,
+        overloaded.outliers,
+    );
+    actions::push_overloaded_key_open_actions(
+        &mut resp,
+        workspace.as_str(),
+        overloaded.overloaded_keys,
+    );
 
     resp
 }

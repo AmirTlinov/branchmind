@@ -191,16 +191,24 @@ The linter is intentionally conservative: it only emits `warning` when there is 
 - `KNOWLEDGE_DUPLICATE_CONTENT_SAME_KEY_ACROSS_ANCHORS` (`info`):
   the same key is present across multiple anchors with identical content (often a candidate for
   shared/canonical knowledge).
+- `KNOWLEDGE_DUPLICATE_CONTENT_ACROSS_ANCHORS_MULTIPLE_KEYS` (`info`):
+  identical normalized content appears across multiple anchors under multiple distinct keys (often
+  a sign of key drift / duplicated knowledge that can be consolidated).
 - `KNOWLEDGE_KEY_OVERLOADED_ACROSS_ANCHORS` (`info`):
   the same key is present across multiple anchors with multiple distinct content variants (potentially
   too-generic / bucketed key).
+- `KNOWLEDGE_KEY_OVERLOADED_OUTLIERS` (`info`):
+  a special-case of overloaded keys where one content variant dominates and other variants look like
+  outliers (the linter includes deterministic evidence to make consolidation cheap).
 
 ### Actions (v1 UX)
 
 On success, `actions[]` may include deterministic “open helpers” such as:
 
 - `graph.query` for the exact `ids=[...]` involved in a duplicate set.
+- `graph.query` for the exact `ids=[...]` involved in a cross-anchor duplicate-content group.
 - `think.knowledge.query` with `args.key=<key>` to review a reused/overloaded key across anchors.
+- `graph.query` for the outlier card ids when a key has a dominant variant (`KNOWLEDGE_KEY_OVERLOADED_OUTLIERS`).
 
 ## think.reasoning.seed
 

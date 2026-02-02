@@ -181,6 +181,92 @@ fn knowledge_lint_does_not_flag_non_duplicates() {
 }
 
 #[test]
+fn knowledge_lint_reports_duplicate_content_across_anchors_with_multiple_keys() {
+    let mut server = Server::start_initialized(
+        "knowledge_lint_reports_duplicate_content_across_anchors_with_multiple_keys",
+    );
+
+    let _ = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_cross_dup",
+                "op": "knowledge.upsert",
+                "args": {
+                    "anchor": "core",
+                    "key": "determinism",
+                    "card": { "title": "Determinism", "text": "Must be deterministic." }
+                }
+            }
+        }
+    }));
+
+    let _ = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_cross_dup",
+                "op": "knowledge.upsert",
+                "args": {
+                    "anchor": "storage",
+                    "key": "determinism-copy",
+                    "card": { "title": "Determinism", "text": "Must be deterministic." }
+                }
+            }
+        }
+    }));
+
+    let lint = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_cross_dup",
+                "op": "knowledge.lint",
+                "args": { "limit": 200 }
+            }
+        }
+    }));
+    let text = extract_tool_text(&lint);
+    assert_eq!(text.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let issues = text
+        .get("result")
+        .and_then(|v| v.get("issues"))
+        .and_then(|v| v.as_array())
+        .expect("issues");
+    assert!(
+        issues.iter().any(|issue| {
+            issue.get("code").and_then(|v| v.as_str())
+                == Some("KNOWLEDGE_DUPLICATE_CONTENT_ACROSS_ANCHORS_MULTIPLE_KEYS")
+        }),
+        "expected cross-anchor duplicate-content info finding"
+    );
+
+    let actions = text
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .expect("actions");
+    assert!(
+        actions.iter().any(|a| {
+            a.get("action_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .starts_with("knowledge.lint.duplicate.content.open::")
+        }),
+        "expected open-helper action for cross-anchor duplicate content"
+    );
+}
+
+#[test]
 fn knowledge_lint_reports_overloaded_key_across_anchors() {
     let mut server =
         Server::start_initialized("knowledge_lint_reports_overloaded_key_across_anchors");
@@ -262,5 +348,113 @@ fn knowledge_lint_reports_overloaded_key_across_anchors() {
             a.get("action_id").and_then(|v| v.as_str()) == Some("knowledge.lint.key.open::overview")
         }),
         "expected open-helper action for overloaded key"
+    );
+}
+
+#[test]
+fn knowledge_lint_reports_overloaded_key_outliers_when_one_variant_dominates() {
+    let mut server = Server::start_initialized(
+        "knowledge_lint_reports_overloaded_key_outliers_when_one_variant_dominates",
+    );
+
+    let _ = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_outliers",
+                "op": "knowledge.upsert",
+                "args": {
+                    "anchor": "core",
+                    "key": "overview",
+                    "card": { "title": "Overview", "text": "Common overview." }
+                }
+            }
+        }
+    }));
+
+    let _ = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_outliers",
+                "op": "knowledge.upsert",
+                "args": {
+                    "anchor": "storage",
+                    "key": "overview",
+                    "card": { "title": "Overview", "text": "Common overview." }
+                }
+            }
+        }
+    }));
+
+    let _ = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_outliers",
+                "op": "knowledge.upsert",
+                "args": {
+                    "anchor": "docs",
+                    "key": "overview",
+                    "card": { "title": "Overview", "text": "Docs overview." }
+                }
+            }
+        }
+    }));
+
+    let lint = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws_kb_lint_outliers",
+                "op": "knowledge.lint",
+                "args": { "limit": 200 }
+            }
+        }
+    }));
+    let text = extract_tool_text(&lint);
+    assert_eq!(text.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let issues = text
+        .get("result")
+        .and_then(|v| v.get("issues"))
+        .and_then(|v| v.as_array())
+        .expect("issues");
+    assert!(
+        issues.iter().any(|issue| {
+            issue.get("code").and_then(|v| v.as_str()) == Some("KNOWLEDGE_KEY_OVERLOADED_OUTLIERS")
+                && issue
+                    .get("evidence")
+                    .and_then(|v| v.get("key"))
+                    .and_then(|v| v.as_str())
+                    == Some("overview")
+        }),
+        "expected overloaded-key-outliers info finding"
+    );
+
+    let actions = text
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .expect("actions");
+    assert!(
+        actions.iter().any(|a| {
+            a.get("action_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .starts_with("knowledge.lint.key.outliers.open::overview::")
+        }),
+        "expected outliers open-helper action"
     );
 }
