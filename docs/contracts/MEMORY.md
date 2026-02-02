@@ -921,6 +921,7 @@ Semantics:
 
 - `types` are forced to `["knowledge"]` (request cannot override).
 - `anchor` accepts either `a:<slug>` or `<slug>` and adds it to `tags_all`.
+- Knowledge keys (optional convention): `k:<slug>` tags may be used to keep a stable identity for an evolving knowledge item.
 - If `include_drafts=false` and `tags_all` is omitted, the server defaults to `tags_all=["v:canon"]`.
 
 ### `think_pack`

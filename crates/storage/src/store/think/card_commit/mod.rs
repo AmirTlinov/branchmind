@@ -64,6 +64,23 @@ impl SqliteStore {
             },
         )?;
 
+        // Knowledge key index: (anchor_id, key) → card_id, updated_at_ms.
+        //
+        // Guard: keep think_card_commit idempotent — only touch indexes when the graph was
+        // semantically updated (node/edges changed).
+        if graph_result.last_seq.is_some() {
+            crate::store::knowledge_keys::upsert_knowledge_keys_for_card_tx(
+                &tx,
+                workspace.as_str(),
+                crate::store::knowledge_keys::UpsertKnowledgeKeysForCardTxArgs {
+                    card_id: validated.card_id.as_str(),
+                    card_type: validated.card_type.as_str(),
+                    tags: &validated.tags,
+                    now_ms,
+                },
+            )?;
+        }
+
         tx.commit()?;
 
         Ok(ThinkCardCommitResult {

@@ -50,6 +50,20 @@ fn normalize_anchor_tag(raw: &str) -> Result<String, Value> {
         .ok_or_else(|| ai_error("INVALID_INPUT", "anchor must be a valid slug (a:<slug>)"))
 }
 
+fn normalize_key_tag(raw: &str) -> Result<String, Value> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(ai_error("INVALID_INPUT", "key must not be empty"));
+    }
+    let candidate = if raw.starts_with(KEY_TAG_PREFIX) {
+        raw.to_string()
+    } else {
+        format!("{KEY_TAG_PREFIX}{raw}")
+    };
+    normalize_key_id_tag(&candidate)
+        .ok_or_else(|| ai_error("INVALID_INPUT", "key must be a valid slug (k:<slug>)"))
+}
+
 impl McpServer {
     pub(crate) fn tool_branchmind_think_add_typed(
         &mut self,
@@ -206,6 +220,10 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let key = match optional_string(args_obj, "key") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
 
         let card_value = args_obj.get("card").cloned().unwrap_or(Value::Null);
         let mut parsed = match parse_think_card(&workspace, card_value) {
@@ -216,6 +234,15 @@ impl McpServer {
         ensure_visibility_tag(&mut parsed.tags);
         if let Some(anchor) = anchor {
             let tag = match normalize_anchor_tag(&anchor) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            if !tags_has(&parsed.tags, &tag) {
+                parsed.tags.push(tag);
+            }
+        }
+        if let Some(key) = key {
+            let tag = match normalize_key_tag(&key) {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };

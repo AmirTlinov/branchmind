@@ -127,11 +127,29 @@ Runner heartbeat + capabilities (legacy `tasks_runner_heartbeat`).
 
 ## think.knowledge.upsert
 
-Upsert a knowledge card with fingerprint-based de-duplication.
+Upsert a knowledge card.
+
+Notes:
+- When `args.key` is provided (together with `args.anchor`), the command uses a **stable identity**
+  `(anchor,key)` with **versioned card_ids**. Editing the text produces a new `card_id` and updates
+  the knowledge index so `think.knowledge.recall` and future `think.knowledge.upsert` calls resolve
+  to the latest version (history stays in the graph).
+- v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`, `kb-trace`).
 
 ## think.knowledge.query
 
 List knowledge cards (bounded, step-aware).
+
+Notes:
+- v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`).
+
+## think.knowledge.recall
+
+Fast knowledge recall by anchor (bounded, recency-first).
+
+Notes:
+- Intended for “I’m touching component X → pull relevant knowledge” UX.
+- Uses the storage knowledge index (not a full tag scan).
 
 ## think.knowledge.lint
 

@@ -173,6 +173,7 @@ pub(super) fn definitions() -> Vec<Value> {
                     "graph_doc": { "type": "string" },
                     "step": { "type": "string" },
                     "anchor": { "type": "string", "description": "Anchor slug or a:<slug> (adds tag)." },
+                    "key": { "type": "string", "description": "Knowledge key slug (adds k:<slug> tag)." },
                     "agent_id": { "type": "string" },
                     "card": {
                         "anyOf": [

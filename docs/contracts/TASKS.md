@@ -597,6 +597,11 @@ Semantics:
     через `macro_anchor_note` (создать/привязать anchor к задаче),
   - для `plan`: если у плана есть `ACTIVE` задачи без anchor‑связей, добавляет `ACTIVE_TASKS_MISSING_ANCHOR`
     и предлагает ограниченный набор one‑shot патчей (по нескольким задачам), чтобы быстро закрыть KPI.
+- Делает **knowledge hygiene** (semi-strict, no hard gates):
+  - если `task` привязан к anchor‑ам, но для них нет knowledge (по индексу `(anchor,key)`),
+    добавляет `KNOWLEDGE_EMPTY_FOR_ANCHOR` и предлагает copy/paste `actions[]`:
+    - `action:task:knowledge:recall` → `think op=knowledge.recall` (bounded),
+    - `action:task:knowledge:seed` → `think op=knowledge.upsert` (anchor+key → latest).
 - Для `plan`-таргета включает anti‑kasha проверки Active Horizon:
   - если `ACTIVE` задач больше 3, добавляет предупреждение `ACTIVE_LIMIT_EXCEEDED`,
   - предлагает безопасные патчи “припарковать” часть задач обратно в `TODO` (через `tasks_complete`),

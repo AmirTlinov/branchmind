@@ -7,6 +7,8 @@ pub(crate) const VIS_TAG_DRAFT: &str = "v:draft";
 pub(crate) const VIS_TAG_CANON: &str = "v:canon";
 pub(crate) const ANCHOR_TAG_PREFIX: &str = "a:";
 pub(crate) const ANCHOR_MAX_SLUG_LEN: usize = 64;
+pub(crate) const KEY_TAG_PREFIX: &str = "k:";
+pub(crate) const KEY_MAX_SLUG_LEN: usize = 64;
 
 pub(crate) fn normalize_anchor_id_tag(raw: &str) -> Option<String> {
     let raw = raw.trim();
@@ -32,6 +34,32 @@ pub(crate) fn normalize_anchor_id_tag(raw: &str) -> Option<String> {
     }
 
     Some(format!("{ANCHOR_TAG_PREFIX}{slug}"))
+}
+
+pub(crate) fn normalize_key_id_tag(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let lowered = raw.to_ascii_lowercase();
+    let slug = lowered.strip_prefix(KEY_TAG_PREFIX)?;
+    if slug.is_empty() || slug.len() > KEY_MAX_SLUG_LEN {
+        return None;
+    }
+
+    let mut chars = slug.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+        return None;
+    }
+    for ch in chars {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' {
+            continue;
+        }
+        return None;
+    }
+
+    Some(format!("{KEY_TAG_PREFIX}{slug}"))
 }
 
 pub(crate) fn tags_has(tags: &[String], needle: &str) -> bool {

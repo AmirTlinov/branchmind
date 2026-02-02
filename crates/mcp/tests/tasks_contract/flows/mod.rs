@@ -5,6 +5,7 @@ mod bootstrap_with_think_pipeline;
 mod edit_revision_mismatch;
 mod evidence_checkpoint_requires_security;
 mod lint_context_health_smoke;
+mod lint_knowledge_recall_actions;
 mod lint_patch_suggestions;
 mod macro_delegate_smoke;
 mod macro_flow_smoke;

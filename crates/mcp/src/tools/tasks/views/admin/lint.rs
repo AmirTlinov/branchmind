@@ -670,19 +670,26 @@ impl McpServer {
 
                     // Meaning binding: tasks without anchors cannot participate in the meaning map,
                     // so `where=` stays unknown and agents re-invent context after /compact.
-                    let anchors = self
+                    let anchor_hits = self
                         .store
                         .task_anchors_list(
                             &workspace,
                             bm_storage::TaskAnchorsListRequest {
                                 task_id: target_id.clone(),
-                                limit: 1,
+                                limit: 3,
                             },
                         )
                         .ok()
-                        .map(|r| r.anchors.len())
-                        .unwrap_or(0);
-                    if anchors == 0 {
+                        .map(|r| r.anchors)
+                        .unwrap_or_default();
+                    let mut anchor_ids = anchor_hits
+                        .into_iter()
+                        .map(|hit| hit.anchor_id)
+                        .collect::<Vec<_>>();
+                    anchor_ids.sort();
+                    anchor_ids.dedup();
+
+                    if anchor_ids.is_empty() {
                         issues.push(Self::lint_issue(
                             "warning",
                             "unnavigable",
@@ -727,6 +734,89 @@ impl McpServer {
                             args,
                             Some("This is a low-noise “meaning binding” note. It should be kept short; supersede with real decisions/evidence."),
                         ));
+                    } else {
+                        // Semi-strict recall-first: if a task is anchored, help the agent pull/seed
+                        // durable knowledge before implementing changes.
+                        let needs_knowledge = matches!(task.status.as_str(), "ACTIVE" | "TODO");
+                        if needs_knowledge {
+                            let anchor_arg = if anchor_ids.len() == 1 {
+                                Value::String(anchor_ids[0].clone())
+                            } else {
+                                Value::Array(
+                                    anchor_ids
+                                        .iter()
+                                        .cloned()
+                                        .map(Value::String)
+                                        .collect::<Vec<_>>(),
+                                )
+                            };
+                            actions.push(json!({
+                                "id": "action:task:knowledge:recall",
+                                "purpose": "Recall knowledge cards for this task's anchors (fast, bounded)",
+                                "apply": {
+                                    "tool": "think",
+                                    "arguments": {
+                                        "workspace": workspace.as_str(),
+                                        "op": "knowledge.recall",
+                                        "args": { "anchor": anchor_arg, "limit": 12 },
+                                        "budget_profile": "portal",
+                                        "view": "compact"
+                                    }
+                                }
+                            }));
+                        }
+
+                        let knowledge_any = self
+                            .store
+                            .knowledge_keys_list_any(
+                                &workspace,
+                                bm_storage::KnowledgeKeysListAnyRequest {
+                                    anchor_ids: anchor_ids.clone(),
+                                    limit: 1,
+                                },
+                            )
+                            .ok()
+                            .map(|r| !r.items.is_empty())
+                            .unwrap_or(false);
+
+                        if needs_knowledge && !knowledge_any {
+                            issues.push(Self::lint_issue(
+                                "warning",
+                                "knowledge",
+                                "KNOWLEDGE_EMPTY_FOR_ANCHOR",
+                                "task has anchors but no knowledge cards exist for them",
+                                "Seed a minimal knowledge card via think op=knowledge.upsert (use key=... for evolvable memory), then recall again.",
+                                Some(json!({ "kind": "task", "id": target_id })),
+                            ));
+
+                            let seed_anchor = anchor_ids
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "a:unknown".to_string());
+                            let seed_title = format!("{seed_anchor}: invariants");
+                            let seed_text = "Claim: <fill>\nScope: <fill>\nApply: <fill>\nProof: <fill>\nExpiry: <fill>"
+                                .to_string();
+
+                            actions.push(json!({
+                                "id": "action:task:knowledge:seed",
+                                "purpose": "Seed a minimal knowledge card (invariants) for this task anchor",
+                                "apply": {
+                                    "tool": "think",
+                                    "arguments": {
+                                        "workspace": workspace.as_str(),
+                                        "op": "knowledge.upsert",
+                                        "args": {
+                                            "anchor": seed_anchor,
+                                            "key": "invariants",
+                                            "card": { "title": seed_title, "text": seed_text }
+                                        },
+                                        "budget_profile": "portal",
+                                        "view": "compact"
+                                    }
+                                },
+                                "notes": "Keep it short; update later with real decisions/evidence. Recall will always point to the latest version for (anchor,key)."
+                            }));
+                        }
                     }
 
                     if summary.total_steps == 0 {

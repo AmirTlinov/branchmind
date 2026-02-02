@@ -190,6 +190,26 @@ must keep a small stable block that never disappears under budgets:
 
 This is the critical trick: agents learn to “think after reading where/now/next”.
 
+### 8.4 Knowledge recall-first (evolvable memory, not a junk drawer)
+
+Goal: when an agent touches a component, it should be able to **recall the right invariants fast**
+without scanning the entire graph or generating duplicates.
+
+Rules:
+
+- Knowledge cards can be given a stable identity via `(anchor, key)`:
+  - `anchor` = meaning coordinate (e.g. `a:core`)
+  - `key` = stable slug (e.g. `determinism`, `locking`, `pitfalls`)
+- Knowledge is **versioned**:
+  - editing text creates a new `card_id` (history stays in the graph),
+  - `(anchor,key)` always resolves to the latest version via the storage index.
+- Default UX is **recall-first**:
+  - prefer `think op=knowledge.recall` before implementing changes,
+  - if knowledge is missing, seed a minimal card via `think op=knowledge.upsert`.
+
+This is intentionally “semi-strict”: the server should guide via warnings/actions,
+not block step closure (hard gates are reserved for proof/evidence and safety-critical flows).
+
 ## 9) Multi-agent concurrency (leases + audit)
 
 The tool does not assume “many agents editing the same thing” is a good workflow.

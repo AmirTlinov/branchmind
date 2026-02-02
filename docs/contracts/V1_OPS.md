@@ -53,6 +53,7 @@ See `TYPES.md` for the full envelope. v1 adds:
 ### think_ops
 - `knowledge.upsert`
 - `knowledge.query`
+- `knowledge.recall`
 - `knowledge.lint`
 - `reasoning.seed`
 - `reasoning.pipeline`

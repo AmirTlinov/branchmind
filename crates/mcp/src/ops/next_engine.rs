@@ -136,17 +136,17 @@ pub(crate) fn derive_next(
             });
         }
         actions.push(Action {
-            action_id: "next::think.knowledge.query".to_string(),
+            action_id: "next::think.knowledge.recall".to_string(),
             priority: ActionPriority::Low,
             tool: ToolName::ThinkOps.as_str().to_string(),
             args: json!({
                 "workspace": workspace.as_str(),
-                "op": "knowledge.query",
+                "op": "knowledge.recall",
                 "args": { "limit": 12 },
                 "budget_profile": "portal",
                 "view": "compact"
             }),
-            why: "Подтянуть релевантные knowledge cards (bounded) перед решением.".to_string(),
+            why: "Подтянуть самые свежие knowledge cards (bounded) перед решением.".to_string(),
             risk: "Низкий".to_string(),
         });
         NextEngineReport {

@@ -12,6 +12,7 @@ mod error;
 mod focus;
 mod graph;
 mod jobs;
+mod knowledge_keys;
 mod ops_history;
 mod portal_cursors;
 mod reasoning_ref;

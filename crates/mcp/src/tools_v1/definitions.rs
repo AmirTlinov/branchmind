@@ -72,6 +72,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "inputSchema": ops_schema(&[
                 "knowledge.upsert",
                 "knowledge.query",
+                "knowledge.recall",
                 "knowledge.lint",
                 "reasoning.seed",
                 "reasoning.pipeline",
