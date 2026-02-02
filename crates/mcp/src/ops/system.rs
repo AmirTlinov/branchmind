@@ -170,23 +170,13 @@ fn handle_schema_get(_server: &mut crate::McpServer, env: &Envelope) -> OpRespon
         Ok(v) => v,
         Err(err) => return OpResponse::error(env.cmd.clone(), err),
     };
-    if !doc_ref_exists(&bundle.doc_ref) {
-        return OpResponse::error(
-            env.cmd.clone(),
-            OpError {
-                code: "DOCS_DRIFT".to_string(),
-                message: format!(
-                    "doc_ref missing: {} ({})",
-                    bundle.doc_ref.path, bundle.doc_ref.anchor
-                ),
-                recovery: Some(
-                    "Fix docs/contracts/V1_COMMANDS.md anchors or registry doc_ref.".to_string(),
-                ),
-            },
-        );
-    }
 
-    OpResponse::success(
+    // UX: schema-on-demand must be fail-open at runtime.
+    //
+    // Docs drift is a CI/maintainer concern (we keep hard guards in tests), but agents need
+    // schema.get to work *even when docs anchors drift locally*. Return the schema bundle and
+    // surface the drift as a warning instead of a hard error.
+    let mut resp = OpResponse::success(
         env.cmd.clone(),
         json!({
             "cmd": bundle.cmd,
@@ -203,7 +193,20 @@ fn handle_schema_get(_server: &mut crate::McpServer, env: &Envelope) -> OpRespon
                 "idempotent": bundle.safety.idempotent
             }
         }),
-    )
+    );
+
+    if !doc_ref_exists(&bundle.doc_ref) {
+        resp.warnings.push(crate::warning(
+            "DOCS_DRIFT",
+            &format!(
+                "doc_ref missing: {} ({})",
+                bundle.doc_ref.path, bundle.doc_ref.anchor
+            ),
+            "Fix docs/contracts/V1_COMMANDS.md anchors or registry doc_ref (CI will enforce).",
+        ));
+    }
+
+    resp
 }
 
 fn handle_cmd_list(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {

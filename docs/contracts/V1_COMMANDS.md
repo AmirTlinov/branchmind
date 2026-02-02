@@ -15,6 +15,9 @@ arguments, examples, and budget defaults.
 Return the schema bundle for a command (`args_schema`, `example_minimal_args`,
 `example_valid_call`, `doc_ref`).
 
+Notes:
+- Runtime is **fail-open**: if `doc_ref` points to a missing doc/anchor, the server still returns the schema bundle and emits `warnings[]` with `code="DOCS_DRIFT"`. CI keeps hard drift guards.
+
 ## system.cmd.list
 
 List all registered `cmd` names (SSOT registry).
