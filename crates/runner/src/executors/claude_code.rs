@@ -61,5 +61,23 @@ pub(crate) fn spawn_exec(
 pub(crate) fn read_output(out_path: &Path) -> Result<Value, String> {
     let text =
         std::fs::read_to_string(out_path).map_err(|e| format!("read claude output failed: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("parse claude json failed: {e}"))
+    let value: Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse claude json failed: {e}"))?;
+
+    // Claude Code `--output-format json` returns a wrapper object with metadata and the schema-
+    // validated payload nested under `structured_output`.
+    //
+    // Example (abridged):
+    // {
+    //   "type":"result",
+    //   ...,
+    //   "structured_output": { "status":"DONE", "summary":"...", "refs":[...], "events":[...] }
+    // }
+    //
+    // The runner contract expects the structured output object directly, so unwrap when present.
+    if let Some(structured) = value.get("structured_output") {
+        return Ok(structured.clone());
+    }
+
+    Ok(value)
 }

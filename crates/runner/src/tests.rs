@@ -332,3 +332,40 @@ fn auto_executor_prefers_codex_for_fast_when_both_available() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn claude_code_output_unwraps_structured_output() {
+    let dir = temp_dir("bm_runner_claude_structured_output");
+    let out_path = dir.join("out.json");
+
+    // This matches the shape emitted by Claude Code CLI when run with:
+    // - `--output-format json`
+    // - `--json-schema <schema>`
+    //
+    // The runner expects the schema-validated payload directly, so we must unwrap it.
+    let wrapper = json!({
+        "type": "result",
+        "subtype": "success",
+        "structured_output": {
+            "status": "DONE",
+            "summary": "ok",
+            "refs": ["CMD: echo ok"],
+            "events": []
+        }
+    });
+    std::fs::write(&out_path, serde_json::to_string(&wrapper).expect("json"))
+        .expect("write stub output");
+
+    let parsed = executors::claude_code::read_output(&out_path).expect("read_output");
+    assert_eq!(
+        parsed.get("status").and_then(|v| v.as_str()),
+        Some("DONE"),
+        "expected unwrapped structured_output"
+    );
+    assert!(
+        parsed.get("structured_output").is_none(),
+        "must return the structured payload, not the wrapper"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
