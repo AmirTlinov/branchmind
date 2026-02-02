@@ -151,6 +151,7 @@ Notes:
   `(anchor,key)` with **versioned card_ids**. Editing the text produces a new `card_id` and updates
   the knowledge index so `think.knowledge.recall` and future `think.knowledge.upsert` calls resolve
   to the latest version (history stays in the graph).
+- Visibility: knowledge defaults to `v:draft` unless explicitly tagged (`v:canon`) or later promoted via publish.
 - v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`, `kb-trace`).
 
 ## think.knowledge.query
@@ -161,6 +162,9 @@ Notes:
 - v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`).
 - Convenience filter: `args.key=<key>` limits results to a single knowledge key (useful for reviewing
   lint findings / consolidation candidates).
+- Defaults are product-UX oriented:
+  - `include_drafts=true` (management view; show what’s in the KB, not only what’s published)
+  - `include_history=false` (latest-only; no duplicate historical versions unless explicitly requested)
 
 ## think.knowledge.recall
 
@@ -187,7 +191,7 @@ research-heavy workspaces by helping agents:
 - `limit` (int): max number of knowledge key index rows to scan (budget-capped).
 - `anchor` (string | string[]): optional anchor(s) to restrict lint to a subset (same format as
   `think.knowledge.recall`).
-- `include_drafts` (bool): include draft-lane knowledge (default `false`).
+- `include_drafts` (bool): include draft-lane knowledge (default `true`).
 - `max_chars` (int): output budget knob (injected/clamped by budget profile if omitted).
 
 ### Output (selected)

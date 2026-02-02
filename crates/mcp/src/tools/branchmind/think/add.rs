@@ -19,23 +19,6 @@ fn parse_response_verbosity(
         .ok_or_else(|| ai_error("INVALID_INPUT", "verbosity must be one of: full|compact"))
 }
 
-fn ensure_visibility_tag(tags: &mut Vec<String>) {
-    let mut has_canon = false;
-    let mut has_draft = false;
-    for tag in tags.iter() {
-        let lowered = tag.trim().to_ascii_lowercase();
-        if lowered == VIS_TAG_CANON {
-            has_canon = true;
-        }
-        if lowered == VIS_TAG_DRAFT {
-            has_draft = true;
-        }
-    }
-    if !has_canon && !has_draft {
-        tags.push(VIS_TAG_CANON.to_string());
-    }
-}
-
 fn normalize_anchor_tag(raw: &str) -> Result<String, Value> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -231,7 +214,6 @@ impl McpServer {
             Err(resp) => return resp,
         };
         parsed.card_type = "knowledge".to_string();
-        ensure_visibility_tag(&mut parsed.tags);
         if let Some(anchor) = anchor {
             let tag = match normalize_anchor_tag(&anchor) {
                 Ok(v) => v,

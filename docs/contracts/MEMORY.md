@@ -915,13 +915,15 @@ Optional:
 
 List knowledge cards (`type="knowledge"`), optionally filtered by anchor/tags.
 
-Input: `{ workspace, target?, ref?, graph_doc?, anchor?, ids?, status?, tags_any?, tags_all?, text?, limit?, context_budget?, max_chars?, agent_id?, all_lanes?, include_drafts? }`
+Input: `{ workspace, target?, ref?, graph_doc?, anchor?, key?, ids?, status?, tags_any?, tags_all?, text?, limit?, context_budget?, max_chars?, agent_id?, all_lanes?, include_drafts?, include_history? }`
 
 Semantics:
 
 - `types` are forced to `["knowledge"]` (request cannot override).
 - `anchor` accepts either `a:<slug>` or `<slug>` and adds it to `tags_all`.
 - Knowledge keys (optional convention): `k:<slug>` tags may be used to keep a stable identity for an evolving knowledge item.
+- `include_drafts` defaults to `true` for `knowledge_list` (knowledge management view). Set `include_drafts=false` to hide `v:draft`.
+- `include_history` defaults to `false`: the response is **latest-only** (deduped by `(a:<anchor>, k:<key>)` when possible, otherwise by `(a:<anchor>, title)`), keeping the most recent version by `last_seq`.
 - If `include_drafts=false` and `tags_all` is omitted, the server defaults to `tags_all=["v:canon"]`.
 
 ### `think_pack`

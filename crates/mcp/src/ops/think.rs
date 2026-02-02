@@ -71,10 +71,16 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "scope": { "type": "string" },
-                    "key": { "type": "string" },
+                    "anchor": {
+                        "anyOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ]
+                    },
+                    "key": { "type": "string", "description": "Filter to a single knowledge key (k:<slug> or <slug>)." },
                     "limit": { "type": "integer" },
-                    "tags": { "type": "array", "items": { "type": "string" } }
+                    "include_drafts": { "type": "boolean", "description": "Include draft-lane knowledge (default true for query)." },
+                    "include_history": { "type": "boolean", "description": "When true, return historical versions; when false (default), latest-only." }
                 },
                 "required": []
             }),
@@ -156,7 +162,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                         ],
                         "description": "Optional anchor slug(s) to restrict lint. Same format as think.knowledge.recall."
                     },
-                    "include_drafts": { "type": "boolean", "description": "Include draft-lane knowledge (default false)." },
+                    "include_drafts": { "type": "boolean", "description": "Include draft-lane knowledge (default true)." },
                     "max_chars": { "type": "integer", "description": "Output budget (clamped by budget profile)." }
                 },
                 "required": []

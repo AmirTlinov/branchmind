@@ -69,7 +69,7 @@ pub(super) fn handle(server: &mut crate::McpServer, env: &Envelope) -> OpRespons
     let include_drafts = args_obj
         .get("include_drafts")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let mut anchor_ids = Vec::<String>::new();
     if let Some(anchor_value) = args_obj.get("anchor") {

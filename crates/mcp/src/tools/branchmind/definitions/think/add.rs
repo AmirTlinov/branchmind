@@ -162,7 +162,7 @@ pub(super) fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "think_add_knowledge",
-            "description": "Create a knowledge card (wrapper over think_card with v:canon default).",
+            "description": "Create a knowledge card (wrapper over think_card). Visibility defaults to v:draft unless explicitly set.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

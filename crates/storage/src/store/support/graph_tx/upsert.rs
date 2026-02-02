@@ -358,3 +358,27 @@ pub(in crate::store) fn count_edge_field_changes(
     }
     changed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_semantics_ignore_reserved_merge_keys() {
+        let left = r#"{"foo":1,"_merge":{"from":"b","from_seq":1,"from_ts_ms":2},"_meta":{"bar":2},"_meta_raw":"x"}"#;
+        let right = r#"{"foo":1}"#;
+        assert!(
+            meta_json_semantic_eq(Some(left), Some(right)),
+            "reserved keys must not affect semantic equality"
+        );
+    }
+
+    #[test]
+    fn meta_semantics_treat_merge_only_as_none() {
+        let left = r#"{"_merge":{"from":"b","from_seq":1,"from_ts_ms":2}}"#;
+        assert!(
+            meta_json_semantic_eq(Some(left), None),
+            "merge-only meta should be semantically empty"
+        );
+    }
+}

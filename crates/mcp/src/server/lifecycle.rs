@@ -167,10 +167,13 @@ impl McpServer {
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let args = params_obj
-                .get("arguments")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
+            // MCP client interop: some clients send `"arguments": null` for empty-args tools.
+            // Treat missing/null as `{}` but keep non-object values as-is so tool validators
+            // can return a precise `INVALID_INPUT` error.
+            let args = match params_obj.get("arguments") {
+                None | Some(Value::Null) => json!({}),
+                Some(v) => v.clone(),
+            };
             let response_body = self.call_tool(tool_name, args);
 
             return Some(crate::json_rpc_response(

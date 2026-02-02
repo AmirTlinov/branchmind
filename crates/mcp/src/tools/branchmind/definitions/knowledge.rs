@@ -14,8 +14,10 @@ pub(super) fn knowledge_definitions() -> Vec<Value> {
                 "ref": { "type": "string" },
                 "graph_doc": { "type": "string" },
                 "anchor": { "type": "string", "description": "Anchor slug or a:<slug> (adds tags_all a:<slug>)."},
+                "key": { "type": "string", "description": "Knowledge key slug (adds tags_all k:<slug>)."},
                 "agent_id": { "type": "string" },
-                "include_drafts": { "type": "boolean", "description": "Alias for all_lanes (disable draft filtering)." },
+                "include_drafts": { "type": "boolean", "description": "Include draft-lane knowledge (default true). Alias for all_lanes." },
+                "include_history": { "type": "boolean", "description": "When true, return all versions; when false (default), return latest-only (deduped)." },
                 "all_lanes": { "type": "boolean" },
                 "ids": {
                     "anyOf": [

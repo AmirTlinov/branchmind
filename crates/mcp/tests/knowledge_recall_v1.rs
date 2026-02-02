@@ -113,7 +113,7 @@ fn knowledge_upsert_key_is_stable_and_recall_orders_by_recency() {
             "arguments": {
                 "workspace": "ws_kb",
                 "op": "knowledge.recall",
-                "args": { "anchor": "core", "limit": 10 }
+                "args": { "anchor": "core", "limit": 10, "include_drafts": true }
             }
         }
     }));
@@ -186,7 +186,7 @@ fn knowledge_upsert_key_is_stable_and_recall_orders_by_recency() {
             "arguments": {
                 "workspace": "ws_kb",
                 "op": "knowledge.recall",
-                "args": { "anchor": "core", "limit": 10 }
+                "args": { "anchor": "core", "limit": 10, "include_drafts": true }
             }
         }
     }));
