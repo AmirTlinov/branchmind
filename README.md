@@ -24,6 +24,23 @@ lean enough for daily use.
 - **Low‑noise daily portal**: minimal tool surface, progressive disclosure.
 - **Delegation jobs** via `bm_runner` (out‑of‑process) for safe parallel work.
 
+## Concrete benefits (what users actually feel)
+
+**For AI agents**
+- **Knowledge that sticks**: versioned memory you can recall, update, and lint (no “lost context”).
+- **Planning with control**: explicit steps, checkpoints, and next‑action guidance.
+- **Better reasoning**: hypotheses → tests → evidence → decisions, not just chat.
+- **Artifacts you can trust**: proofs, logs, and refs are first‑class.
+- **Safe exploration**: branch/merge reasoning without losing the main thread.
+- **Parallel execution**: delegate jobs without breaking determinism.
+
+**For users and teams**
+- **Fewer regressions**: “DONE” means proven, not assumed.
+- **Faster resumes**: restart a week later and continue at the exact step.
+- **Auditable history**: who did what, why, with evidence.
+- **Lower coordination cost**: shared memory and structured handoffs.
+- **Predictable behavior**: local‑only, deterministic, contract‑first.
+
 ## How it works (mental model)
 
 1. `status` gives the **next action**.
@@ -100,4 +117,3 @@ docs/
 - `AGENTS.md` — development rules for AI agents
 - `docs/contracts/OVERVIEW.md` — contract entrypoint
 - `docs/QUICK_START.md` — developer golden path
-
