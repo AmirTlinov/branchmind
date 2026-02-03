@@ -1,32 +1,47 @@
-# BranchMind Rust (Unified Task+Reasoning MCP)
+# BranchMind — durable working memory + execution cockpit for AI agents (MCP server)
 
-This repository is a Rust-first, MCP-only reimplementation that unifies the best parts of:
+BranchMind is a **Rust-first, MCP-only** server that helps AI agents execute long, complex work
+without losing context, proof, or decisions. Think “mission control” for tasks + “versioned brain”
+for reasoning — **low noise, high discipline, deterministic**.
 
-- task execution engines (decomposition, checkpoints, progress, “radar”)
-- versioned reasoning memory (notes, diffs, merges, graphs, thinking traces)
+## Why it exists
 
-The goal is to give AI agents a durable, low-noise “working memory” and an execution control tower that stays consistent across sessions.
+Agents drift. Evidence gets lost. Multi‑session work becomes a mess.
+BranchMind makes progress **traceable**, **resumable**, and **auditable** while keeping the UX
+lean enough for daily use.
 
-## Start here
+## Who it’s for
 
-- `GOALS.md` — what “done” means for this project
-- `PHILOSOPHY.md` — guiding principles (implementation-agnostic)
-- `AGENTS.md` — map + development rules for AI agents
-- `docs/contracts/OVERVIEW.md` — contract entrypoint (MCP tools + semantics)
+- Agent builders who need **durable memory** + **proof-first execution**.
+- Teams running long tasks that span sessions and need **zero‑drift handoffs**.
+- Developers who want **deterministic, local‑only** tooling with clear contracts.
 
-Developer:
+## What you get
 
-- Quick start: `docs/QUICK_START.md`
-- Runbooks: `docs/runbooks/OVERVIEW.md`
+- **Task execution control tower**: checkpoints, progress radar, “next action” guidance.
+- **Versioned reasoning memory**: notes, diffs, merges, graphs, thinking traces.
+- **Proof‑first gates**: close steps with real receipts, not narrative.
+- **Low‑noise daily portal**: minimal tool surface, progressive disclosure.
+- **Delegation jobs** via `bm_runner` (out‑of‑process) for safe parallel work.
 
-## Running (stdio MCP server)
+## How it works (mental model)
 
-The server is a stdio JSON-RPC MCP backend (no GUI/TUI in the core).
-An optional **local read-only HTTP viewer** can be enabled for human situational awareness.
+1. `status` gives the **next action**.
+2. `tasks.snapshot` is your **compass**; `open <ref>` is your **zoom**.
+3. Close steps with `tasks.macro.close.step` + `proof_input`  
+   (URL/CMD/path → LINK/CMD/FILE; NOTE doesn’t satisfy proof).
+4. Persist learning with `think.knowledge.upsert` and keep it clean via `think.knowledge.lint`.
 
-### OpenCode (recommended)
+## Quick start (from source)
 
-Add BranchMind as a local MCP server (no flags needed; BranchMind uses DX defaults):
+```bash
+make check
+make run-mcp
+```
+
+## Add to your MCP client
+
+Example config (OpenCode-style):
 
 ```json
 {
@@ -42,139 +57,47 @@ Add BranchMind as a local MCP server (no flags needed; BranchMind uses DX defaul
 ```
 
 Notes:
+- Build/install both binaries so runner autostart works:
+  `bm_mcp` and `bm_runner` should sit in the same directory (or `bm_runner` in `PATH`).
 
-- Build/install both binaries so runner autostart works: `bm_mcp` and `bm_runner` should be in the same directory (or `bm_runner` in `PATH`).
-- Verify: `opencode mcp list`.
+## Optional local viewer (read‑only)
 
-Delegated work is tracked as `JOB-*` and executed out-of-process by `bm_runner` so `bm_mcp` can stay deterministic.
-For “plug it in and it works” setups, `bm_mcp` may also **auto-start** `bm_runner` (first-party) when jobs are queued.
+BranchMind can serve a local‑only viewer on `127.0.0.1:7331`.
 
-Runtime flags:
+- Enabled by default in **session** modes (`stdio` / `--shared`).
+- Disabled by default in `--daemon` mode.
+- Disable explicitly: `--no-viewer` or `BRANCHMIND_VIEWER=0`.
 
-- `--storage-dir <path>` — set the embedded store directory.
-  - Default: repo-local `.agents/mcp/.branchmind/` (derived from the nearest `.git` root; falls back to current directory).
-- `--workspace <id>` — set the **default workspace** (callers may omit `workspace` in tool calls).
-  - Default: derived deterministically from the repo root directory name.
-  - When set explicitly, the server auto-locks to that workspace unless an allowlist is provided.
-- `BRANCHMIND_WORKSPACE_ALLOWLIST` — optional comma/space/semicolon separated list of allowed workspaces.
-  - When set, callers may switch between these workspaces; others are rejected.
-- `--workspace-lock` — force-lock the server to the default workspace (advanced; usually not needed).
-- `--project-guard <value>` — override the deterministic project guard stored per workspace.
-- `--agent-id <id>` — set a default **actor id** used by the tasks subsystem (step leases) and some audit/meta fields when supported.
-  - `--agent-id auto` creates (once) and reuses a stable default id stored in the embedded DB (survives restarts; reduces “forgot agent_id” drift).
-  - Durable memory is **meaning-first and shared-by-default**; noise control uses visibility tags (`v:canon` / `v:draft`) plus explicit disclosure flags (`include_drafts` / `all_lanes` / `view="audit"`).
-- `--toolset full|daily|core` — controls what is **advertised** via `tools/list`:
-  - `daily` (default): a small portal-first surface for everyday agent work.
-  - `full`: full parity surface (best for power users and compatibility).
-  - `core`: ultra-minimal tool surface.
-- `--shared` — run a stdio proxy that connects to a shared local daemon (deduplicates processes across sessions).
-- `--daemon` — run the shared local daemon on a Unix socket (no stdio).
-- `BRANCHMIND_MCP_DAEMON_IDLE_EXIT_SECS=<secs>` — when set on a daemon, it exits after `<secs>` of *zero active connections*.
-  - Shared proxies set a default (currently 120s) for daemons they spawn, to avoid accumulating idle processes.
-- `--socket <path>` — override the Unix socket path (default: `<storage-dir>/bm.<config>.sock`, with an automatic fallback to a short runtime dir if the path would exceed Unix socket limits).
-  - The default name includes a config hash (toolset/workspace/guard/agent id) to avoid cross-session collisions.
-- `--viewer` — enable the local read-only HTTP viewer (loopback-only).
-- `--no-viewer` — disable the viewer (useful for headless runs).
-- `--viewer-port <port>` — set the viewer port (default: `7331`).
-- `--hot-reload` — (unix-only) auto-restart the running process via `exec` when the on-disk `bm_mcp` binary changes (dev DX).
-- `--no-hot-reload` — disable hot reload.
-- `--hot-reload-poll-ms <ms>` — override the hot reload polling interval (default: `1000`).
-- `--runner-autostart` — allow `bm_mcp` to auto-start `bm_runner` when jobs are queued (default in `daily|core`).
-- `--no-runner-autostart` — disable runner autostart (default in `full`).
-- `--no-ux-proof-v2` — disable proof UX v2 shortcuts (`proof_input`, `proof_from_job`) while keeping explicit `proof` support.
-- `--no-knowledge-autolint` — disable `lint_mode=auto` warnings (manual `think.knowledge.lint` still works).
-- `--no-note-promote` — disable note → knowledge promotion (`promote_to_knowledge`, `think.note.promote`).
+See `docs/contracts/VIEWER.md` for details.
 
-Hot reload defaults:
+## Runtime flags (selected)
 
-- Hot reload is **disabled by default** for stability.
-- To enable: pass `--hot-reload` or set `BRANCHMIND_HOT_RELOAD=1`.
+- `--storage-dir <path>` — embedded store directory.
+- `--workspace <id>` — default workspace (callers may omit `workspace`).
+- `--agent-id <id|auto>` — default actor id (stored once, reused across restarts).
+- `--toolset daily|full|core` — controls advertised tool surface.
+- `--shared` / `--daemon` — shared local daemon modes.
 
-Viewer note:
+Full list: `bm_mcp --help`.
 
-- The viewer is enabled by default at `http://127.0.0.1:7331` (loopback-only). Use `--no-viewer` or `BRANCHMIND_VIEWER=0` to disable.
+## Repository map
 
-Environment overrides:
-
-- `BRANCHMIND_MCP_SHARED=1` — same as `--shared`.
-- `BRANCHMIND_MCP_DAEMON=1` — same as `--daemon`.
-- `BRANCHMIND_MCP_SOCKET=/path/to.sock` — same as `--socket`.
-- `BRANCHMIND_PROJECT_GUARD=<value>` — same as `--project-guard`.
-- `BRANCHMIND_VIEWER=1` — same as `--viewer`.
-- `BRANCHMIND_VIEWER=0` — same as `--no-viewer`.
-- `BRANCHMIND_VIEWER_PORT=<port>` — same as `--viewer-port`.
-- `BRANCHMIND_RUNNER_AUTOSTART=1|0` — same as `--runner-autostart` / `--no-runner-autostart`.
-- `BRANCHMIND_UX_PROOF_V2=1|0` — enable/disable proof UX v2.
-- `BRANCHMIND_KNOWLEDGE_AUTOLINT=1|0` — enable/disable knowledge auto-lint.
-- `BRANCHMIND_NOTE_PROMOTE=1|0` — enable/disable note promotion.
-
-`tools/list` also supports optional params `{ "toolset": "full|daily|core" }` to override the default for a single call.
-
-Output formats (DX):
-
-- Portal tools are **context-first**: they render a compact tagged line protocol (BM-L1) by default.
-- The meaning of tags is defined once in docs/contracts and enforced by DX-DoD tests; portal outputs stay tag-light.
-- Agent UX help lives in a dedicated `help` tool (protocol semantics + proof conventions) to avoid repeating boilerplate.
-
-Environment:
-
-- `BRANCHMIND_TOOLSET=full|daily|core` — same as `--toolset`, but useful for MCP clients that prefer env-based configuration.
-- `BRANCHMIND_WORKSPACE=<id>` — same as `--workspace` (default workspace).
-- `BRANCHMIND_WORKSPACE_ALLOWLIST=<id[,id]>` — comma/space/semicolon separated allowlist of workspaces.
-- `BRANCHMIND_WORKSPACE_LOCK=1|0` — same as `--workspace-lock` (set `0` to disable auto-lock).
-- `BRANCHMIND_PROJECT_GUARD=<value>` — same as `--project-guard`.
-- `BRANCHMIND_AGENT_ID=<id>` — same as `--agent-id` (`auto` is supported).
-- `BRANCHMIND_RESPONSE_VERBOSITY=full|compact` — default output verbosity for non-portal tools.
-- `BRANCHMIND_DX=1|0` — enable DX defaults (compact outputs, portal-friendly defaults).
-
-Templates (DX):
-
-- Built-in templates are discoverable via `tasks_templates_list`.
-- `tasks_macro_start` / `tasks_bootstrap` support `template` as an alternative to explicit `steps`.
-- `tasks_macro_start` supports optional `think` to seed the reasoning pipeline at task creation time.
-
-Snapshots (DX):
-
-- `tasks_snapshot` / `tasks_resume_super` include a small, versioned `capsule` intended for instant agent handoff (low-noise, survives aggressive `max_chars` trimming).
-- `tasks_snapshot` defaults to `view="smart"` (relevance-first, cold archive). Use `view="explore"` for warm archive, `view="audit"` for cross-lane reads.
-- `tasks_macro_close_step` accepts `checkpoints: "gate"` (criteria+tests) and `checkpoints: "all"` as compact shortcuts; it can also auto-pick the first open step when `path`/`step_id` is omitted (focus-first).
-
-Multi-agent lanes (DX):
-
-- Reasoning is **shared-by-default**; “don’t lose anything, don’t spam everything” is modeled via visibility tags:
-  - `v:canon` — visible in smart views (the default for frontier + durable anchors).
-  - `v:draft` — hidden by default (opt-in via `include_drafts=true` / `all_lanes=true` / `view="audit"`).
-  - Default visibility when a card has no explicit visibility tag:
-    - `decision|evidence|test|hypothesis|question|update` → `v:canon`
-    - everything else (e.g. `note`) → `v:draft`
-- `think_publish` promotes a card into the shared lane as a durable anchor (optionally pinned for smart views).
-
-## Delegation runner (bm_runner)
-
-`bm_mcp` does not execute arbitrary external programs; it only persists tasks/memory/jobs deterministically.
-Delegated work is executed out-of-process by `bm_runner`.
-
-To make delegated jobs “real”, run the external runner (or allow `bm_mcp` to auto-start it):
-
-- `bm_runner` polls `JOB-*`, claims work, runs a headless Codex session, and reports progress/results back via MCP.
-- It supports long runs (up to 24h by default) via heartbeats, time-slices, and stale-job reclaim.
-
-Quick loop:
-
-1) Create a delegated task/job with `tasks_macro_delegate`.
-2) Watch the inbox with `tasks_jobs_radar fmt=lines`.
-3) Run `bm_runner` in the background to execute `JOB-*` and stream checkpoints into the job thread.
-
-See:
-
-- `docs/contracts/DELEGATION.md` (protocol, inbox format, proof gate).
-- `docs/contracts/ANCHORS.md` (meaning map, anchor-scoped context).
-
-## Development
-
-Golden path:
-
-```bash
-make check
-make run-mcp
+```text
+crates/
+  core/      pure domain (tasks + reasoning primitives)
+  storage/   persistence adapter (single embedded store)
+  mcp/       MCP server (stdio) adapter
+  runner/    delegation runner (JOB-* worker)
+docs/
+  contracts/     MCP surface (schemas + semantics)
+  architecture/  boundaries, storage, test strategy
 ```
+
+## Start here (docs)
+
+- `GOALS.md` — what “done” means
+- `PHILOSOPHY.md` — guiding principles
+- `AGENTS.md` — development rules for AI agents
+- `docs/contracts/OVERVIEW.md` — contract entrypoint
+- `docs/QUICK_START.md` — developer golden path
+
