@@ -55,8 +55,17 @@ const GRAPH_CONST = {
   lodTasksAt: 1.35,
   showTaskLabelsAt: 1.75,
   showTaskSimilarEdgesAt: 1.55,
+  collideGapPlan: 26,
+  collideGapCluster: 18,
+  collideGapTask: 8,
+  collideStrength: 1400,
+  collideOverlapBoost: 2.6,
+  labelPadPx: 6,
+  labelGridPx: 44,
+  maxTaskLabels: 120,
   fadeMs: 260,
   settleMs: 400,
+  settleMsTasks: 620,
 };
 
 const autostartMutation = { pending: false };
@@ -2600,9 +2609,14 @@ function startCameraAnimation(to, durationMs) {
   ensureGraphAnimationLoop();
 }
 
-function startSettleAnimation() {
+function settleDurationForLod(lod) {
+  return lod === "tasks" ? GRAPH_CONST.settleMsTasks : GRAPH_CONST.settleMs;
+}
+
+function startSettleAnimation(durationMs) {
   const now = performance.now();
-  graphState.settle = { endAt: now + GRAPH_CONST.settleMs };
+  const ms = Math.max(120, durationMs || GRAPH_CONST.settleMs);
+  graphState.settle = { endAt: now + ms, durationMs: ms };
   ensureGraphAnimationLoop();
 }
 
@@ -2633,7 +2647,7 @@ function onGraphFrame(ts) {
       const snapshotKey = graphDataKey(state.snapshot);
       graphState.displayKey = `${snapshotKey}:${display.selectedPlanId || "none"}:${display.lod}`;
       graphState.snapshotKey = snapshotKey;
-      startSettleAnimation();
+      startSettleAnimation(settleDurationForLod(graphState.lod));
     }
     if (t >= 1) {
       graphState.cameraAnim = null;
@@ -2768,7 +2782,27 @@ function settleLayoutOnce() {
     .filter((node) => node && node.kind);
   if (nodesList.length === 0) return;
 
-  const cellSize = 120;
+  const lod = graphState.lod || graphState.model?.lod || "overview";
+  const collideRadius = (node) => {
+    let gap = GRAPH_CONST.collideGapTask;
+    if (node.kind === "plan") {
+      gap = GRAPH_CONST.collideGapPlan;
+    } else if (node.kind === "cluster") {
+      gap = GRAPH_CONST.collideGapCluster;
+    }
+    if (lod === "tasks" && node.kind === "task") {
+      gap += 4;
+    }
+    if (lod === "overview" && node.kind === "plan") {
+      gap += 6;
+    }
+    return (node.radius || 6) + gap;
+  };
+  let maxR = 0;
+  nodesList.forEach((node) => {
+    maxR = Math.max(maxR, collideRadius(node));
+  });
+  const cellSize = Math.max(120, Math.floor(maxR * 2.6));
   const buckets = new Map();
   nodesList.forEach((node) => {
     const cx = Math.floor(node.x / cellSize);
@@ -2785,13 +2819,17 @@ function settleLayoutOnce() {
     let dx = a.x - b.x;
     let dy = a.y - b.y;
     const dist2 = dx * dx + dy * dy + 0.01;
-    const minDist = (a.radius || 6) + (b.radius || 6) + 18;
-    const cutoff = minDist * 6;
+    const minDist = collideRadius(a) + collideRadius(b);
+    const cutoff = minDist * 4.8;
     if (dist2 > cutoff * cutoff) return;
     const dist = Math.sqrt(dist2);
     dx /= dist;
     dy /= dist;
-    const force = 1200 / dist2 + (dist < minDist ? 1.4 : 0);
+    let force = GRAPH_CONST.collideStrength / dist2;
+    if (dist < minDist) {
+      force *= GRAPH_CONST.collideOverlapBoost;
+      force *= 1 + (minDist - dist) / Math.max(1, minDist);
+    }
     a.vx += dx * force;
     a.vy += dy * force;
     b.vx -= dx * force;
@@ -2893,6 +2931,9 @@ function drawGraphFlagship(snapshot, now) {
   const renderNodes = renderIds
     .map((id) => nodeById.get(id) || layoutCache.nodesById.get(id))
     .filter((node) => !!node);
+  const taskCount = renderNodes.filter((node) => node.kind === "task").length;
+  const taskDensityAlpha =
+    taskCount > 420 ? 0.35 : taskCount > 320 ? 0.45 : taskCount > 220 ? 0.52 : 0.6;
 
   // Edges (visible model only; keeps noise low).
   ctx.globalAlpha = 1;
@@ -2943,9 +2984,17 @@ function drawGraphFlagship(snapshot, now) {
     } else if (node.kind === "cluster") {
       alpha = isHover || isSelected ? 0.92 : 0.75;
     } else {
-      alpha = isHover || isSelected ? 0.9 : 0.55;
+      alpha = isHover || isSelected ? 0.9 : taskDensityAlpha;
     }
     alpha *= alphaFade;
+
+    if (isHover || isSelected || isFocus) {
+      const haloSize = node.kind === "plan" ? 16 : node.kind === "cluster" ? 12 : 8;
+      ctx.fillStyle = `rgba(132, 169, 255, ${0.08 * alphaFade})`;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.radius + haloSize / view.scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     if (node.kind === "plan") {
       ctx.fillStyle = planFillColor(node.status).replace(/0\.\d+\)/, `${alpha})`);
@@ -3007,37 +3056,176 @@ function drawGraphFlagship(snapshot, now) {
     }
   });
 
-  // Labels (screen space).
+  // Labels (screen space): decluttered layout.
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.font = `${12 * ratio}px "IBM Plex Sans", "SF Pro Text", "Segoe UI", sans-serif`;
-  ctx.fillStyle = "rgba(238, 242, 246, 0.86)";
+  const fontSize = 12 * ratio;
+  ctx.font = `${fontSize}px "IBM Plex Sans", "SF Pro Text", "Segoe UI", sans-serif`;
+  const labelPad = GRAPH_CONST.labelPadPx * ratio;
+  const labelGrid = Math.max(18, GRAPH_CONST.labelGridPx * ratio);
+  const labelOffsetX = 10 * ratio;
+  const labelOffsetY = -8 * ratio;
 
   const planCount = model.nodes.filter((n) => n.kind === "plan").length;
   const showPlanLabelsEverywhere = planCount <= 24 && lod !== "overview";
 
-  renderNodes.forEach((node) => {
-    const alphaFade = fadeAlphaForId(node.id, now);
-    if (alphaFade <= 0.01) return;
+  const nodeCircles = renderNodes.map((node) => {
+    const pos = worldToScreen(view, node.x, node.y);
+    return {
+      id: node.id,
+      x: pos.x * ratio,
+      y: pos.y * ratio,
+      r: node.radius * view.scale * ratio + labelPad,
+    };
+  });
 
+  const placed = [];
+  const grid = new Map();
+  const gridKey = (cx, cy) => `${cx},${cy}`;
+  const addToGrid = (rect, index) => {
+    const minCx = Math.floor(rect.x / labelGrid);
+    const maxCx = Math.floor((rect.x + rect.w) / labelGrid);
+    const minCy = Math.floor(rect.y / labelGrid);
+    const maxCy = Math.floor((rect.y + rect.h) / labelGrid);
+    for (let cx = minCx; cx <= maxCx; cx += 1) {
+      for (let cy = minCy; cy <= maxCy; cy += 1) {
+        const key = gridKey(cx, cy);
+        const list = grid.get(key) || [];
+        list.push(index);
+        grid.set(key, list);
+      }
+    }
+  };
+  const rectsOverlap = (a, b) =>
+    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  const rectIntersectsCircle = (rect, circle) => {
+    const cx = clamp(circle.x, rect.x, rect.x + rect.w);
+    const cy = clamp(circle.y, rect.y, rect.y + rect.h);
+    const dx = circle.x - cx;
+    const dy = circle.y - cy;
+    return dx * dx + dy * dy <= circle.r * circle.r;
+  };
+  const collides = (rect, ownId) => {
+    const minCx = Math.floor(rect.x / labelGrid);
+    const maxCx = Math.floor((rect.x + rect.w) / labelGrid);
+    const minCy = Math.floor(rect.y / labelGrid);
+    const maxCy = Math.floor((rect.y + rect.h) / labelGrid);
+    for (let cx = minCx; cx <= maxCx; cx += 1) {
+      for (let cy = minCy; cy <= maxCy; cy += 1) {
+        const list = grid.get(gridKey(cx, cy));
+        if (!list) continue;
+        for (let i = 0; i < list.length; i += 1) {
+          if (rectsOverlap(rect, placed[list[i]])) return true;
+        }
+      }
+    }
+    for (let i = 0; i < nodeCircles.length; i += 1) {
+      const circle = nodeCircles[i];
+      if (circle.id === ownId) continue;
+      if (
+        circle.x + circle.r < rect.x ||
+        circle.x - circle.r > rect.x + rect.w ||
+        circle.y + circle.r < rect.y ||
+        circle.y - circle.r > rect.y + rect.h
+      ) {
+        continue;
+      }
+      if (rectIntersectsCircle(rect, circle)) return true;
+    }
+    return false;
+  };
+
+  const forcedIds = new Set();
+  if (hoverId) forcedIds.add(hoverId);
+  if (selectedId) forcedIds.add(selectedId);
+  if (focusId) forcedIds.add(focusId);
+
+  const candidates = [];
+  forcedIds.forEach((id) => {
+    const node = nodeById.get(id);
+    if (node) {
+      candidates.push({ node, priority: 0, forced: true });
+    }
+  });
+
+  const planNodes = renderNodes.filter((node) => node.kind === "plan");
+  planNodes.sort((a, b) => (a.id || "").localeCompare(b.id || ""));
+  planNodes.forEach((node) => {
+    if (forcedIds.has(node.id)) return;
+    const isPrimary = node.id === selectedPlanId || node.id === focusPlanId;
+    const shouldLabel = showPlanLabelsEverywhere || isPrimary;
+    if (!shouldLabel) return;
+    candidates.push({ node, priority: 1, forced: false });
+  });
+
+  const clusterNodes = renderNodes.filter((node) => node.kind === "cluster");
+  clusterNodes.sort((a, b) => (a.id || "").localeCompare(b.id || ""));
+  clusterNodes.forEach((node) => {
+    if (forcedIds.has(node.id)) return;
     const isHover = node.id === hoverId;
     const isSelected = node.id === selectedId;
-    const isFocus = focusId && node.id === focusId;
-    const isPrimary = node.kind === "plan" && (node.id === selectedPlanId || node.id === focusPlanId);
-
-    let shouldLabel = false;
-    if (node.kind === "plan") {
-      shouldLabel = showPlanLabelsEverywhere || isHover || isSelected || isFocus || isPrimary;
-    } else if (node.kind === "cluster") {
-      shouldLabel = (view.scale >= 1.05 && (isHover || isSelected)) || view.scale >= 1.15;
-    } else if (node.kind === "task") {
-      shouldLabel = isHover || isSelected || view.scale >= GRAPH_CONST.showTaskLabelsAt;
-    }
+    const shouldLabel = (view.scale >= 1.05 && (isHover || isSelected)) || view.scale >= 1.15;
     if (!shouldLabel) return;
+    candidates.push({ node, priority: 2, forced: false });
+  });
 
+  const taskNodes = renderNodes.filter((node) => node.kind === "task");
+  const taskCandidates = taskNodes.filter((node) => {
+    if (forcedIds.has(node.id)) return false;
+    return view.scale >= GRAPH_CONST.showTaskLabelsAt;
+  });
+  taskCandidates.sort((a, b) => {
+    const diff = statusRank(a.status) - statusRank(b.status);
+    if (diff !== 0) return diff;
+    if (!!a.blocked !== !!b.blocked) return a.blocked ? -1 : 1;
+    return (a.id || "").localeCompare(b.id || "");
+  });
+  taskCandidates.slice(0, GRAPH_CONST.maxTaskLabels).forEach((node) => {
+    candidates.push({ node, priority: 3, forced: false });
+  });
+
+  candidates.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return (a.node.id || "").localeCompare(b.node.id || "");
+  });
+
+  ctx.textBaseline = "alphabetic";
+  candidates.forEach((entry) => {
+    const node = entry.node;
+    const label = (node.label || "").trim();
+    if (!label) return;
+    const alphaFade = fadeAlphaForId(node.id, now);
+    if (alphaFade <= 0.01) return;
     const pos = worldToScreen(view, node.x, node.y);
-    const sx = pos.x * ratio;
-    const sy = pos.y * ratio;
-    ctx.fillText(node.label, sx + 10, sy - 8);
+    const sx = pos.x * ratio + labelOffsetX;
+    const sy = pos.y * ratio + labelOffsetY;
+    const width = ctx.measureText(label).width;
+    const rect = {
+      x: sx - labelPad,
+      y: sy - fontSize - labelPad,
+      w: width + labelPad * 2,
+      h: fontSize + labelPad * 2,
+    };
+
+    if (!entry.forced && collides(rect, node.id)) {
+      return;
+    }
+
+    const index = placed.length;
+    placed.push(rect);
+    addToGrid(rect, index);
+
+    ctx.save();
+    if (entry.forced) {
+      ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+      ctx.shadowBlur = 8 * ratio;
+      ctx.fillStyle = "rgba(238, 242, 246, 0.98)";
+    } else {
+      ctx.shadowColor = "rgba(0, 0, 0, 0.25)";
+      ctx.shadowBlur = 4 * ratio;
+      ctx.fillStyle = "rgba(238, 242, 246, 0.86)";
+    }
+    ctx.fillText(label, sx, sy);
+    ctx.restore();
   });
 }
 
@@ -3236,13 +3424,13 @@ function renderGraphFlagship(snapshot) {
       graphState.view.restored = true;
       graphState.lod = computeLod(graphState.view.scale);
     }
-    startSettleAnimation();
+    startSettleAnimation(settleDurationForLod(display.lod));
   } else if (lodBefore !== graphState.lod) {
     // LOD changed via zoom: rebuild visible nodes, but keep positions.
     const display = buildDisplayModelFlagship(snapshot, graphState.view);
     mergeDisplayModelIntoCache(display);
     graphState.displayKey = `${snapshotKey}:${selectedPlanId || "none"}:${graphState.lod}`;
-    startSettleAnimation();
+    startSettleAnimation(settleDurationForLod(graphState.lod));
   }
 
   ensureGraphHandlersFlagship();
