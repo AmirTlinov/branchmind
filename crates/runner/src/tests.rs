@@ -161,7 +161,7 @@ fn build_subagent_prompt_includes_skill_pack_when_present() {
         "JOB-1",
         "do thing",
         "CTX",
-        "skill profile=strict version=0.1.0\n[CORE LOOP]\n...",
+        "skill profile=strict version=0.1.2\n[CORE LOOP]\n...",
     );
     assert!(prompt.contains("SKILL PACK (bounded):"));
     assert!(prompt.contains("skill profile=strict"));

@@ -3,7 +3,7 @@
 use crate::*;
 use serde_json::Value;
 
-const SKILL_PACK_VERSION: &str = "0.1.1";
+const SKILL_PACK_VERSION: &str = "0.1.2";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SkillProfile {
@@ -93,6 +93,7 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                     "Golden path: status → tasks_macro_start → tasks_snapshot.",
                     "When lost: tasks_snapshot (refs=true) → open <ref> → follow 1 next action.",
                     "Write to meaning: use anchors (a:<slug>) for decisions/evidence/tests.",
+                    "Close steps fast: tasks.macro.close.step with proof_input (URL/CMD/FILE/NOTE → auto-normalized).",
                 ],
             );
         }
@@ -101,7 +102,7 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 &mut out,
                 profile.section_name(),
                 &[
-                    "Loop: tasks_snapshot → tasks_lint (patches_limit=2) → apply 1 patch → think_card (hypothesis+test) → evidence → close_step.",
+                    "Loop: tasks_snapshot → tasks_lint (patches_limit=2) → apply 1 patch → think_card (hypothesis+test) → tasks.macro.close.step (proof_input=...).",
                     "DoD discipline: every active step has success_criteria + tests + proof.",
                     "Override exists but must be explicit: reason+risk (visible debt).",
                 ],
@@ -147,9 +148,9 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
         &mut out,
         "PROOF",
         &[
-            "Prefer receipts: CMD: ... (what you ran) + LINK: ... (CI/artifact/log).",
-            "If a step requires proof: DONE without proof is rejected unless you override (reason+risk).",
-            "If you only have narrative text: convert it into explicit receipts or a single merge report with refs.",
+            "Use proof_input: paste URL/CMD/path; server normalizes to LINK/CMD/FILE; NOTE does not satisfy proof.",
+            "For job artifacts: jobs.proof.attach → reuse returned LINK/sha256.",
+            "Proof-required steps reject DONE without proof unless explicit reason+risk.",
         ],
     );
 
@@ -160,6 +161,15 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
             "Use anchors as meaning coordinates (a:<slug>), not file paths.",
             "Bind decisions/evidence/tests to anchors so new sessions resume by meaning in seconds.",
             "Keep the map clean: merge/rename anchors instead of proliferating near-duplicates.",
+        ],
+    );
+
+    push_section(
+        &mut out,
+        "KNOWLEDGE",
+        &[
+            "Use think.knowledge.upsert with stable (anchor,key); invalid keys return suggestions.",
+            "If keys drift: run think.knowledge.lint (or lint_mode=auto when enabled).",
         ],
     );
 
