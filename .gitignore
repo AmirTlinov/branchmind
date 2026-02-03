@@ -4,4 +4,5 @@
 /.branchmind_rust
 /.last
 /tmp
+/dist
 .agents/
