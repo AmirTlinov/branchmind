@@ -16,7 +16,7 @@ fn tasks_snapshot_truncation_inserts_stable_reference_line_second() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Ref Line Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Ref Line Task" } } }
     }));
 
     // Force truncation deterministically so the snapshot must surface a stable reference line
@@ -26,20 +26,17 @@ fn tasks_snapshot_truncation_inserts_stable_reference_line_second() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_snapshot_ref_line",
                 "path": "s:0",
                 "note": huge_note
-            }
-        }
+            } } }
     }));
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "max_chars": 2000, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
 
@@ -66,14 +63,11 @@ fn tasks_snapshot_truncation_prefers_cockpit_card_reference() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_delegate",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.delegate", "args": {
                 "workspace": "ws_snapshot_cockpit_ref",
                 "plan_title": "Plan Cockpit Ref",
                 "task_title": "Delegated Task (cockpit ref)"
-            }
-        }
+            } } }
     }));
     let delegated_text = extract_tool_text_str(&delegated);
     let delegate_state = delegated_text.lines().next().unwrap_or("");
@@ -89,28 +83,22 @@ fn tasks_snapshot_truncation_prefers_cockpit_card_reference() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_snapshot_cockpit_ref",
                 "path": "s:0",
                 "note": "x".repeat(20_000)
-            }
-        }
+            } } }
     }));
 
     let snapshot = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {
                 "workspace": "ws_snapshot_cockpit_ref",
                 "max_chars": 2000,
                 "fmt": "lines"
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&snapshot);
     let lines = text.lines().collect::<Vec<_>>();

@@ -13,16 +13,13 @@ fn tasks_snapshot_state_line_surfaces_cockpit_card_ref_when_available() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_delegate",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.delegate", "args": {
                 "workspace": "ws_primary_ref",
                 "plan_title": "Plan Primary Ref",
                 "task_title": "Storage: investigate slow queries",
                 "description": "Goal: pinpoint the slow path and propose a minimal fix with evidence.",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
 
     let out = extract_tool_text_str(&delegate);
@@ -43,14 +40,11 @@ fn tasks_snapshot_state_line_surfaces_cockpit_card_ref_when_available() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {
                 "workspace": "ws_primary_ref",
                 "max_chars": 4000,
                 "fmt": "lines"
-            }
-        }
+            } } }
     }));
 
     let text = extract_tool_text_str(&snapshot);

@@ -29,7 +29,7 @@ fn tasks_snapshot_delta_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Delta Open Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Delta Open Task" } } }
     }));
 
     // First delta call seeds the baseline, returning an empty delta.
@@ -37,7 +37,7 @@ fn tasks_snapshot_delta_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "delta": true, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "delta": true, "fmt": "lines" } } }
     }));
     let seeded_text = extract_tool_text_str(&seeded);
     assert!(
@@ -55,14 +55,11 @@ fn tasks_snapshot_delta_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_delta_open",
                 "path": "s:0",
                 "note": note_text
-            }
-        }
+            } } }
     }));
 
     let decision_title = "Decision: delta smoke";
@@ -71,23 +68,20 @@ fn tasks_snapshot_delta_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "think_add_decision",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.decision", "args": {
                 "workspace": "ws_delta_open",
                 "card": {
                     "title": decision_title,
                     "text": decision_text
                 }
-            }
-        }
+            } } }
     }));
 
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "delta": true, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "delta": true, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

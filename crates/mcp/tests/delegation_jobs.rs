@@ -45,16 +45,13 @@ fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_delegate",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.delegate", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Delegate Jobs",
                 "task_title": "Storage: add delegation job HUD",
                 "description": "Goal: ensure delegation is visible in tasks_snapshot without noisy logs.",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text_str(&delegate);
     assert!(
@@ -68,15 +65,12 @@ fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_list",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.list", "args": {
                 "workspace": "ws1",
                 "status": "QUEUED",
                 "task": task_id,
                 "limit": 5
-            }
-        }
+            } } }
     }));
     let listed = extract_tool_text(&jobs_list);
     assert!(
@@ -104,9 +98,7 @@ fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
         "jsonrpc": "2.0",
         "id": 31,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "include_prompt": false,
@@ -114,8 +106,7 @@ fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
                 "include_meta": true,
                 "max_events": 0,
                 "max_chars": 4000
-            }
-        }
+            } } }
     }));
     let opened = extract_tool_text(&job_open);
     assert!(
@@ -140,13 +131,10 @@ fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {
                 "workspace": "ws1",
                 "max_chars": 3000
-            }
-        }
+            } } }
     }));
     let snap = extract_tool_text(&snapshot);
     assert!(
@@ -201,16 +189,13 @@ fn completed_jobs_are_hidden_from_snapshot_hud() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_delegate",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.delegate", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Delegate Jobs",
                 "task_title": "Core: close delegated job",
                 "description": "Goal: ensure DONE jobs do not spam the HUD.",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text_str(&delegate);
     let task_id = task_id_from_focus_line(&out).expect("expected focus TASK-* line");
@@ -219,15 +204,12 @@ fn completed_jobs_are_hidden_from_snapshot_hud() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_list",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.list", "args": {
                 "workspace": "ws1",
                 "status": "QUEUED",
                 "task": task_id,
                 "limit": 5
-            }
-        }
+            } } }
     }));
     let listed = extract_tool_text(&jobs_list);
     let jobs = listed
@@ -248,14 +230,14 @@ fn completed_jobs_are_hidden_from_snapshot_hud() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_complete", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "status": "DONE", "summary": "ok", "refs": [] } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "status": "DONE", "summary": "ok", "refs": [] } } }
     }));
 
     let snapshot = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws1", "max_chars": 3000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "workspace": "ws1", "max_chars": 3000 } } }
     }));
     let snap = extract_tool_text(&snapshot);
     let hud_job = snap
@@ -278,16 +260,13 @@ fn tasks_jobs_complete_salvages_refs_from_summary_text() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                 "workspace": "ws1",
                 "title": "Job: salvage proof refs",
                 "prompt": "Do a thing and report proof.",
                 "kind": "codex_cli",
                 "priority": "LOW"
-            }
-        }
+            } } }
     }));
     let created_out = extract_tool_text(&created);
     let job_id = created_out
@@ -305,9 +284,7 @@ fn tasks_jobs_complete_salvages_refs_from_summary_text() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_complete",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "runner_id": "r1",
@@ -315,24 +292,20 @@ fn tasks_jobs_complete_salvages_refs_from_summary_text() {
                 "status": "DONE",
                 "summary": summary,
                 "refs": []
-            }
-        }
+            } } }
     }));
 
     let opened = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "max_events": 20,
                 "include_prompt": false,
                 "include_meta": false
-            }
-        }
+            } } }
     }));
     let opened_out = extract_tool_text(&opened);
     let events = opened_out
@@ -374,16 +347,13 @@ fn macro_fanout_jobs_creates_per_anchor_jobs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Fanout",
                 "task_title": "Investigate large change",
                 "description": "Goal: split into per-anchor jobs.",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text_str(&started);
     let task_id = task_id_from_focus_line(&out).expect("expected focus TASK-* line");
@@ -392,17 +362,14 @@ fn macro_fanout_jobs_creates_per_anchor_jobs() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_fanout_jobs",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.fanout.jobs", "args": {
                 "workspace": "ws1",
                 "task": task_id,
                 "anchors": ["a:core", "a:storage", "a:mcp"],
                 "prompt": "Investigate the change for this anchor and report stable refs.",
                 "job_kind": "codex_cli",
                 "job_priority": "MEDIUM"
-            }
-        }
+            } } }
     }));
     let fanout_out = extract_tool_text(&fanout);
     assert!(
@@ -441,9 +408,7 @@ fn macro_fanout_jobs_creates_per_anchor_jobs() {
             "jsonrpc": "2.0",
             "id": 31,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_jobs_open",
-                "arguments": {
+            "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                     "workspace": "ws1",
                     "job": job_id,
                     "include_prompt": false,
@@ -451,8 +416,7 @@ fn macro_fanout_jobs_creates_per_anchor_jobs() {
                     "include_meta": true,
                     "max_events": 0,
                     "max_chars": 4000
-                }
-            }
+                } } }
         }));
         let opened = extract_tool_text(&job_open);
         assert!(
@@ -483,16 +447,13 @@ fn macro_merge_report_publishes_a_pinned_report() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Merge",
                 "task_title": "Merge delegated results",
                 "description": "Goal: merge job results into one pinned report.",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text_str(&started);
     let task_id = task_id_from_focus_line(&out).expect("expected focus TASK-* line");
@@ -501,17 +462,14 @@ fn macro_merge_report_publishes_a_pinned_report() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_fanout_jobs",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.fanout.jobs", "args": {
                 "workspace": "ws1",
                 "task": task_id,
                 "anchors": ["a:core", "a:storage", "a:mcp"],
                 "prompt": "Investigate and produce refs.",
                 "job_kind": "codex_cli",
                 "job_priority": "MEDIUM"
-            }
-        }
+            } } }
     }));
     let fanout_out = extract_tool_text(&fanout);
     let jobs = fanout_out
@@ -536,9 +494,7 @@ fn macro_merge_report_publishes_a_pinned_report() {
             "jsonrpc": "2.0",
             "id": 10 + idx,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_jobs_complete",
-                "arguments": {
+            "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": {
                     "workspace": "ws1",
                     "job": job_id,
                     "runner_id": "r1",
@@ -546,8 +502,7 @@ fn macro_merge_report_publishes_a_pinned_report() {
                     "status": "DONE",
                     "summary": "ok",
                     "refs": [format!("CARD-{}", idx + 1)]
-                }
-            }
+                } } }
         }));
     }
 
@@ -555,16 +510,13 @@ fn macro_merge_report_publishes_a_pinned_report() {
         "jsonrpc": "2.0",
         "id": 20,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_merge_report",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.merge.report", "args": {
                 "workspace": "ws1",
                 "task": task_id,
                 "jobs": job_ids,
                 "title": "MERGE REPORT — smoke",
                 "pin": true
-            }
-        }
+            } } }
     }));
     let merged_out = extract_tool_text(&merged);
     assert!(
@@ -595,16 +547,13 @@ fn jobs_create_accepts_priority_normal_and_open_include_meta_roundtrips() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                 "workspace": "ws1",
                 "title": "Delegation job",
                 "prompt": "Do a small no-op task.",
                 "priority": "normal",
                 "meta": { "foo": "bar", "n": 1 }
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text(&created);
     assert!(
@@ -635,17 +584,14 @@ fn jobs_create_accepts_priority_normal_and_open_include_meta_roundtrips() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "include_prompt": false,
                 "include_events": false,
                 "include_meta": true,
                 "max_events": 0
-            }
-        }
+            } } }
     }));
     let opened_out = extract_tool_text(&opened);
     assert!(
@@ -681,15 +627,12 @@ fn jobs_report_kind_and_meta_update_and_open_surfaces_them() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                 "workspace": "ws1",
                 "title": "Long job",
                 "prompt": "Do something.",
                 "meta": { "state": "created" }
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text(&created);
     let job_id = out
@@ -706,9 +649,7 @@ fn jobs_report_kind_and_meta_update_and_open_surfaces_them() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_report",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "runner_id": "r1",
@@ -717,8 +658,7 @@ fn jobs_report_kind_and_meta_update_and_open_surfaces_them() {
                 "message": "alive",
                 "percent": 1,
                 "meta": { "state": "running", "slice": 3 }
-            }
-        }
+            } } }
     }));
     let reported = extract_tool_text(&report);
     assert!(
@@ -740,9 +680,7 @@ fn jobs_report_kind_and_meta_update_and_open_surfaces_them() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "include_prompt": false,
@@ -750,8 +688,7 @@ fn jobs_report_kind_and_meta_update_and_open_surfaces_them() {
                 "include_meta": true,
                 "max_events": 5,
                 "max_chars": 4000
-            }
-        }
+            } } }
     }));
     let opened_out = extract_tool_text(&opened);
     assert!(
@@ -795,14 +732,11 @@ fn jobs_message_posts_manager_event_for_queued_and_running_jobs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                 "workspace": "ws1",
                 "title": "Interactive job",
                 "prompt": "Work, but ask questions when blocked."
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text(&created);
     let job_id = out
@@ -817,10 +751,7 @@ fn jobs_message_posts_manager_event_for_queued_and_running_jobs() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_message",
-            "arguments": { "workspace": "ws1", "job": job_id, "message": "manager: start with the cheapest falsifier test" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": { "workspace": "ws1", "job": job_id, "message": "manager: start with the cheapest falsifier test" } } }
     }));
     let msg1_out = extract_tool_text(&msg1);
     assert!(
@@ -847,10 +778,7 @@ fn jobs_message_posts_manager_event_for_queued_and_running_jobs() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_message",
-            "arguments": { "workspace": "ws1", "job": job_id, "message": "manager: confirm the result via a focused test, then report back" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": { "workspace": "ws1", "job": job_id, "message": "manager: confirm the result via a focused test, then report back" } } }
     }));
     let msg2_out = extract_tool_text(&msg2);
     assert!(
@@ -865,17 +793,14 @@ fn jobs_message_posts_manager_event_for_queued_and_running_jobs() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "include_prompt": false,
                 "include_events": true,
                 "max_events": 20,
                 "max_chars": 6000
-            }
-        }
+            } } }
     }));
     let opened_out = extract_tool_text(&opened);
     assert!(
@@ -907,10 +832,7 @@ fn jobs_message_rejects_terminal_jobs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Done job", "prompt": "noop" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Done job", "prompt": "noop" } } }
     }));
     let out = extract_tool_text(&created);
     let job_id = out
@@ -926,14 +848,14 @@ fn jobs_message_rejects_terminal_jobs() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_complete", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "status": "DONE" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "status": "DONE" } } }
     }));
 
     let msg = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_message", "arguments": { "workspace": "ws1", "job": job_id, "message": "manager: late message" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": { "workspace": "ws1", "job": job_id, "message": "manager: late message" } } }
     }));
     let msg_out = extract_tool_text(&msg);
     assert!(
@@ -963,23 +885,20 @@ fn jobs_portal_fmt_lines_renders_list_open_and_message() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "J1", "prompt": "noop" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "J1", "prompt": "noop" } } }
     }));
     let _j2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "J2", "prompt": "noop" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "J2", "prompt": "noop" } } }
     }));
 
     let list_lines = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_list",
-            "arguments": { "workspace": "ws1", "limit": 1, "fmt": "lines" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.list", "args": { "workspace": "ws1", "limit": 1, "fmt": "lines" } } }
     }));
     let list_text = extract_tool_text_str(&list_lines);
     assert!(
@@ -1007,10 +926,7 @@ fn jobs_portal_fmt_lines_renders_list_open_and_message() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_message",
-            "arguments": { "workspace": "ws1", "job": job_id, "message": "manager: hello", "fmt": "lines" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": { "workspace": "ws1", "job": job_id, "message": "manager: hello", "fmt": "lines" } } }
     }));
     let msg_text = extract_tool_text_str(&msg_lines);
     assert!(
@@ -1022,10 +938,7 @@ fn jobs_portal_fmt_lines_renders_list_open_and_message() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": { "workspace": "ws1", "job": job_id, "max_events": 1, "fmt": "lines" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": { "workspace": "ws1", "job": job_id, "max_events": 1, "fmt": "lines" } } }
     }));
     let open_text = extract_tool_text_str(&open_lines);
     assert!(
@@ -1050,15 +963,12 @@ fn tasks_snapshot_marks_job_question_in_state_line() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_delegate",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.delegate", "args": {
                 "workspace": "ws1",
                 "task_title": "DX: job question marker",
                 "description": "Ensure snapshot shows when a job needs manager input.",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     let task_out = extract_tool_text_str(&delegate);
     let task_id = task_id_from_focus_line(&task_out).expect("expected focus TASK-* line");
@@ -1067,7 +977,7 @@ fn tasks_snapshot_marks_job_question_in_state_line() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_list", "arguments": { "workspace": "ws1", "task": task_id, "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.list", "args": { "workspace": "ws1", "task": task_id, "limit": 5 } } }
     }));
     let list_out = extract_tool_text(&jobs_list);
     let job_id = list_out
@@ -1086,17 +996,14 @@ fn tasks_snapshot_marks_job_question_in_state_line() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_report",
-            "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "question", "message": "Need a decision", "refs": [ job_id ] }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "question", "message": "Need a decision", "refs": [ job_id ] } } }
     }));
 
     let snap = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws1", "task": task_id, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "workspace": "ws1", "task": task_id, "fmt": "lines" } } }
     }));
     let snap_text = extract_tool_text_str(&snap);
     let first = snap_text.lines().next().unwrap_or("");
@@ -1115,14 +1022,11 @@ fn jobs_claim_can_reclaim_stale_running_jobs_with_allow_stale() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                 "workspace": "ws1",
                 "title": "Stale job",
                 "prompt": "Do something slow."
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text(&created);
     let job_id = out
@@ -1142,16 +1046,13 @@ fn jobs_claim_can_reclaim_stale_running_jobs_with_allow_stale() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_claim",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": {
                 "workspace": "ws1",
                 "job": job_id,
                 "runner_id": "r2",
                 "allow_stale": true,
                 "lease_ttl_ms": 1000
-            }
-        }
+            } } }
     }));
     let reclaimed_out = extract_tool_text(&reclaimed);
     assert!(
@@ -1197,14 +1098,11 @@ fn jobs_report_heartbeat_is_coalesced_to_avoid_spam() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                 "workspace": "ws1",
                 "title": "Heartbeat coalesce",
                 "prompt": "Do something slow."
-            }
-        }
+            } } }
     }));
     let out = extract_tool_text(&created);
     let job_id = out
@@ -1221,29 +1119,20 @@ fn jobs_report_heartbeat_is_coalesced_to_avoid_spam() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_report",
-            "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "heartbeat", "message": "hb1" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "heartbeat", "message": "hb1" } } }
     }));
     let _hb2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_report",
-            "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "heartbeat", "message": "hb2" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "heartbeat", "message": "hb2" } } }
     }));
 
     let opened = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": { "workspace": "ws1", "job": job_id, "include_events": true, "max_events": 50, "max_chars": 8000 }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": { "workspace": "ws1", "job": job_id, "include_events": true, "max_events": 50, "max_chars": 8000 } } }
     }));
     let opened_out = extract_tool_text(&opened);
     assert!(
@@ -1286,10 +1175,7 @@ fn jobs_open_supports_before_seq_paging() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Paged job", "prompt": "Emit events." }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Paged job", "prompt": "Emit events." } } }
     }));
     let out = extract_tool_text(&created);
     let job_id = out
@@ -1307,7 +1193,7 @@ fn jobs_open_supports_before_seq_paging() {
             "jsonrpc": "2.0",
             "id": 10 + idx as i64,
             "method": "tools/call",
-            "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": msg } }
+            "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": msg } } }
         }));
     }
 
@@ -1315,10 +1201,7 @@ fn jobs_open_supports_before_seq_paging() {
         "jsonrpc": "2.0",
         "id": 20,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": { "workspace": "ws1", "job": job_id, "include_events": true, "max_events": 2, "max_chars": 8000 }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": { "workspace": "ws1", "job": job_id, "include_events": true, "max_events": 2, "max_chars": 8000 } } }
     }));
     let page1_out = extract_tool_text(&page1);
     assert!(
@@ -1353,10 +1236,7 @@ fn jobs_open_supports_before_seq_paging() {
         "jsonrpc": "2.0",
         "id": 21,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": { "workspace": "ws1", "job": job_id, "include_events": true, "max_events": 2, "before_seq": before_seq, "max_chars": 8000 }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": { "workspace": "ws1", "job": job_id, "include_events": true, "max_events": 2, "before_seq": before_seq, "max_chars": 8000 } } }
     }));
     let page2_out = extract_tool_text(&page2);
     assert!(
@@ -1392,10 +1272,7 @@ fn jobs_radar_includes_attention_and_last_event() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Radar job", "prompt": "noop" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Radar job", "prompt": "noop" } } }
     }));
     let created_out = extract_tool_text(&created);
     let job_id = created_out
@@ -1411,7 +1288,7 @@ fn jobs_radar_includes_attention_and_last_event() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "question", "message": "need manager answer" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "question", "message": "need manager answer" } } }
     }));
     let question_out = extract_tool_text(&question);
     let question_seq = question_out
@@ -1426,7 +1303,7 @@ fn jobs_radar_includes_attention_and_last_event() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10 } } }
     }));
     let radar_out = extract_tool_text(&radar);
     let jobs = radar_out
@@ -1460,7 +1337,7 @@ fn jobs_radar_includes_attention_and_last_event() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10, "fmt": "lines" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10, "fmt": "lines" } } }
     }));
     let radar_text = extract_tool_text_str(&radar_lines);
     let job_line = radar_text
@@ -1499,7 +1376,7 @@ fn jobs_radar_defaults_to_lines_in_daily_toolset() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "J1", "prompt": "noop" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "J1", "prompt": "noop" } } }
     }));
 
     // In the daily toolset, jobs_radar is an inbox view and should default to BM-L1 lines.
@@ -1507,7 +1384,7 @@ fn jobs_radar_defaults_to_lines_in_daily_toolset() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10 } } }
     }));
     let radar_lines_out = extract_tool_text(&radar_lines);
     let radar_lines_text = radar_lines_out
@@ -1535,10 +1412,7 @@ fn jobs_tail_increments_after_seq_and_is_ascending() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Tail job", "prompt": "noop" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Tail job", "prompt": "noop" } } }
     }));
     let created_out = extract_tool_text(&created);
     let job_id = created_out
@@ -1554,20 +1428,20 @@ fn jobs_tail_increments_after_seq_and_is_ascending() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p1" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p1" } } }
     }));
     let _p2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p2" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p2" } } }
     }));
 
     let page1 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_tail", "arguments": { "workspace": "ws1", "job": job_id, "after_seq": 0, "limit": 2 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.tail", "args": { "workspace": "ws1", "job": job_id, "after_seq": 0, "limit": 2 } } }
     }));
     let page1_out = extract_tool_text(&page1);
     let next_after_seq = page1_out
@@ -1600,7 +1474,7 @@ fn jobs_tail_increments_after_seq_and_is_ascending() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_tail", "arguments": { "workspace": "ws1", "job": job_id, "after_seq": next_after_seq, "limit": 50 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.tail", "args": { "workspace": "ws1", "job": job_id, "after_seq": next_after_seq, "limit": 50 } } }
     }));
     let page2_out = extract_tool_text(&page2);
     let events2 = page2_out
@@ -1623,10 +1497,7 @@ fn jobs_radar_and_tail_fmt_lines_render_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Lines job", "prompt": "noop" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Lines job", "prompt": "noop" } } }
     }));
     let created_out = extract_tool_text(&created);
     let job_id = created_out
@@ -1641,7 +1512,7 @@ fn jobs_radar_and_tail_fmt_lines_render_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5 } } }
     }));
     let radar_text = extract_tool_text_str(&radar_lines);
     assert!(
@@ -1657,7 +1528,7 @@ fn jobs_radar_and_tail_fmt_lines_render_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_tail", "arguments": { "workspace": "ws1", "job": job_id, "after_seq": 0, "fmt": "lines" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.tail", "args": { "workspace": "ws1", "job": job_id, "after_seq": 0, "fmt": "lines" } } }
     }));
     let tail_text = extract_tool_text_str(&tail_lines);
     assert!(
@@ -1682,10 +1553,7 @@ fn jobs_requeue_moves_terminal_job_back_to_queued() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Retry job", "prompt": "Fail once." }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Retry job", "prompt": "Fail once." } } }
     }));
     let out = extract_tool_text(&created);
     let job_id = out
@@ -1701,14 +1569,14 @@ fn jobs_requeue_moves_terminal_job_back_to_queued() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_complete", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "status": "FAILED", "summary": "failed" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "status": "FAILED", "summary": "failed" } } }
     }));
 
     let requeued = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_requeue", "arguments": { "workspace": "ws1", "job": job_id, "reason": "try again" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.requeue", "args": { "workspace": "ws1", "job": job_id, "reason": "try again" } } }
     }));
     let requeued_out = extract_tool_text(&requeued);
     assert!(
@@ -1743,10 +1611,7 @@ fn jobs_radar_needs_manager_is_sticky_until_manager_message() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Sticky question", "prompt": "noop" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Sticky question", "prompt": "noop" } } }
     }));
     let created_out = extract_tool_text(&created);
     let job_id = created_out
@@ -1763,10 +1628,7 @@ fn jobs_radar_needs_manager_is_sticky_until_manager_message() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_report",
-            "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "question", "message": "Need a decision" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "question", "message": "Need a decision" } } }
     }));
 
     // Agent keeps working after asking — the question should remain visible to the manager.
@@ -1774,17 +1636,14 @@ fn jobs_radar_needs_manager_is_sticky_until_manager_message() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_report",
-            "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "Continuing while waiting" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "Continuing while waiting" } } }
     }));
 
     let radar1 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10 } } }
     }));
     let radar1_out = extract_tool_text(&radar1);
     let needs_manager_1 = radar1_out
@@ -1808,17 +1667,14 @@ fn jobs_radar_needs_manager_is_sticky_until_manager_message() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_message",
-            "arguments": { "workspace": "ws1", "job": job_id, "message": "Proceed with option A" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": { "workspace": "ws1", "job": job_id, "message": "Proceed with option A" } } }
     }));
 
     let radar2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10 } } }
     }));
     let radar2_out = extract_tool_text(&radar2);
     let needs_manager_2 = radar2_out

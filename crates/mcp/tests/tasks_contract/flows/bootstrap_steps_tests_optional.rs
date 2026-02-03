@@ -11,17 +11,14 @@ fn tasks_bootstrap_allows_steps_without_tests() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_optional_tests",
                 "plan_title": "Plan Optional Tests",
                 "task_title": "Task Optional Tests",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     assert_eq!(
@@ -38,9 +35,7 @@ fn tasks_macro_start_allows_steps_without_tests() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_macro_optional_tests",
                 "plan_title": "Plan Macro Optional Tests",
                 "task_title": "Task Macro Optional Tests",
@@ -48,8 +43,7 @@ fn tasks_macro_start_allows_steps_without_tests() {
                     { "title": "S1", "success_criteria": ["c1"] }
                 ],
                 "resume_max_chars": 2000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&started).starts_with("ERROR:"),
@@ -60,10 +54,7 @@ fn tasks_macro_start_allows_steps_without_tests() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_focus_get",
-            "arguments": { "workspace": "ws_macro_optional_tests" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws_macro_optional_tests" } } }
     }));
     let focus_text = extract_tool_text(&focus);
     let focus_id = focus_text

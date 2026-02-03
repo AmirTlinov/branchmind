@@ -11,15 +11,12 @@ fn branchmind_macro_branch_note_supports_template() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "macro_branch_note",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.idea.branch.create", "args": {
                 "workspace": "ws_note_tpl",
                 "name": "initiative/template",
                 "template": "initiative",
                 "goal": "Make the tool indispensable for long projects"
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&macro_note).starts_with("ERROR:"),
@@ -30,7 +27,7 @@ fn branchmind_macro_branch_note_supports_template() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "branch_list", "arguments": { "workspace": "ws_note_tpl" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.list", "args": { "workspace": "ws_note_tpl" } } }
     }));
     let branches_text = extract_tool_text(&branches);
     let has_branch = branches_text
@@ -57,14 +54,11 @@ fn branchmind_macro_branch_note_can_append_without_creating_branch() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "macro_branch_note",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.idea.branch.create", "args": {
                 "workspace": "ws_note_only",
                 "name": "alt",
                 "content": "seed"
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&seed).starts_with("ERROR:"),
@@ -75,7 +69,7 @@ fn branchmind_macro_branch_note_can_append_without_creating_branch() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "branch_list", "arguments": { "workspace": "ws_note_only" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.list", "args": { "workspace": "ws_note_only" } } }
     }));
     let branches_text = extract_tool_text(&branches);
     let has_alt = branches_text
@@ -97,14 +91,11 @@ fn branchmind_macro_branch_note_can_append_without_creating_branch() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "macro_branch_note",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.idea.branch.create", "args": {
                 "workspace": "ws_note_only",
                 "from": "main",
                 "content": "hello"
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&note_only).starts_with("ERROR:"),
@@ -145,26 +136,20 @@ fn branchmind_macro_branch_note_unknown_from_is_recoverable_in_full() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "macro_branch_note",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.idea.branch.create", "args": {
                 "name": "seed",
                 "content": "seed"
-            }
-        }
+            } } }
     }));
 
     let bad = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "macro_branch_note",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.idea.branch.create", "args": {
                 "from": "does-not-exist",
                 "content": "note-only with checkout switch smoke"
-            }
-        }
+            } } }
     }));
 
     let out = extract_tool_text(&bad);
@@ -233,14 +218,11 @@ fn branchmind_macro_branch_note_reuses_existing_branch_when_name_exists() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "macro_branch_note",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.idea.branch.create", "args": {
                 "workspace": "ws_note_reuse",
                 "name": "initiative/reuse",
                 "content": "first"
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&first).starts_with("ERROR:"),
@@ -266,14 +248,11 @@ fn branchmind_macro_branch_note_reuses_existing_branch_when_name_exists() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "macro_branch_note",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.idea.branch.create", "args": {
                 "workspace": "ws_note_reuse",
                 "name": "initiative/reuse",
                 "content": "second"
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&second).starts_with("ERROR:"),

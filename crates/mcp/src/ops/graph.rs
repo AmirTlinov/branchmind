@@ -2,11 +2,11 @@
 
 use crate::ops::{
     BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Safety, SchemaSource, Stability, Tier,
-    ToolName, legacy_to_cmd_segments,
+    ToolName, name_to_cmd_segments,
 };
 
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
-    for def in crate::tools::tool_definitions(crate::Toolset::Full) {
+    for def in crate::handlers::handler_definitions() {
         let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -14,7 +14,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             continue;
         }
         let suffix = &name["graph_".len()..];
-        let cmd = format!("graph.{}", legacy_to_cmd_segments(suffix));
+        let cmd = format!("graph.{}", name_to_cmd_segments(suffix));
 
         let mut op_aliases = Vec::<String>::new();
         if matches!(suffix, "query" | "apply" | "merge") {
@@ -40,9 +40,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 idempotent: suffix == "query",
             },
             budget: BudgetPolicy::standard(),
-            schema: SchemaSource::Legacy,
+            schema: SchemaSource::Handler,
             op_aliases,
-            legacy_tool: Some(name.to_string()),
+            handler_name: Some(name.to_string()),
             handler: None,
         });
     }

@@ -29,7 +29,7 @@ fn tasks_snapshot_budget_truncation_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Budget Refs Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Budget Refs Task" } } }
     }));
 
     let huge_note = "n".repeat(40_000);
@@ -37,14 +37,11 @@ fn tasks_snapshot_budget_truncation_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_budget_refs",
                 "path": "s:0",
                 "note": huge_note
-            }
-        }
+            } } }
     }));
 
     let huge_text = "d".repeat(60_000);
@@ -52,16 +49,13 @@ fn tasks_snapshot_budget_truncation_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "think_add_decision",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.decision", "args": {
                 "workspace": "ws_budget_refs",
                 "card": {
                     "title": "Decision: huge content",
                     "text": huge_text
                 }
-            }
-        }
+            } } }
     }));
 
     // Opt into a tight max_chars budget so the resume must truncate, but should still emit at
@@ -70,7 +64,7 @@ fn tasks_snapshot_budget_truncation_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000, "refs": true, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "max_chars": 2000, "refs": true, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

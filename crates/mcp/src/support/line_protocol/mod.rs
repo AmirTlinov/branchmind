@@ -106,28 +106,28 @@ pub(crate) fn apply_portal_line_format(
     }
 }
 
-fn portalize_legacy_tool_call(
-    legacy_tool: &str,
+fn portalize_handler_name_call(
+    handler_name: &str,
     args_value: Option<&Value>,
     outer_workspace: Option<&str>,
     omit_workspace: bool,
 ) -> Option<String> {
-    let legacy_tool = legacy_tool.trim();
-    if legacy_tool.is_empty() {
+    let handler_name = handler_name.trim();
+    if handler_name.is_empty() {
         return None;
     }
     // Already a v1 portal tool (or a method name like tools/list) — render directly.
-    if crate::tools_v1::is_v1_tool(legacy_tool) {
+    if crate::tools_v1::is_v1_tool(handler_name) {
         let args_str = args_value.and_then(render_kv_args).unwrap_or_default();
         return Some(if args_str.is_empty() {
-            legacy_tool.to_string()
+            handler_name.to_string()
         } else {
-            format!("{legacy_tool} {args_str}")
+            format!("{handler_name} {args_str}")
         });
     }
 
     let registry = crate::ops::CommandRegistry::global();
-    let spec = registry.find_by_legacy_tool(legacy_tool)?;
+    let spec = registry.find_by_handler_name(handler_name)?;
 
     let mut inner = args_value
         .and_then(|v| v.as_object())
@@ -135,7 +135,7 @@ fn portalize_legacy_tool_call(
         .unwrap_or_default();
 
     // Portal UX: default checkpoint set when omitted (copy/paste-safe discipline).
-    if legacy_tool == "tasks_macro_close_step" && !inner.contains_key("checkpoints") {
+    if handler_name == "tasks_macro_close_step" && !inner.contains_key("checkpoints") {
         inner.insert("checkpoints".to_string(), Value::String("gate".to_string()));
     }
 
@@ -1160,7 +1160,7 @@ fn render_tasks_resume_lines(
 
     let outer_ws = args.get("workspace").and_then(|v| v.as_str());
     let action_cmd = action_tool
-        .and_then(|tool| portalize_legacy_tool_call(tool, action_args, outer_ws, omit_workspace));
+        .and_then(|tool| portalize_handler_name_call(tool, action_args, outer_ws, omit_workspace));
 
     let prep_tool = resume
         .get("capsule")
@@ -1177,7 +1177,7 @@ fn render_tasks_resume_lines(
         .and_then(|v| v.get("prep_action"))
         .and_then(|v| v.get("args").or_else(|| v.get("args_hint")));
     let prep_cmd = prep_tool
-        .and_then(|tool| portalize_legacy_tool_call(tool, prep_args, outer_ws, omit_workspace));
+        .and_then(|tool| portalize_handler_name_call(tool, prep_args, outer_ws, omit_workspace));
 
     let map_tool = resume
         .get("capsule")
@@ -1194,7 +1194,7 @@ fn render_tasks_resume_lines(
         .and_then(|v| v.get("map_action"))
         .and_then(|v| v.get("args").or_else(|| v.get("args_hint")));
     let map_cmd = map_tool
-        .and_then(|tool| portalize_legacy_tool_call(tool, map_args, outer_ws, omit_workspace));
+        .and_then(|tool| portalize_handler_name_call(tool, map_args, outer_ws, omit_workspace));
 
     let first_open_path = opt_str(
         resume
@@ -1254,7 +1254,7 @@ fn render_tasks_resume_lines(
         // Continuation should be copy/paste-ready without asking the agent to "decode" cursors.
         // Prefer the read-only snapshot entrypoint for paging through memory.
         let more_value = Value::Object(more_args.clone());
-        more_cmd = portalize_legacy_tool_call(
+        more_cmd = portalize_handler_name_call(
             "tasks_snapshot",
             Some(&more_value),
             outer_ws,
@@ -1760,7 +1760,7 @@ fn render_tasks_resume_lines(
         }
         if let Some(inner) = more_cmd_inner_args.as_ref() {
             let inner_value = Value::Object(inner.clone());
-            more_cmd = portalize_legacy_tool_call(
+            more_cmd = portalize_handler_name_call(
                 "tasks_snapshot",
                 Some(&inner_value),
                 outer_ws,

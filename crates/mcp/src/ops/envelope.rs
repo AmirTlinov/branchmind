@@ -172,13 +172,13 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
 
     let mut response = if spec.handler.is_some() {
         crate::ops::dispatch_custom(server, spec, &env)
-    } else if let Some(legacy_tool) = &spec.legacy_tool {
-        // v1 envelope keeps `workspace` outside of `args`, but many legacy tools still expect it
+    } else if let Some(handler_name) = &spec.handler_name {
+        // v1 envelope keeps `workspace` outside of `args`, but handler contracts still expect it
         // inside the args object. To preserve compatibility (and enable default-workspace DX),
-        // we inject workspace into legacy args when missing.
-        let mut legacy_args = env.args.clone();
+        // we inject workspace into handler args when missing.
+        let mut handler_args = env.args.clone();
         if let Some(workspace) = env.workspace.as_deref()
-            && let Some(obj) = legacy_args.as_object_mut()
+            && let Some(obj) = handler_args.as_object_mut()
             && !obj.contains_key("workspace")
         {
             obj.insert(
@@ -187,19 +187,19 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
             );
         }
 
-        let legacy_resp = crate::tools::dispatch_tool(server, legacy_tool, legacy_args)
+        let handler_resp = crate::handlers::dispatch_handler(server, handler_name, handler_args)
             .unwrap_or_else(|| {
                 OpResponse::error(
                     env.cmd.clone(),
                     OpError {
                         code: "INTERNAL_ERROR".to_string(),
-                        message: format!("Legacy dispatch failed for {legacy_tool}"),
-                        recovery: Some("Check registry mapping for this cmd.".to_string()),
+                        message: format!("Handler dispatch failed for {handler_name}"),
+                        recovery: Some("Check handler registry wiring for this cmd.".to_string()),
                     },
                 )
                 .into_value()
             });
-        crate::ops::legacy_to_op_response(&env.cmd, env.workspace.as_deref(), legacy_resp)
+        crate::ops::handler_to_op_response(&env.cmd, env.workspace.as_deref(), handler_resp)
     } else {
         OpResponse::error(
             env.cmd.clone(),

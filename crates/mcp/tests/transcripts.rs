@@ -25,7 +25,7 @@ fn transcripts_search_finds_hits_and_open_reads_window() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts" } } }
     }));
 
     let root_dir = make_temp_dir("root");
@@ -41,14 +41,14 @@ fn transcripts_search_finds_hits_and_open_reads_window() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_search", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.search", "args": {
             "workspace": "ws_transcripts",
             "root_dir": root_dir.to_string_lossy(),
             "query": "branchmind",
             "cwd_prefix": "",
             "hits_limit": 5,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let search_text = extract_tool_text(&search);
     assert!(
@@ -89,14 +89,14 @@ fn transcripts_search_finds_hits_and_open_reads_window() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "transcripts_open", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.open", "args": {
             "workspace": "ws_transcripts",
             "root_dir": root_dir.to_string_lossy(),
             "ref": { "path": ref_path, "line": ref_line },
             "before_lines": 0,
             "after_lines": 0,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let open_text = extract_tool_text(&open);
     assert!(
@@ -134,24 +134,21 @@ fn transcripts_open_suggests_capture_note_and_is_step_aware_when_focused() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_open_capture" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_open_capture" } } }
     }));
 
     let bootstrap = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_transcripts_open_capture",
                 "plan_title": "Plan",
                 "task_title": "Task",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": ["b1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -166,10 +163,10 @@ fn transcripts_open_suggests_capture_note_and_is_step_aware_when_focused() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.set", "args": {
             "workspace": "ws_transcripts_open_capture",
             "task": task_id
-        } }
+        } } }
     }));
 
     let root_dir = make_temp_dir("root_open_capture");
@@ -185,14 +182,14 @@ fn transcripts_open_suggests_capture_note_and_is_step_aware_when_focused() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "transcripts_open", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.open", "args": {
             "workspace": "ws_transcripts_open_capture",
             "root_dir": root_dir.to_string_lossy(),
             "ref": { "path": "rollout-open-capture.jsonl", "line": 2 },
             "before_lines": 1,
             "after_lines": 1,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let open_text = extract_tool_text(&open);
 
@@ -240,7 +237,7 @@ fn transcripts_digest_summary_picks_summary_messages() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_digest" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_digest" } } }
     }));
 
     let root_dir = make_temp_dir("root_digest");
@@ -255,14 +252,14 @@ fn transcripts_digest_summary_picks_summary_messages() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_digest",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": "",
             "mode": "summary",
             "max_items": 5,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -294,7 +291,7 @@ fn transcripts_digest_default_max_items_is_low_noise() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_digest_defaults" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_digest_defaults" } } }
     }));
 
     let root_dir = make_temp_dir("root_digest_defaults");
@@ -315,13 +312,13 @@ fn transcripts_digest_default_max_items_is_low_noise() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_digest_defaults",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": "",
             "mode": "summary",
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -354,7 +351,7 @@ fn transcripts_digest_tight_scan_budget_still_reaches_older_summary() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_digest_budget_tail" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_digest_budget_tail" } } }
     }));
 
     let root_dir = make_temp_dir("root_digest_budget_tail");
@@ -391,7 +388,7 @@ fn transcripts_digest_tight_scan_budget_still_reaches_older_summary() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_digest_budget_tail",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": "/tmp/project",
@@ -400,7 +397,7 @@ fn transcripts_digest_tight_scan_budget_still_reaches_older_summary() {
             "max_bytes_total": 150000,
             "max_items": 3,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -447,7 +444,7 @@ fn transcripts_digest_deep_tail_finds_summary_when_file_end_is_noise() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_deep_tail" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_deep_tail" } } }
     }));
 
     let root_dir = make_temp_dir("root_deep_tail");
@@ -473,7 +470,7 @@ fn transcripts_digest_deep_tail_finds_summary_when_file_end_is_noise() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_deep_tail",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": "",
@@ -482,7 +479,7 @@ fn transcripts_digest_deep_tail_finds_summary_when_file_end_is_noise() {
             "max_bytes_total": 4 * 1024 * 1024,
             "max_items": 3,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -517,7 +514,7 @@ fn transcripts_digest_emits_byte_ref_for_huge_files_and_open_accepts_it() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_byte_ref" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_byte_ref" } } }
     }));
 
     let root_dir = make_temp_dir("root_byte_ref");
@@ -543,7 +540,7 @@ fn transcripts_digest_emits_byte_ref_for_huge_files_and_open_accepts_it() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_byte_ref",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": "",
@@ -552,7 +549,7 @@ fn transcripts_digest_emits_byte_ref_for_huge_files_and_open_accepts_it() {
             "max_bytes_total": 180000,
             "max_items": 3,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -584,14 +581,14 @@ fn transcripts_digest_emits_byte_ref_for_huge_files_and_open_accepts_it() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "transcripts_open", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.open", "args": {
             "workspace": "ws_transcripts_byte_ref",
             "root_dir": root_dir.to_string_lossy(),
             "ref": { "path": "rollout-huge.jsonl", "byte": byte },
             "before_lines": 1,
             "after_lines": 1,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let open_text = extract_tool_text(&open);
     assert!(
@@ -626,7 +623,7 @@ fn transcripts_digest_empty_under_scan_budget_emits_warning_and_retry_suggestion
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_digest_budget" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_digest_budget" } } }
     }));
 
     let root_dir = make_temp_dir("root_digest_budget");
@@ -640,7 +637,7 @@ fn transcripts_digest_empty_under_scan_budget_emits_warning_and_retry_suggestion
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_digest_budget",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": "",
@@ -649,7 +646,7 @@ fn transcripts_digest_empty_under_scan_budget_emits_warning_and_retry_suggestion
             "max_bytes_total": 1,
             "max_items": 3,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -697,7 +694,7 @@ fn transcripts_digest_matches_cwd_prefix_via_canonicalization() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_canon" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_canon" } } }
     }));
 
     let root_dir = make_temp_dir("root_canon");
@@ -727,14 +724,14 @@ fn transcripts_digest_matches_cwd_prefix_via_canonicalization() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_canon",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": canonical_prefix,
             "mode": "last",
             "max_items": 5,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -761,7 +758,7 @@ fn transcripts_digest_matches_cwd_prefix_from_message_hints() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_hints" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_hints" } } }
     }));
 
     let root_dir = make_temp_dir("root_hints");
@@ -788,14 +785,14 @@ fn transcripts_digest_matches_cwd_prefix_from_message_hints() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_digest", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.digest", "args": {
             "workspace": "ws_transcripts_hints",
             "root_dir": root_dir.to_string_lossy(),
             "cwd_prefix": canonical_prefix,
             "mode": "last",
             "max_items": 5,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let digest_text = extract_tool_text(&digest);
     assert!(
@@ -820,7 +817,7 @@ fn transcripts_open_rejects_path_traversal() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_transcripts_traversal" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_transcripts_traversal" } } }
     }));
 
     let root_dir = make_temp_dir("root_traversal");
@@ -828,12 +825,12 @@ fn transcripts_open_rejects_path_traversal() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "transcripts_open", "arguments": {
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.transcripts.open", "args": {
             "workspace": "ws_transcripts_traversal",
             "root_dir": root_dir.to_string_lossy(),
             "ref": { "path": "../evil.jsonl", "line": 1 },
             "max_chars": 2000
-        } }
+        } } }
     }));
     let open_text = extract_tool_text(&open);
     assert!(

@@ -12,17 +12,14 @@ fn tasks_resume_super_smart_includes_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_step_scoped",
                 "plan_title": "Plan Step Scoped",
                 "task_title": "Task Step Scoped",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -37,15 +34,12 @@ fn tasks_resume_super_smart_includes_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_step_scoped",
                 "task": task_id.clone(),
                 "view": "smart",
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let initial_text = extract_tool_text(&initial);
     let step_id = initial_text
@@ -61,9 +55,7 @@ fn tasks_resume_super_smart_includes_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_scoped",
                 "target": task_id.clone(),
                 "step": step_id,
@@ -73,24 +65,20 @@ fn tasks_resume_super_smart_includes_step_scoped_cards() {
                     "title": "Step scoped note",
                     "text": "This note should surface in smart view via step-scoping"
                 }
-            }
-        }
+            } } }
     }));
 
     let resume = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_step_scoped",
                 "task": task_id,
                 "view": "smart",
                 "cards_limit": 1,
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let resume_text = extract_tool_text(&resume);
     let result = resume_text.get("result").expect("result");
@@ -117,17 +105,14 @@ fn think_card_step_focus_resolves_first_open_step() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_step_focus",
                 "plan_title": "Plan Step Focus",
                 "task_title": "Task Step Focus",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     } ));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -142,9 +127,7 @@ fn think_card_step_focus_resolves_first_open_step() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_focus",
                 "target": task_id.clone(),
                 "step": "focus",
@@ -154,24 +137,20 @@ fn think_card_step_focus_resolves_first_open_step() {
                     "title": "Focus step note",
                     "text": "This note should be attached to the first open step via step=focus"
                 }
-            }
-        }
+            } } }
     } ));
 
     let resume = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 12,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_step_focus",
                 "task": task_id,
                 "view": "smart",
                 "cards_limit": 1,
                 "max_chars": 8000
-            }
-        }
+            } } }
     } ));
     let resume_text = extract_tool_text(&resume);
     let result = resume_text.get("result").expect("result");
@@ -195,17 +174,14 @@ fn think_query_step_focus_filters_to_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 20,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_step_query",
                 "plan_title": "Plan Step Query",
                 "task_title": "Task Step Query",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let task_id = extract_tool_text(&bootstrap)
         .get("result")
@@ -219,9 +195,7 @@ fn think_query_step_focus_filters_to_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 21,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_query",
                 "target": task_id.clone(),
                 "step": "focus",
@@ -231,17 +205,14 @@ fn think_query_step_focus_filters_to_step_scoped_cards() {
                     "title": "Step only",
                     "text": "This card is step-scoped via step=focus"
                 }
-            }
-        }
+            } } }
     }));
 
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 22,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_query",
                 "target": task_id.clone(),
                 "card": {
@@ -250,25 +221,21 @@ fn think_query_step_focus_filters_to_step_scoped_cards() {
                     "title": "Global only",
                     "text": "This card is NOT step-scoped"
                 }
-            }
-        }
+            } } }
     }));
 
     let query = server.request(json!({
         "jsonrpc": "2.0",
         "id": 23,
         "method": "tools/call",
-        "params": {
-            "name": "think_query",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.query", "args": {
                 "workspace": "ws_step_query",
                 "target": task_id,
                 "types": "note",
                 "step": "focus",
                 "limit": 50,
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let query_text = extract_tool_text(&query);
     let cards = query_text
@@ -303,17 +270,14 @@ fn think_watch_step_focus_filters_frontier_and_candidates() {
         "jsonrpc": "2.0",
         "id": 30,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_step_watch",
                 "plan_title": "Plan Step Watch",
                 "task_title": "Task Step Watch",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let task_id = extract_tool_text(&bootstrap)
         .get("result")
@@ -327,9 +291,7 @@ fn think_watch_step_focus_filters_frontier_and_candidates() {
         "jsonrpc": "2.0",
         "id": 31,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_watch",
                 "target": task_id.clone(),
                 "step": "focus",
@@ -339,17 +301,14 @@ fn think_watch_step_focus_filters_frontier_and_candidates() {
                     "title": "H1 step",
                     "text": "Step-scoped hypothesis"
                 }
-            }
-        }
+            } } }
     }));
 
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 32,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_watch",
                 "target": task_id.clone(),
                 "card": {
@@ -358,24 +317,20 @@ fn think_watch_step_focus_filters_frontier_and_candidates() {
                     "title": "H1 global",
                     "text": "Non-step-scoped hypothesis"
                 }
-            }
-        }
+            } } }
     }));
 
     let watch = server.request(json!({
         "jsonrpc": "2.0",
         "id": 33,
         "method": "tools/call",
-        "params": {
-            "name": "think_watch",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.watch", "args": {
                 "workspace": "ws_step_watch",
                 "target": task_id,
                 "step": "focus",
                 "limit_candidates": 20,
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let watch_text = extract_tool_text(&watch);
 
@@ -441,17 +396,14 @@ fn think_frontier_step_focus_filters_to_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 40,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_step_frontier",
                 "plan_title": "Plan Step Frontier",
                 "task_title": "Task Step Frontier",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let task_id = extract_tool_text(&bootstrap)
         .get("result")
@@ -465,9 +417,7 @@ fn think_frontier_step_focus_filters_to_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 41,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_frontier",
                 "target": task_id.clone(),
                 "step": "focus",
@@ -477,17 +427,14 @@ fn think_frontier_step_focus_filters_to_step_scoped_cards() {
                     "title": "H2 step",
                     "text": "Step-scoped hypothesis"
                 }
-            }
-        }
+            } } }
     }));
 
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 42,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_frontier",
                 "target": task_id.clone(),
                 "card": {
@@ -496,23 +443,19 @@ fn think_frontier_step_focus_filters_to_step_scoped_cards() {
                     "title": "H2 global",
                     "text": "Non-step-scoped hypothesis"
                 }
-            }
-        }
+            } } }
     }));
 
     let frontier = server.request(json!({
         "jsonrpc": "2.0",
         "id": 43,
         "method": "tools/call",
-        "params": {
-            "name": "think_frontier",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.frontier", "args": {
                 "workspace": "ws_step_frontier",
                 "target": task_id,
                 "step": "focus",
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let frontier_text = extract_tool_text(&frontier);
     let hypotheses = frontier_text
@@ -542,17 +485,14 @@ fn think_pack_step_focus_filters_candidates_to_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 50,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_step_pack",
                 "plan_title": "Plan Step Pack",
                 "task_title": "Task Step Pack",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let task_id = extract_tool_text(&bootstrap)
         .get("result")
@@ -566,9 +506,7 @@ fn think_pack_step_focus_filters_candidates_to_step_scoped_cards() {
         "jsonrpc": "2.0",
         "id": 51,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_pack",
                 "target": task_id.clone(),
                 "step": "focus",
@@ -578,17 +516,14 @@ fn think_pack_step_focus_filters_candidates_to_step_scoped_cards() {
                     "title": "N1 step",
                     "text": "Step-scoped note"
                 }
-            }
-        }
+            } } }
     }));
 
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 52,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_pack",
                 "target": task_id.clone(),
                 "card": {
@@ -597,24 +532,20 @@ fn think_pack_step_focus_filters_candidates_to_step_scoped_cards() {
                     "title": "N1 global",
                     "text": "Non-step-scoped note"
                 }
-            }
-        }
+            } } }
     }));
 
     let pack = server.request(json!({
         "jsonrpc": "2.0",
         "id": 53,
         "method": "tools/call",
-        "params": {
-            "name": "think_pack",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pack", "args": {
                 "workspace": "ws_step_pack",
                 "target": task_id,
                 "step": "focus",
                 "limit_candidates": 50,
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let pack_text = extract_tool_text(&pack);
     let candidates = pack_text
@@ -643,17 +574,14 @@ fn think_next_step_focus_selects_step_scoped_candidate() {
         "jsonrpc": "2.0",
         "id": 60,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_step_next",
                 "plan_title": "Plan Step Next",
                 "task_title": "Task Step Next",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let task_id = extract_tool_text(&bootstrap)
         .get("result")
@@ -667,9 +595,7 @@ fn think_next_step_focus_selects_step_scoped_candidate() {
         "jsonrpc": "2.0",
         "id": 61,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_next",
                 "target": task_id.clone(),
                 "step": "focus",
@@ -679,8 +605,7 @@ fn think_next_step_focus_selects_step_scoped_candidate() {
                     "title": "Q1 step",
                     "text": "Step-scoped question"
                 }
-            }
-        }
+            } } }
     }));
 
     // Create a newer global question that should win without step filtering.
@@ -688,9 +613,7 @@ fn think_next_step_focus_selects_step_scoped_candidate() {
         "jsonrpc": "2.0",
         "id": 62,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_step_next",
                 "target": task_id.clone(),
                 "card": {
@@ -699,23 +622,19 @@ fn think_next_step_focus_selects_step_scoped_candidate() {
                     "title": "Q1 global",
                     "text": "Non-step-scoped question"
                 }
-            }
-        }
+            } } }
     }));
 
     let next = server.request(json!({
         "jsonrpc": "2.0",
         "id": 63,
         "method": "tools/call",
-        "params": {
-            "name": "think_next",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.next", "args": {
                 "workspace": "ws_step_next",
                 "target": task_id,
                 "step": "focus",
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let next_text = extract_tool_text(&next);
     let candidate_id = next_text

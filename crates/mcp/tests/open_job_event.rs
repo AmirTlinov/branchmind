@@ -16,14 +16,11 @@ fn open_job_event_ref_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                 "workspace": "ws_open_job_event",
                 "title": "Open Job Event",
                 "prompt": "Emit events"
-            }
-        }
+            } } }
     }));
     let created_out = extract_tool_text(&created);
     assert!(
@@ -46,10 +43,7 @@ fn open_job_event_ref_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_claim",
-            "arguments": { "workspace": "ws_open_job_event", "job": job_id, "runner_id": "r1" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws_open_job_event", "job": job_id, "runner_id": "r1" } } }
     }));
     let claimed_out = extract_tool_text(&claimed);
     assert!(
@@ -70,9 +64,7 @@ fn open_job_event_ref_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_report",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": {
                 "workspace": "ws_open_job_event",
                 "job": job_id,
                 "runner_id": "r1",
@@ -80,8 +72,7 @@ fn open_job_event_ref_is_supported_and_is_read_only() {
                 "kind": "checkpoint",
                 "message": "checkpoint 1",
                 "refs": ["JOB-REF"]
-            }
-        }
+            } } }
     }));
     let reported_out = extract_tool_text(&reported);
     assert!(

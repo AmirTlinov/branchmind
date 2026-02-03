@@ -89,7 +89,7 @@ pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
         }
     }
     if let Some(resp) = server.enforce_project_guard(&workspace_id) {
-        return crate::ops::legacy_to_op_response("status", Some(workspace_id.as_str()), resp)
+        return crate::ops::handler_to_op_response("status", Some(workspace_id.as_str()), resp)
             .into_value();
     }
 

@@ -16,10 +16,7 @@ fn think_card_compact_returns_refs_only() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": { "workspace": "ws_compact", "card": "Quick note", "verbosity": "compact" }
-        }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": { "workspace": "ws_compact", "card": "Quick note", "verbosity": "compact" } } }
     }));
     let compact = extract_tool_text(&compact);
     assert_eq!(
@@ -49,7 +46,7 @@ fn think_card_compact_returns_refs_only() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": { "workspace": "ws_compact", "card": "Full note" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": { "workspace": "ws_compact", "card": "Full note" } } }
     }));
     let full = extract_tool_text(&full);
     let full_result = full.get("result").unwrap();

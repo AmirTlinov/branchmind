@@ -12,7 +12,7 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,7 +40,7 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws1", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": { "workspace": "ws1", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } } }
     }));
     let decompose_text = extract_tool_text(&decompose);
     assert_eq!(
@@ -58,7 +58,7 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "trace", "limit": 50 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "trace", "limit": 50 } } }
     }));
     let trace_text = extract_tool_text(&show_trace);
     let entries = trace_text
@@ -85,7 +85,7 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": long_note } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws1", "target": task_id.clone(), "content": long_note } } }
     }));
     let notes_commit_text = extract_tool_text(&notes_commit);
     assert_eq!(
@@ -97,7 +97,7 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "jsonrpc": "2.0",
         "id": 70,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "notes", "limit": 50 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "notes", "limit": 50 } } }
     }));
     let show_notes_text = extract_tool_text(&show_notes);
     let note_entries = show_notes_text
@@ -118,7 +118,7 @@ fn branchmind_notes_and_trace_ingestion_smoke() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "notes", "limit": 50, "max_chars": 400 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws1", "target": task_id.clone(), "doc_kind": "notes", "limit": 50, "max_chars": 400 } } }
     }));
     let notes_text = extract_tool_text(&show_notes_budget);
     assert_eq!(
@@ -148,7 +148,7 @@ fn branchmind_show_trace_includes_derived_sequential_graph() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -162,7 +162,7 @@ fn branchmind_show_trace_includes_derived_sequential_graph() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -176,25 +176,20 @@ fn branchmind_show_trace_includes_derived_sequential_graph() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "trace_sequential_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.sequential.step", "args": {
                 "workspace": "ws1",
                 "target": task_id.clone(),
                 "thought": "Thought 1",
                 "thoughtNumber": 1,
                 "totalThoughts": 2,
                 "nextThoughtNeeded": true
-            }
-        }
+            } } }
     }));
     let _t2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "trace_sequential_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.sequential.step", "args": {
                 "workspace": "ws1",
                 "target": task_id.clone(),
                 "thought": "Thought 2 (branch)",
@@ -203,15 +198,14 @@ fn branchmind_show_trace_includes_derived_sequential_graph() {
                 "nextThoughtNeeded": false,
                 "branchFromThought": 1,
                 "branchId": "alt-1"
-            }
-        }
+            } } }
     }));
 
     let show_trace = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws1", "target": task_id, "doc_kind": "trace", "limit": 50 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws1", "target": task_id, "doc_kind": "trace", "limit": 50 } } }
     }));
     let trace_text = extract_tool_text(&show_trace);
 

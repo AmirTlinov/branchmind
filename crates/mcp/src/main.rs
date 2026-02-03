@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
 mod entry;
+mod handlers;
 mod ops;
 mod server;
 mod support;
-mod tools;
 mod tools_v1;
 mod viewer;
 

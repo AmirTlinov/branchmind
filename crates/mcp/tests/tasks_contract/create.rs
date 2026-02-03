@@ -12,7 +12,7 @@ fn tasks_create_with_steps_sets_fields() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_steps", "kind": "plan", "title": "Plan Steps" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_steps", "kind": "plan", "title": "Plan Steps" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn tasks_create_with_steps_sets_fields() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": {
             "workspace": "ws_steps",
             "kind": "task",
             "parent": plan_id.clone(),
@@ -39,7 +39,7 @@ fn tasks_create_with_steps_sets_fields() {
                     "blockers": ["b1"]
                 }
             ]
-        } }
+        } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -53,7 +53,7 @@ fn tasks_create_with_steps_sets_fields() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_resume", "arguments": { "workspace": "ws_steps", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume", "args": { "workspace": "ws_steps", "task": task_id.clone() } } }
     }));
     let resume_text = extract_tool_text(&resume);
     let steps = resume_text
@@ -85,7 +85,7 @@ fn tasks_templates_list_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_templates_list", "arguments": { "workspace": "ws_templates" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.templates.list", "args": { "workspace": "ws_templates" } } }
     }));
     let list_text = extract_tool_text(&list);
     let templates = list_text
@@ -109,16 +109,13 @@ fn tasks_scaffold_task_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_scaffold",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.scaffold", "args": {
                 "workspace": "ws_scaffold",
                 "template": "basic-task",
                 "kind": "task",
                 "title": "Scaffold Task",
                 "plan_title": "Scaffold Plan"
-            }
-        }
+            } } }
     }));
     let scaffold_text = extract_tool_text(&scaffold);
     assert_eq!(

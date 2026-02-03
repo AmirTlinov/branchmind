@@ -13,9 +13,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_strict_gate_status",
                 "plan_title": "Plan Strict Gate Status",
                 "task_title": "Task Strict Gate Status",
@@ -23,8 +21,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_status_text = extract_tool_text(&bootstrap_status);
     let task_status_id = bootstrap_status_text
@@ -48,21 +45,18 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 12,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_strict_gate_status",
                 "target": task_status_id.clone(),
                 "step": step_status_id.clone(),
                 "card": { "id": "H_ACCEPTED", "type": "hypothesis", "title": "H accepted", "text": "status drift", "status": "accepted" }
-            }
-        }
+            } } }
     }));
     let blocked_status = server.request(json!({
         "jsonrpc": "2.0",
         "id": 13,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": { "workspace": "ws_strict_gate_status", "task": task_status_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_strict_gate_status", "task": task_status_id } } }
     }));
     let blocked_status_text = extract_tool_text_str(&blocked_status);
     assert!(
@@ -79,9 +73,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_strict_gate",
                 "plan_title": "Plan Strict Gate",
                 "task_title": "Task Strict Gate",
@@ -89,8 +81,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -114,7 +105,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_strict_gate", "task": task_id.clone(), "max_chars": 2000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws_strict_gate", "task": task_id.clone(), "max_chars": 2000 } } }
     }));
     let radar_text = extract_tool_text(&radar);
     assert_eq!(
@@ -131,7 +122,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": { "workspace": "ws_strict_gate", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_strict_gate", "task": task_id.clone() } } }
     }));
     let blocked_1_text = extract_tool_text_str(&blocked_1);
     assert!(
@@ -147,14 +138,11 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 30,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_done",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.done", "args": {
                 "workspace": "ws_strict_gate",
                 "task": task_id.clone(),
                 "step_id": step_id.clone()
-            }
-        }
+            } } }
     }));
     let blocked_done_text = extract_tool_text(&blocked_done);
     let blocked_done_code = blocked_done_text
@@ -171,15 +159,12 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 31,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.step.close", "args": {
                 "workspace": "ws_strict_gate",
                 "task": task_id.clone(),
                 "step_id": step_id.clone(),
                 "checkpoints": "gate"
-            }
-        }
+            } } }
     }));
     let blocked_close_step_text = extract_tool_text(&blocked_close_step);
     let blocked_close_step_code = blocked_close_step_text
@@ -197,22 +182,19 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_strict_gate",
                 "target": task_id.clone(),
                 "step": step_id.clone(),
                 "card": { "id": "H1", "type": "hypothesis", "title": "H1", "text": "Main hypothesis" }
-            }
-        }
+            } } }
     }));
 
     let blocked_2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": { "workspace": "ws_strict_gate", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_strict_gate", "task": task_id.clone() } } }
     }));
     let blocked_2_text = extract_tool_text_str(&blocked_2);
     assert!(
@@ -226,23 +208,20 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_strict_gate",
                 "target": task_id.clone(),
                 "step": step_id.clone(),
                 "card": { "id": "T1", "type": "test", "title": "T1", "text": "Minimal test stub" },
                 "supports": ["H1"]
-            }
-        }
+            } } }
     }));
 
     let blocked_3 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": { "workspace": "ws_strict_gate", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_strict_gate", "task": task_id.clone() } } }
     }));
     let blocked_3_text = extract_tool_text_str(&blocked_3);
     assert!(
@@ -261,38 +240,32 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_strict_gate",
                 "target": task_id.clone(),
                 "step": step_id.clone(),
                 "card": { "id": "H2", "type": "hypothesis", "title": "H2", "text": "Counter", "tags": ["counter"] },
                 "blocks": ["H1"]
-            }
-        }
+            } } }
     }));
     let _t2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_strict_gate",
                 "target": task_id.clone(),
                 "step": step_id.clone(),
                 "card": { "id": "T2", "type": "test", "title": "T2", "text": "Counter test stub" },
                 "supports": ["H2"]
-            }
-        }
+            } } }
     }));
 
     let closed = server.request(json!({
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": { "workspace": "ws_strict_gate", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_strict_gate", "task": task_id } } }
     }));
     let closed_text = extract_tool_text_str(&closed);
     assert!(
@@ -309,9 +282,7 @@ fn strict_reasoning_override_allows_closing_with_reason_and_risk() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_strict_override",
                 "plan_title": "Plan Strict Override",
                 "task_title": "Task Strict Override",
@@ -319,8 +290,7 @@ fn strict_reasoning_override_allows_closing_with_reason_and_risk() {
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -335,14 +305,11 @@ fn strict_reasoning_override_allows_closing_with_reason_and_risk() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
                 "workspace": "ws_strict_override",
                 "task": task_id,
                 "override": { "reason": "progress over purity", "risk": "may hide missing test/counter" }
-            }
-        }
+            } } }
     }));
     let closed_text = extract_tool_text_str(&closed);
     assert!(

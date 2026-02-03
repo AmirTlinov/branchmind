@@ -11,9 +11,7 @@ fn tasks_macro_start_with_think_pipeline() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_macro_think",
                 "plan_title": "Plan Macro Think",
                 "task_title": "Task Macro Think",
@@ -23,8 +21,7 @@ fn tasks_macro_start_with_think_pipeline() {
                     "decision": "Macro decision"
                 },
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&started).starts_with("ERROR:"),
@@ -35,7 +32,7 @@ fn tasks_macro_start_with_think_pipeline() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws_macro_think" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws_macro_think" } } }
     }));
     let focus_text = extract_tool_text(&focus);
     let task_id = focus_text
@@ -49,7 +46,7 @@ fn tasks_macro_start_with_think_pipeline() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_resume_super", "arguments": { "workspace": "ws_macro_think", "task": task_id, "max_chars": 8000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": { "workspace": "ws_macro_think", "task": task_id, "max_chars": 8000 } } }
     }));
     let resume_text = extract_tool_text(&resume);
     assert_eq!(

@@ -76,14 +76,11 @@ fn bm_runner_defaults_can_find_repo_root_store_from_subdir() {
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_jobs_create",
-                "arguments": {
+            "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                     "workspace": workspace,
                     "title": "Runner defaults smoke",
                     "prompt": "dry-run"
-                }
-            }
+                } } }
         }));
 
         let parsed = extract_tool_text(&created);
@@ -124,17 +121,14 @@ fn bm_runner_defaults_can_find_repo_root_store_from_subdir() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                 "workspace": repo_workspace_id(&repo_root),
                 "job": job_id,
                 "include_prompt": false,
                 "include_events": true,
                 "max_events": 5,
                 "max_chars": 4000
-            }
-        }
+            } } }
     }));
     let parsed = extract_tool_text(&opened);
     let status = parsed

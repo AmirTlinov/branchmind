@@ -13,35 +13,35 @@ fn think_watch_filters_other_agents_by_default() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_watch" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_watch" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_watch",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_watch",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let watch_a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_watch", "arguments": { "workspace": "ws_lanes_watch", "agent_id": "agent-a", "limit_hypotheses": 10, "limit_candidates": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.watch", "args": { "workspace": "ws_lanes_watch", "agent_id": "agent-a", "limit_hypotheses": 10, "limit_candidates": 10 } } }
     }));
     let watch_a_text = extract_tool_text(&watch_a);
     let capsule_type = watch_a_text
@@ -88,35 +88,35 @@ fn think_watch_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_watch_all" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_watch_all" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_watch_all",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_watch_all",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let watch_all = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_watch", "arguments": { "workspace": "ws_lanes_watch_all", "agent_id": "agent-a", "all_lanes": true, "limit_hypotheses": 10, "limit_candidates": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.watch", "args": { "workspace": "ws_lanes_watch_all", "agent_id": "agent-a", "all_lanes": true, "limit_hypotheses": 10, "limit_candidates": 10 } } }
     }));
     let watch_all_text = extract_tool_text(&watch_all);
     let lane_kind = watch_all_text
@@ -155,17 +155,14 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_lanes_tasks",
                 "plan_title": "Plan",
                 "task_title": "Task",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -180,55 +177,53 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_tasks",
             "target": task_id.clone(),
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_tasks",
             "target": task_id.clone(),
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let _dec_a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_tasks",
             "target": task_id.clone(),
             "agent_id": "agent-a",
             "card": { "id": "DEC-A", "type": "decision", "title": "A decision", "text": "from agent a" }
-        } }
+        } } }
     }));
     let _dec_b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_tasks",
             "target": task_id.clone(),
             "agent_id": "agent-b",
             "card": { "id": "DEC-B", "type": "decision", "title": "B decision", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let resume = server.request(json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_lanes_tasks",
                 "task": task_id.clone(),
                 "view": "smart",
@@ -236,8 +231,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
                 "cards_limit": 10,
                 "decisions_limit": 10,
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let resume_text = extract_tool_text(&resume);
     let cards = resume_text
@@ -284,9 +278,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_lanes_tasks",
                 "task": task_id,
                 "view": "audit",
@@ -294,8 +286,7 @@ fn tasks_resume_super_smart_filters_other_agent_cards() {
                 "cards_limit": 20,
                 "decisions_limit": 10,
                 "max_chars": 12000
-            }
-        }
+            } } }
     }));
     let audit_text = extract_tool_text(&audit);
     let lane_kind = audit_text
@@ -343,25 +334,25 @@ fn think_publish_promotes_to_shared_lane_and_is_visible_without_agent_id() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_publish" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_publish" } } }
     }));
 
     let _src = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_publish",
             "agent_id": "agent-a",
             "card": { "id": "CARD-DEC", "type": "decision", "title": "Decision", "text": "draft" }
-        } }
+        } } }
     }));
 
     let publish = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_publish", "arguments": { "workspace": "ws_lanes_publish", "card_id": "CARD-DEC", "agent_id": "agent-a", "pin": true } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.publish", "args": { "workspace": "ws_lanes_publish", "card_id": "CARD-DEC", "agent_id": "agent-a", "pin": true } } }
     }));
     let publish_text = extract_tool_text(&publish);
     let published_id = publish_text
@@ -375,7 +366,7 @@ fn think_publish_promotes_to_shared_lane_and_is_visible_without_agent_id() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_watch", "arguments": { "workspace": "ws_lanes_publish", "limit_candidates": 20 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.watch", "args": { "workspace": "ws_lanes_publish", "limit_candidates": 20 } } }
     }));
     let watch_shared_text = extract_tool_text(&watch_shared);
     let candidates = watch_shared_text
@@ -399,41 +390,41 @@ fn think_pack_and_query_filter_other_agent_lanes() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_pack" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_pack" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_pack",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_pack",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let pack_a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_pack", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pack", "args": {
             "workspace": "ws_lanes_pack",
             "agent_id": "agent-a",
             "limit_candidates": 20,
             "limit_hypotheses": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let pack_a_text = extract_tool_text(&pack_a);
     let candidates = pack_a_text
@@ -458,13 +449,13 @@ fn think_pack_and_query_filter_other_agent_lanes() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_query", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.query", "args": {
             "workspace": "ws_lanes_pack",
             "agent_id": "agent-a",
             "types": ["hypothesis"],
             "limit": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let query_a_text = extract_tool_text(&query_a);
     let cards = query_a_text
@@ -494,35 +485,35 @@ fn think_pack_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_pack_all" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_pack_all" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_pack_all",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_pack_all",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let pack_all = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_pack", "arguments": { "workspace": "ws_lanes_pack_all", "agent_id": "agent-a", "all_lanes": true, "limit_candidates": 20, "limit_hypotheses": 20 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pack", "args": { "workspace": "ws_lanes_pack_all", "agent_id": "agent-a", "all_lanes": true, "limit_candidates": 20, "limit_hypotheses": 20 } } }
     }));
     let pack_all_text = extract_tool_text(&pack_all);
     let candidates = pack_all_text
@@ -546,41 +537,41 @@ fn context_pack_filters_other_agent_lanes_in_graph_slices() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_context_pack" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_context_pack" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_context_pack",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "decision", "title": "A", "text": "from agent a" }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_context_pack",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "decision", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let pack = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "context_pack", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context.pack", "args": {
             "workspace": "ws_lanes_context_pack",
             "agent_id": "agent-a",
             "limit_cards": 20,
             "decisions_limit": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let pack_text = extract_tool_text(&pack);
 
@@ -630,40 +621,40 @@ fn think_context_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_think_context_all" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_think_context_all" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_context_all",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_context_all",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let filtered = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context", "args": {
             "workspace": "ws_lanes_think_context_all",
             "agent_id": "agent-a",
             "limit_cards": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let filtered_text = extract_tool_text(&filtered);
     let cards = filtered_text
@@ -688,13 +679,13 @@ fn think_context_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context", "args": {
             "workspace": "ws_lanes_think_context_all",
             "agent_id": "agent-a",
             "all_lanes": true,
             "limit_cards": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let all_text = extract_tool_text(&all);
     let cards = all_text
@@ -718,40 +709,40 @@ fn think_frontier_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_think_frontier_all" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_think_frontier_all" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_frontier_all",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_frontier_all",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let filtered = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_frontier", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.frontier", "args": {
             "workspace": "ws_lanes_think_frontier_all",
             "agent_id": "agent-a",
             "limit_hypotheses": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let filtered_text = extract_tool_text(&filtered);
     let hypotheses = filtered_text
@@ -777,13 +768,13 @@ fn think_frontier_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_frontier", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.frontier", "args": {
             "workspace": "ws_lanes_think_frontier_all",
             "agent_id": "agent-a",
             "all_lanes": true,
             "limit_hypotheses": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let all_text = extract_tool_text(&all);
     let hypotheses = all_text
@@ -808,39 +799,39 @@ fn think_next_all_lanes_can_select_other_lane_candidate() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_think_next_all" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_think_next_all" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_next_all",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_next_all",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let filtered = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_next", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.next", "args": {
             "workspace": "ws_lanes_think_next_all",
             "agent_id": "agent-a",
             "max_chars": 8000
-        } }
+        } } }
     }));
     let filtered_text = extract_tool_text(&filtered);
     let candidate = filtered_text
@@ -858,12 +849,12 @@ fn think_next_all_lanes_can_select_other_lane_candidate() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_next", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.next", "args": {
             "workspace": "ws_lanes_think_next_all",
             "agent_id": "agent-a",
             "all_lanes": true,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let all_text = extract_tool_text(&all);
     let candidate = all_text
@@ -886,41 +877,41 @@ fn think_query_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_think_query_all" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_think_query_all" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_query_all",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "from agent a" }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_think_query_all",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let filtered = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_query", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.query", "args": {
             "workspace": "ws_lanes_think_query_all",
             "agent_id": "agent-a",
             "types": ["hypothesis"],
             "limit": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let filtered_text = extract_tool_text(&filtered);
     let cards = filtered_text
@@ -939,14 +930,14 @@ fn think_query_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_query", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.query", "args": {
             "workspace": "ws_lanes_think_query_all",
             "agent_id": "agent-a",
             "all_lanes": true,
             "types": ["hypothesis"],
             "limit": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let all_text = extract_tool_text(&all);
     let cards = all_text
@@ -970,42 +961,42 @@ fn context_pack_all_lanes_is_explicit_opt_in() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_lanes_context_pack_all" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_lanes_context_pack_all" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_context_pack_all",
             "agent_id": "agent-a",
             "card": { "id": "CARD-A", "type": "decision", "title": "A", "text": "from agent a" }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_lanes_context_pack_all",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "decision", "title": "B", "text": "from agent b", "tags": ["v:draft"] }
-        } }
+        } } }
     }));
 
     let pack = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "context_pack", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context.pack", "args": {
             "workspace": "ws_lanes_context_pack_all",
             "agent_id": "agent-a",
             "all_lanes": true,
             "limit_cards": 20,
             "decisions_limit": 20,
             "max_chars": 12000
-        } }
+        } } }
     }));
     let pack_text = extract_tool_text(&pack);
 
@@ -1046,37 +1037,37 @@ fn default_agent_id_is_injected_when_configured() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_default_agent" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_default_agent" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_default_agent",
             "card": { "id": "CARD-A", "type": "hypothesis", "title": "A", "text": "default lane", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _shared = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_default_agent",
             "agent_id": null,
             "card": { "id": "CARD-S", "type": "hypothesis", "title": "S", "text": "shared lane", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_default_agent",
             "agent_id": "agent-b",
             "card": { "id": "CARD-B", "type": "hypothesis", "title": "B", "text": "other lane", "tags": ["v:canon"] }
-        } }
+        } } }
     }));
 
     // agent_id omitted: default agent id must not partition durable memory.
@@ -1084,7 +1075,7 @@ fn default_agent_id_is_injected_when_configured() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_watch", "arguments": { "workspace": "ws_default_agent", "limit_hypotheses": 20, "limit_candidates": 20 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.watch", "args": { "workspace": "ws_default_agent", "limit_hypotheses": 20, "limit_candidates": 20 } } }
     }));
     let watch_text = extract_tool_text(&watch_default);
     let candidates = watch_text

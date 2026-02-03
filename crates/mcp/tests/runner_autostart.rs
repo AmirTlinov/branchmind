@@ -43,7 +43,7 @@ fn runner_autostart_suppresses_bootstrap_hint_when_runner_bin_is_present() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Queued job", "prompt": "do it" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Queued job", "prompt": "do it" } } }
     }));
 
     // Offline + queued should trigger an autostart attempt, suppressing the manual bootstrap CMD.
@@ -51,7 +51,7 @@ fn runner_autostart_suppresses_bootstrap_hint_when_runner_bin_is_present() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5 } } }
     }));
     let text = extract_tool_text_str(&radar);
     assert!(
@@ -65,13 +65,13 @@ fn runner_autostart_suppresses_bootstrap_hint_when_runner_bin_is_present() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-auto", "status": "idle", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-auto", "status": "idle", "lease_ttl_ms": 5000 } } }
     }));
     let radar1 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5 } } }
     }));
     let text1 = extract_tool_text_str(&radar1);
     let header1 = text1.lines().next().unwrap_or("");

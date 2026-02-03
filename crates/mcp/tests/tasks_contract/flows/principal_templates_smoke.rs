@@ -11,17 +11,14 @@ fn tasks_macro_start_principal_templates_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_principal_tpl",
                 "plan_title": "Principal Plan",
                 "plan_template": "principal-plan",
                 "task_title": "Principal Task",
                 "template": "principal-task",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&start).starts_with("ERROR:"),
@@ -32,7 +29,7 @@ fn tasks_macro_start_principal_templates_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_context", "arguments": { "workspace": "ws_principal_tpl" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.context", "args": { "workspace": "ws_principal_tpl" } } }
     }));
     let context_text = extract_tool_text(&context);
     assert_eq!(
@@ -84,7 +81,7 @@ fn tasks_macro_start_principal_templates_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_principal_tpl", "task": task_id, "max_chars": 2000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws_principal_tpl", "task": task_id, "max_chars": 2000 } } }
     }));
     let radar_text = extract_tool_text(&radar);
     assert_eq!(

@@ -16,21 +16,21 @@ fn open_runner_ref_is_supported_and_returns_lease_meta() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_open_runner" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_open_runner" } } }
     }));
 
     let _hb = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": {
             "workspace": "ws_open_runner",
             "runner_id": "r-open",
             "status": "live",
             "active_job_id": "JOB-001",
             "lease_ttl_ms": 5000,
             "meta": { "pid": 123, "client": "codex" }
-        } }
+        } } }
     }));
 
     let opened = server.request(json!({

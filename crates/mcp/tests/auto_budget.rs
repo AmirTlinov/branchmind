@@ -13,14 +13,14 @@ fn default_budgets_apply_to_branchmind_show_when_omitted() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_auto_budget_show" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_auto_budget_show" } } }
     }));
 
     let show = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws_auto_budget_show", "doc_kind": "notes" } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws_auto_budget_show", "doc_kind": "notes" } } }
     }));
     let show_text = extract_tool_text(&show);
     let budget = show_text
@@ -47,7 +47,7 @@ fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_auto_budget_escalate" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_auto_budget_escalate" } } }
     }));
 
     let huge = "x".repeat(300_000);
@@ -55,7 +55,7 @@ fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws_auto_budget_escalate", "content": huge } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws_auto_budget_escalate", "content": huge } } }
     }));
 
     // Call without max_chars/context_budget. Server injects default max_chars, sees budget truncation,
@@ -64,7 +64,7 @@ fn auto_budget_escalates_multiple_times_when_default_budget_truncates() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws_auto_budget_escalate", "doc_kind": "notes" } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws_auto_budget_escalate", "doc_kind": "notes" } } }
     }));
     let show_text = extract_tool_text(&show);
     let budget = show_text

@@ -10,10 +10,7 @@ fn claim_revision(server: &mut Server, workspace: &str, job_id: &str, runner_id:
         "jsonrpc": "2.0",
         "id": 99,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_claim",
-            "arguments": { "workspace": workspace, "job": job_id, "runner_id": runner_id }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": workspace, "job": job_id, "runner_id": runner_id } } }
     }));
     let out = extract_tool_text(&resp);
     assert!(
@@ -38,10 +35,7 @@ fn jobs_radar_last_event_prefers_progress_over_stale_error() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Radar last-event smoke", "prompt": "noop" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Radar last-event smoke", "prompt": "noop" } } }
     }));
     let created_out = extract_tool_text(&created);
     let job_id = created_out
@@ -60,26 +54,26 @@ fn jobs_radar_last_event_prefers_progress_over_stale_error() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "error", "message": "boom" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "error", "message": "boom" } } }
     }));
     let _ = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": "checkpoint ok" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": "checkpoint ok" } } }
     }));
     let _ = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "still working", "percent": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "still working", "percent": 10 } } }
     }));
 
     let radar = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10 } } }
     }));
     let radar_out = extract_tool_text(&radar);
     let jobs = radar_out

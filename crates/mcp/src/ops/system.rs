@@ -32,7 +32,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({ "cmd": "tasks.snapshot" }),
         },
         op_aliases: vec!["schema.get".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_schema_get),
     });
 
@@ -61,7 +61,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({}),
         },
         op_aliases: vec!["ops.summary".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_ops_summary),
     });
 
@@ -94,7 +94,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({ "prefix": "tasks." }),
         },
         op_aliases: vec!["cmd.list".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_cmd_list),
     });
 
@@ -126,18 +126,18 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({ "old_name": "tasks_snapshot" }),
         },
         op_aliases: vec!["migration.lookup".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_migration_lookup),
     });
 
-    // Minimal legacy system-ish tools exposed via cmd=system.<name>.
-    for legacy_tool in ["storage", "init", "help", "skill", "diagnostics"] {
-        let tier = match legacy_tool {
+    // Minimal system tools exposed via cmd=system.<name>.
+    for handler_name in ["storage", "init", "help", "skill", "diagnostics"] {
+        let tier = match handler_name {
             "storage" | "diagnostics" => Tier::Internal,
             _ => Tier::Advanced,
         };
         specs.push(CommandSpec {
-            cmd: format!("system.{legacy_tool}"),
+            cmd: format!("system.{handler_name}"),
             domain_tool: ToolName::SystemOps,
             tier,
             stability: Stability::Stable,
@@ -151,9 +151,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 idempotent: true,
             },
             budget: BudgetPolicy::standard(),
-            schema: SchemaSource::Legacy,
+            schema: SchemaSource::Handler,
             op_aliases: Vec::new(),
-            legacy_tool: Some(legacy_tool.to_string()),
+            handler_name: Some(handler_name.to_string()),
             handler: None,
         });
     }
@@ -394,7 +394,7 @@ fn handle_migration_lookup(_server: &mut crate::McpServer, env: &Envelope) -> Op
         .or_else(|| args_obj.get("name"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let old_name = normalize_legacy_tool_name(raw);
+    let old_name = normalize_migration_name(raw);
     if old_name.is_empty() {
         return OpResponse::error(
             env.cmd.clone(),
@@ -409,8 +409,8 @@ fn handle_migration_lookup(_server: &mut crate::McpServer, env: &Envelope) -> Op
     let registry = CommandRegistry::global();
     let mut found: Option<&CommandSpec> = None;
     for spec in registry.specs() {
-        if let Some(legacy) = spec.legacy_tool.as_deref()
-            && legacy.eq_ignore_ascii_case(&old_name)
+        if let Some(handler_name) = spec.handler_name.as_deref()
+            && handler_name.eq_ignore_ascii_case(&old_name)
         {
             found = Some(spec);
             break;
@@ -421,7 +421,7 @@ fn handle_migration_lookup(_server: &mut crate::McpServer, env: &Envelope) -> Op
             env.cmd.clone(),
             OpError {
                 code: "UNKNOWN_TOOL".to_string(),
-                message: format!("Unknown legacy tool: {old_name}"),
+                message: format!("Unknown deprecated tool name: {old_name}"),
                 recovery: Some("Check docs/contracts/V1_MIGRATION.md.".to_string()),
             },
         );
@@ -443,7 +443,7 @@ fn handle_migration_lookup(_server: &mut crate::McpServer, env: &Envelope) -> Op
     OpResponse::success(env.cmd.clone(), result)
 }
 
-fn normalize_legacy_tool_name(raw: &str) -> String {
+fn normalize_migration_name(raw: &str) -> String {
     let mut name = raw.trim();
     if let Some((_, suffix)) = name.rsplit_once('/') {
         name = suffix;

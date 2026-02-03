@@ -12,17 +12,14 @@ fn tasks_define_normalizes_blockers() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Normalize",
                 "task_title": "Task Normalize",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -46,7 +43,7 @@ fn tasks_define_normalizes_blockers() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_define", "arguments": { "workspace": "ws1", "task": task_id.clone(), "path": step_path, "blockers": ["None"] } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.define", "args": { "workspace": "ws1", "task": task_id.clone(), "path": step_path, "blockers": ["None"] } } }
     }));
     let defined_text = extract_tool_text(&defined);
     assert_eq!(
@@ -58,7 +55,7 @@ fn tasks_define_normalizes_blockers() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_resume", "arguments": { "workspace": "ws1", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume", "args": { "workspace": "ws1", "task": task_id.clone() } } }
     }));
     let resume_text = extract_tool_text(&resume);
     let steps = resume_text

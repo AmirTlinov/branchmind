@@ -27,14 +27,11 @@ fn resume_super_ultratight_preserves_capsule_refs_for_navigation() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_delegate",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.delegate", "args": {
                 "workspace": "ws_ultratight_refs",
                 "plan_title": "Plan Ultra-tight Refs",
                 "task_title": "Delegated Task (ultratight refs)"
-            }
-        }
+            } } }
     }));
     let delegated_text = extract_tool_text_str(&delegated);
     let task_id = parse_focus_id_from_first_line(&delegated_text);
@@ -48,29 +45,23 @@ fn resume_super_ultratight_preserves_capsule_refs_for_navigation() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_ultratight_refs",
                 "path": "s:0",
                 "note": "x".repeat(40_000)
-            }
-        }
+            } } }
     }));
 
     let resume = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_ultratight_refs",
                 "task": task_id,
                 "view": "smart",
                 "max_chars": 900
-            }
-        }
+            } } }
     }));
     let parsed = extract_tool_text(&resume);
 

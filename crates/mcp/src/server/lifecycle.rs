@@ -216,7 +216,7 @@ impl McpServer {
             let mut args_mut = args.clone();
             if let Some(pre) = self.preprocess_args(name_ref, &mut args_mut) {
                 let ws = args_mut.get("workspace").and_then(|v| v.as_str());
-                let mut resp = crate::ops::legacy_to_op_response(name_ref, ws, pre).into_value();
+                let mut resp = crate::ops::handler_to_op_response(name_ref, ws, pre).into_value();
                 self.postprocess_response(name_ref, &args_mut, &mut resp);
                 return resp;
             }

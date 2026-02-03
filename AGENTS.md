@@ -103,10 +103,10 @@ These rules exist to make the codebase **cheap to modify** for AI agents and hum
 
 ### Tool implementation shape
 
-- MCP tools live under `crates/mcp/src/tools/` and are split by family:
+- MCP handlers live under `crates/mcp/src/handlers/` and are split by family:
   - `tasks/*` for execution/domain operations.
   - `branchmind/*` for reasoning/memory operations.
-- Each tool handler should follow a stable structure:
+- Each handler should follow a stable structure:
   1) parse/validate args (schema discipline),
   2) enforce budgets on outputs (budget discipline),
   3) call storage via request structs (storage API discipline),

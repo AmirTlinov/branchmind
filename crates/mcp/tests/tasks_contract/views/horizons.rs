@@ -11,7 +11,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_without_listing_backlog() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_horizons", "kind": "plan", "title": "Plan H" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_horizons", "kind": "plan", "title": "Plan H" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -25,7 +25,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_without_listing_backlog() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_horizons", "kind": "task", "parent": plan_id.clone(), "title": "Task 1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_horizons", "kind": "task", "parent": plan_id.clone(), "title": "Task 1" } } }
     }));
     let task1_id = extract_tool_text(&task1)
         .get("result")
@@ -38,13 +38,13 @@ fn tasks_snapshot_plan_includes_horizon_counts_without_listing_backlog() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_horizons", "kind": "task", "parent": plan_id.clone(), "title": "Task 2" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_horizons", "kind": "task", "parent": plan_id.clone(), "title": "Task 2" } } }
     }));
     let _task3 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_horizons", "kind": "task", "parent": plan_id.clone(), "title": "Task 3" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_horizons", "kind": "task", "parent": plan_id.clone(), "title": "Task 3" } } }
     }));
 
     // Promote one task into the active horizon.
@@ -52,14 +52,14 @@ fn tasks_snapshot_plan_includes_horizon_counts_without_listing_backlog() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_complete", "arguments": { "workspace": "ws_horizons", "task": task1_id, "status": "ACTIVE" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.complete", "args": { "workspace": "ws_horizons", "task": task1_id, "status": "ACTIVE" } } }
     }));
 
     let snapshot = server.request(json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws_horizons", "plan": plan_id, "max_chars": 2000, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "workspace": "ws_horizons", "plan": plan_id, "max_chars": 2000, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

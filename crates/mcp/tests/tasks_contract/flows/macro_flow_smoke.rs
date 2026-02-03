@@ -11,9 +11,7 @@ fn tasks_macro_flow_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Macro",
                 "task_title": "Task Macro",
@@ -21,8 +19,7 @@ fn tasks_macro_flow_smoke() {
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ],
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&start).starts_with("ERROR:"),
@@ -32,7 +29,7 @@ fn tasks_macro_flow_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws1" } } }
     }));
     let focus_text = extract_tool_text(&focus);
     let task_id = focus_text
@@ -46,14 +43,11 @@ fn tasks_macro_flow_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
                 "workspace": "ws1",
                 "checkpoints": "gate",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&close).starts_with("ERROR:"),
@@ -64,13 +58,10 @@ fn tasks_macro_flow_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_finish",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.finish", "args": {
                 "workspace": "ws1",
                 "task": task_id
-            }
-        }
+            } } }
     }));
     let finish_text = extract_tool_text(&finish);
     assert!(
@@ -89,9 +80,7 @@ fn tasks_macro_finish_is_idempotent_when_already_done() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_finish_idem",
                 "plan_title": "Plan Finish",
                 "task_title": "Task Finish",
@@ -99,8 +88,7 @@ fn tasks_macro_finish_is_idempotent_when_already_done() {
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ],
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&start).starts_with("ERROR:"),
@@ -111,10 +99,7 @@ fn tasks_macro_finish_is_idempotent_when_already_done() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": { "workspace": "ws_finish_idem", "checkpoints": "gate", "resume_max_chars": 4000 }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_finish_idem", "checkpoints": "gate", "resume_max_chars": 4000 } } }
     }));
     assert!(
         !extract_tool_text_str(&close).starts_with("ERROR:"),
@@ -125,7 +110,7 @@ fn tasks_macro_finish_is_idempotent_when_already_done() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_finish", "arguments": { "workspace": "ws_finish_idem" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.finish", "args": { "workspace": "ws_finish_idem" } } }
     }));
     let first_text = extract_tool_text(&first);
     let first_revision = first_text
@@ -140,7 +125,7 @@ fn tasks_macro_finish_is_idempotent_when_already_done() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_finish", "arguments": { "workspace": "ws_finish_idem" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.finish", "args": { "workspace": "ws_finish_idem" } } }
     }));
     let second_text = extract_tool_text(&second);
     let second_revision = second_text
@@ -179,9 +164,7 @@ fn tasks_macro_finish_suggests_closing_steps_when_open() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_finish_open",
                 "plan_title": "Plan Finish Open",
                 "task_title": "Task Finish Open",
@@ -189,8 +172,7 @@ fn tasks_macro_finish_suggests_closing_steps_when_open() {
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ],
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&start).starts_with("ERROR:"),
@@ -201,7 +183,7 @@ fn tasks_macro_finish_suggests_closing_steps_when_open() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_finish", "arguments": { "workspace": "ws_finish_open" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.finish", "args": { "workspace": "ws_finish_open" } } }
     }));
     let finish_text = extract_tool_text(&finish);
 
@@ -237,9 +219,7 @@ fn tasks_macro_finish_appends_final_note_to_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_finish_note",
                 "plan_title": "Plan Finish Note",
                 "task_title": "Task Finish Note",
@@ -247,8 +227,7 @@ fn tasks_macro_finish_appends_final_note_to_reasoning_notes() {
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ],
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&start).starts_with("ERROR:"),
@@ -259,7 +238,7 @@ fn tasks_macro_finish_appends_final_note_to_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws_finish_note" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws_finish_note" } } }
     }));
     let focus_text = extract_tool_text(&focus);
     let task_id = focus_text
@@ -273,10 +252,7 @@ fn tasks_macro_finish_appends_final_note_to_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": { "workspace": "ws_finish_note", "checkpoints": "gate", "resume_max_chars": 4000 }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_finish_note", "checkpoints": "gate", "resume_max_chars": 4000 } } }
     }));
     assert!(
         !extract_tool_text_str(&close).starts_with("ERROR:"),
@@ -288,14 +264,11 @@ fn tasks_macro_finish_appends_final_note_to_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_finish",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.finish", "args": {
                 "workspace": "ws_finish_note",
                 "task": task_id.clone(),
                 "final_note": final_note
-            }
-        }
+            } } }
     }));
     let finish_text = extract_tool_text(&finish);
     assert!(
@@ -310,16 +283,13 @@ fn tasks_macro_finish_appends_final_note_to_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_finish_note",
                 "task": task_id,
                 "view": "full",
                 "notes_limit": 10,
                 "max_chars": 12000
-            }
-        }
+            } } }
     }));
     let resume_text = extract_tool_text(&resume);
     let notes = resume_text

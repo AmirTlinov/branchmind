@@ -14,13 +14,10 @@ fn branchmind_skill_is_budget_safe_and_line_protocol() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "skill",
-            "arguments": {
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.skill", "args": {
                 "profile": "teamlead",
                 "max_chars": 220
-            }
-        }
+            } } }
     }));
 
     assert_eq!(

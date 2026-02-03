@@ -12,7 +12,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_think_wrap" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_think_wrap" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -24,7 +24,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "One" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.hypothesis", "args": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "One" } } } }
     }));
     let hypo1_text = extract_tool_text(&hypo1);
     let _hypo1_id = hypo1_text
@@ -38,7 +38,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Two" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.hypothesis", "args": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Two" } } } }
     }));
     let hypo2_text = extract_tool_text(&hypo2);
     let _hypo2_id = hypo2_text
@@ -52,7 +52,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "think_query", "arguments": { "workspace": "ws_think_wrap", "types": "hypothesis", "limit": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.query", "args": { "workspace": "ws_think_wrap", "types": "hypothesis", "limit": 10 } } }
     }));
     let query_text = extract_tool_text(&query);
     assert_eq!(
@@ -64,7 +64,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 111,
         "method": "tools/call",
-        "params": { "name": "think_query", "arguments": { "workspace": "ws_think_wrap", "types": "hypothesis", "limit": 10, "max_chars": 200 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.query", "args": { "workspace": "ws_think_wrap", "types": "hypothesis", "limit": 10, "max_chars": 200 } } }
     }));
     let query_budgeted_text = extract_tool_text(&query_budgeted);
     let budget = query_budgeted_text
@@ -88,7 +88,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 12,
         "method": "tools/call",
-        "params": { "name": "think_frontier", "arguments": { "workspace": "ws_think_wrap" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.frontier", "args": { "workspace": "ws_think_wrap" } } }
     }));
     let frontier_text = extract_tool_text(&frontier);
     assert_eq!(
@@ -100,7 +100,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 121,
         "method": "tools/call",
-        "params": { "name": "think_frontier", "arguments": { "workspace": "ws_think_wrap", "max_chars": 200 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.frontier", "args": { "workspace": "ws_think_wrap", "max_chars": 200 } } }
     }));
     let frontier_budgeted_text = extract_tool_text(&frontier_budgeted);
     let frontier_budget = frontier_budgeted_text
@@ -131,7 +131,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 13,
         "method": "tools/call",
-        "params": { "name": "think_next", "arguments": { "workspace": "ws_think_wrap" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.next", "args": { "workspace": "ws_think_wrap" } } }
     }));
     let next_text = extract_tool_text(&next);
     assert_eq!(
@@ -143,7 +143,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 131,
         "method": "tools/call",
-        "params": { "name": "think_next", "arguments": { "workspace": "ws_think_wrap", "max_chars": 120 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.next", "args": { "workspace": "ws_think_wrap", "max_chars": 120 } } }
     }));
     let next_budgeted_text = extract_tool_text(&next_budgeted);
     let next_budget = next_budgeted_text
@@ -172,7 +172,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 14,
         "method": "tools/call",
-        "params": { "name": "think_pack", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pack", "args": { "workspace": "ws_think_wrap", "limit_candidates": 10 } } }
     }));
     let pack_text = extract_tool_text(&pack);
     assert_eq!(
@@ -184,7 +184,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 114,
         "method": "tools/call",
-        "params": { "name": "think_pack", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10, "max_chars": 400 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pack", "args": { "workspace": "ws_think_wrap", "limit_candidates": 10, "max_chars": 400 } } }
     }));
     let pack_budget_text = extract_tool_text(&pack_budget);
     let pack_budget_obj = pack_budget_text
@@ -224,7 +224,7 @@ fn branchmind_think_wrappers_views_smoke() {
         "jsonrpc": "2.0",
         "id": 115,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": { "workspace": "ws_think_wrap", "limit_cards": 10, "max_chars": 400 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context", "args": { "workspace": "ws_think_wrap", "limit_cards": 10, "max_chars": 400 } } }
     }));
     let context_budget_text = extract_tool_text(&context_budget);
     let context_budget_obj = context_budget_text

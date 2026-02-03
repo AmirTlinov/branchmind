@@ -16,25 +16,25 @@ fn open_anchor_is_supported_and_filters_drafts_by_default() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_open_anchor" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_open_anchor" } } }
     }));
 
     let _canon = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "card": { "id": "CARD-CANON", "type": "decision", "title": "Canon", "text": "anchor canon", "tags": ["a:core"] }
-        } }
+        } } }
     }));
 
     let _draft = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "card": { "id": "CARD-DRAFT", "type": "hypothesis", "title": "Draft", "text": "anchor draft", "tags": ["a:core", "v:draft"] }
-        } }
+        } } }
     }));
 
     let opened = server.request(json!({

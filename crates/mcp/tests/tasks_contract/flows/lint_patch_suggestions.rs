@@ -12,17 +12,14 @@ fn tasks_lint_patch_suggestions_seed_missing_criteria() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Task Lint",
                 "steps": [
                     { "title": "Implement: thing", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -51,9 +48,7 @@ fn tasks_lint_patch_suggestions_seed_missing_criteria() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_patch",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.patch", "args": {
                 "workspace": "ws1",
                 "task": task_id,
                 "expected_revision": task_rev,
@@ -62,15 +57,14 @@ fn tasks_lint_patch_suggestions_seed_missing_criteria() {
                 "ops": [
                     { "op": "unset", "field": "success_criteria" }
                 ]
-            }
-        }
+            } } }
     }));
 
     let lint = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
     let patches = lint_text
@@ -104,17 +98,14 @@ fn tasks_lint_patch_suggestions_prioritize_next_action_and_proof_when_truncated(
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Task Lint",
                 "steps": [
                     { "title": "Implement: thing", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -130,10 +121,7 @@ fn tasks_lint_patch_suggestions_prioritize_next_action_and_proof_when_truncated(
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_lint",
-            "arguments": { "workspace": "ws1", "task": task_id, "patches_limit": 2 }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id, "patches_limit": 2 } } }
     }));
     let lint_text = extract_tool_text(&lint);
     let patches = lint_text
@@ -172,17 +160,14 @@ fn tasks_lint_patch_suggestions_active_limit_exceeded() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Task 1",
                 "steps": [
                     { "title": "Step 1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_1_text = extract_tool_text(&bootstrap_1);
     let plan_id = bootstrap_1_text
@@ -205,17 +190,14 @@ fn tasks_lint_patch_suggestions_active_limit_exceeded() {
             "jsonrpc": "2.0",
             "id": 10 + idx,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_bootstrap",
-                "arguments": {
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                     "workspace": "ws1",
                     "plan": plan_id,
                     "task_title": format!("Task {idx}"),
                     "steps": [
                         { "title": "Step 1", "success_criteria": ["c1"], "tests": ["t1"] }
                     ]
-                }
-            }
+                } } }
         }));
         let bootstrap_n_text = extract_tool_text(&bootstrap_n);
         let task_id = bootstrap_n_text
@@ -233,14 +215,11 @@ fn tasks_lint_patch_suggestions_active_limit_exceeded() {
             "jsonrpc": "2.0",
             "id": 20 + i,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_complete",
-                "arguments": {
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.complete", "args": {
                     "workspace": "ws1",
                     "task": task_id,
                     "status": "ACTIVE"
-                }
-            }
+                } } }
         }));
     }
 
@@ -248,7 +227,7 @@ fn tasks_lint_patch_suggestions_active_limit_exceeded() {
         "jsonrpc": "2.0",
         "id": 99,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "plan": plan_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "plan": plan_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
 
@@ -317,17 +296,14 @@ fn tasks_lint_patch_suggestions_missing_anchor_for_task() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Task Without Anchor",
                 "steps": [
                     { "title": "Implement: thing", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -341,7 +317,7 @@ fn tasks_lint_patch_suggestions_missing_anchor_for_task() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
 
@@ -402,17 +378,14 @@ fn tasks_lint_patch_suggestions_active_tasks_missing_anchor_for_plan() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Active Task Without Anchor",
                 "steps": [
                     { "title": "Implement: thing", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let plan_id = bootstrap_text
@@ -433,21 +406,18 @@ fn tasks_lint_patch_suggestions_active_tasks_missing_anchor_for_plan() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_complete",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.complete", "args": {
                 "workspace": "ws1",
                 "task": task_id,
                 "status": "ACTIVE"
-            }
-        }
+            } } }
     }));
 
     let lint = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "plan": plan_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "plan": plan_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
 
@@ -496,17 +466,14 @@ fn tasks_lint_patch_suggestions_missing_next_action_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Task Without Next",
                 "steps": [
                     { "title": "Implement: thing", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -528,7 +495,7 @@ fn tasks_lint_patch_suggestions_missing_next_action_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
 
@@ -579,14 +546,14 @@ fn tasks_lint_patch_suggestions_missing_next_action_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_patch", "arguments": apply_args }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.patch", "args": apply_args } }
     }));
 
     let lint_after = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_after_text = extract_tool_text(&lint_after);
     let issues_after = lint_after_text
@@ -627,17 +594,14 @@ fn tasks_lint_patch_suggestions_research_missing_stop_criteria_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Research Task",
                 "steps": [
                     { "title": "Research: cache policy", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -651,7 +615,7 @@ fn tasks_lint_patch_suggestions_research_missing_stop_criteria_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
 
@@ -701,14 +665,14 @@ fn tasks_lint_patch_suggestions_research_missing_stop_criteria_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_patch", "arguments": apply_args }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.patch", "args": apply_args } }
     }));
 
     let lint_after = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_after_text = extract_tool_text(&lint_after);
     let issues_after = lint_after_text
@@ -736,9 +700,7 @@ fn tasks_lint_patch_suggestions_missing_proof_plan_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Lint",
                 "task_title": "Task Missing Proof Plan",
@@ -746,8 +708,7 @@ fn tasks_lint_patch_suggestions_missing_proof_plan_and_can_patch() {
                     { "title": "Implement: thing", "success_criteria": ["c1"], "tests": ["t1"] },
                     { "title": "Verify: thing", "success_criteria": ["c2"], "tests": ["t2"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -769,7 +730,7 @@ fn tasks_lint_patch_suggestions_missing_proof_plan_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
 
@@ -821,14 +782,14 @@ fn tasks_lint_patch_suggestions_missing_proof_plan_and_can_patch() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_patch", "arguments": apply_args }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.patch", "args": apply_args } }
     }));
 
     let lint_after = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_after_text = extract_tool_text(&lint_after);
     let issues_after = lint_after_text

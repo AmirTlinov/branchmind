@@ -16,7 +16,7 @@ fn tasks_snapshot_auto_truncation_emits_openable_refs_without_budget_opt_in() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Auto Trunc Refs Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Auto Trunc Refs Task" } } }
     }));
 
     // Create a very large payload so the portal's implicit/default budgets must trim.
@@ -25,14 +25,11 @@ fn tasks_snapshot_auto_truncation_emits_openable_refs_without_budget_opt_in() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_auto_trunc_refs",
                 "path": "s:0",
                 "note": huge_note
-            }
-        }
+            } } }
     }));
 
     let huge_text = "d".repeat(300_000);
@@ -40,16 +37,13 @@ fn tasks_snapshot_auto_truncation_emits_openable_refs_without_budget_opt_in() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "think_add_decision",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.decision", "args": {
                 "workspace": "ws_auto_trunc_refs",
                 "card": {
                     "title": "Decision: huge content (auto trunc refs)",
                     "text": huge_text
                 }
-            }
-        }
+            } } }
     }));
 
     // No explicit max_chars/context_budget: the portal applies its own bounded defaults.
@@ -58,7 +52,7 @@ fn tasks_snapshot_auto_truncation_emits_openable_refs_without_budget_opt_in() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
 

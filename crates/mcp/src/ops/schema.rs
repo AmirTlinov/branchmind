@@ -21,15 +21,15 @@ pub(crate) struct SchemaBundle {
     pub(crate) safety: Safety,
 }
 
-pub(crate) fn legacy_input_schema(tool_name: &str) -> Option<Value> {
-    legacy_tool_schemas().get(tool_name).cloned()
+pub(crate) fn handler_input_schema(handler_name: &str) -> Option<Value> {
+    handler_schemas().get(handler_name).cloned()
 }
 
-fn legacy_tool_schemas() -> &'static BTreeMap<String, Value> {
+fn handler_schemas() -> &'static BTreeMap<String, Value> {
     static SCHEMAS: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
     SCHEMAS.get_or_init(|| {
         let mut map = BTreeMap::<String, Value>::new();
-        for def in crate::tools::tool_definitions(crate::Toolset::Full) {
+        for def in crate::handlers::handler_definitions() {
             let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
                 continue;
             };
@@ -58,19 +58,19 @@ pub(crate) fn schema_bundle_for_cmd(
             args_schema,
             example_minimal_args,
         } => (args_schema.clone(), example_minimal_args.clone()),
-        SchemaSource::Legacy => {
-            let legacy_tool = spec.legacy_tool.as_deref().ok_or_else(|| OpError {
+        SchemaSource::Handler => {
+            let handler_name = spec.handler_name.as_deref().ok_or_else(|| OpError {
                 code: "INTERNAL_ERROR".to_string(),
-                message: format!("cmd {cmd} is Legacy schema but has no legacy_tool"),
+                message: format!("cmd {cmd} is Handler schema but has no handler_name"),
                 recovery: None,
             })?;
-            let mut schema = legacy_input_schema(legacy_tool).ok_or_else(|| OpError {
+            let mut schema = handler_input_schema(handler_name).ok_or_else(|| OpError {
                 code: "INTERNAL_ERROR".to_string(),
-                message: format!("missing legacy schema for tool {legacy_tool}"),
-                recovery: Some("Check registry legacy_tool mapping for this cmd.".to_string()),
+                message: format!("missing handler schema for {handler_name}"),
+                recovery: Some("Check registry handler_name mapping for this cmd.".to_string()),
             })?;
 
-            // v1 envelope: `workspace` lives outside of args. Most legacy tools still declare
+            // v1 envelope: `workspace` lives outside of args. Most handlers still declare
             // workspace in their inputSchema; strip it to keep schema-on-demand examples minimal
             // and aligned with the portal contract.
             if let Some(obj) = schema.as_object_mut() {

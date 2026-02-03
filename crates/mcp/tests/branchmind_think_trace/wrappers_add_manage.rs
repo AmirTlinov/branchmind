@@ -12,7 +12,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_think_wrap" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_think_wrap" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -24,7 +24,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 21,
         "method": "tools/call",
-        "params": { "name": "think_add_note", "arguments": { "workspace": "ws_think_wrap", "card": "Quick note" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.note", "args": { "workspace": "ws_think_wrap", "card": "Quick note" } } }
     }));
     let note_text = extract_tool_text(&note);
     assert_eq!(
@@ -36,7 +36,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 22,
         "method": "tools/call",
-        "params": { "name": "think_add_decision", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Decision", "text": "Proceed" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.decision", "args": { "workspace": "ws_think_wrap", "card": { "title": "Decision", "text": "Proceed" } } } }
     }));
     let decision_text = extract_tool_text(&decision);
     assert_eq!(
@@ -48,7 +48,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 23,
         "method": "tools/call",
-        "params": { "name": "think_add_evidence", "arguments": { "workspace": "ws_think_wrap", "card": "Evidence collected" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.evidence", "args": { "workspace": "ws_think_wrap", "card": "Evidence collected" } } }
     }));
     let evidence_text = extract_tool_text(&evidence);
     assert_eq!(
@@ -60,7 +60,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 24,
         "method": "tools/call",
-        "params": { "name": "think_add_frame", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Frame", "text": "Context" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.frame", "args": { "workspace": "ws_think_wrap", "card": { "title": "Frame", "text": "Context" } } } }
     }));
     let frame_text = extract_tool_text(&frame);
     assert_eq!(
@@ -72,7 +72,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 25,
         "method": "tools/call",
-        "params": { "name": "think_add_update", "arguments": { "workspace": "ws_think_wrap", "card": "Progress update" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.update", "args": { "workspace": "ws_think_wrap", "card": "Progress update" } } }
     }));
     let update_text = extract_tool_text(&update);
     assert_eq!(
@@ -84,7 +84,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.hypothesis", "args": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } } }
     }));
     let hypo1_text = extract_tool_text(&hypo1);
     let hypo1_id = hypo1_text
@@ -98,7 +98,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.hypothesis", "args": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } } }
     }));
     let hypo2_text = extract_tool_text(&hypo2);
     let _hypo2_id = hypo2_text
@@ -112,7 +112,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_add_question", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Question", "text": "Why?" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.question", "args": { "workspace": "ws_think_wrap", "card": { "title": "Question", "text": "Why?" } } } }
     }));
     let question_text = extract_tool_text(&question);
     let question_id = question_text
@@ -126,7 +126,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_add_test", "arguments": { "workspace": "ws_think_wrap", "card": "Test it" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.test", "args": { "workspace": "ws_think_wrap", "card": "Test it" } } }
     }));
     let test_text = extract_tool_text(&test_card);
     assert_eq!(
@@ -138,7 +138,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "think_link", "arguments": { "workspace": "ws_think_wrap", "from": question_id.clone(), "rel": "supports", "to": hypo1_id.clone() } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.link", "args": { "workspace": "ws_think_wrap", "from": question_id.clone(), "rel": "supports", "to": hypo1_id.clone() } } }
     }));
     let link_text = extract_tool_text(&link);
     assert_eq!(
@@ -150,7 +150,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "think_set_status", "arguments": { "workspace": "ws_think_wrap", "status": "blocked", "targets": [hypo1_id.clone()] } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.set.status", "args": { "workspace": "ws_think_wrap", "status": "blocked", "targets": [hypo1_id.clone()] } } }
     }));
     let set_status_text = extract_tool_text(&set_status);
     assert_eq!(
@@ -162,7 +162,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "think_pin", "arguments": { "workspace": "ws_think_wrap", "targets": [hypo1_id.clone()] } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pin", "args": { "workspace": "ws_think_wrap", "targets": [hypo1_id.clone()] } } }
     }));
     let pin_text = extract_tool_text(&pin);
     assert_eq!(
@@ -174,7 +174,7 @@ fn branchmind_think_wrappers_add_manage_smoke() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "think_pins", "arguments": { "workspace": "ws_think_wrap", "limit": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pins", "args": { "workspace": "ws_think_wrap", "limit": 10 } } }
     }));
     let pins_text = extract_tool_text(&pins);
     let pins_list = pins_text

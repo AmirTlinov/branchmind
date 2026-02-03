@@ -42,16 +42,13 @@ fn bm_runner_dry_run_claims_and_completes_a_job() {
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_jobs_create",
-                "arguments": {
+            "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
                     "workspace": "ws_runner",
                     "title": "Runner smoke: dry-run",
                     "prompt": "This is a test job. The runner should claim and complete it in dry-run mode.",
                     "kind": "codex_cli",
                     "priority": "LOW"
-                }
-            }
+                } } }
         }));
 
         let parsed = extract_tool_text(&created);
@@ -99,17 +96,14 @@ fn bm_runner_dry_run_claims_and_completes_a_job() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_open",
-            "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
                 "workspace": "ws_runner",
                 "job": job_id,
                 "include_prompt": false,
                 "include_events": true,
                 "max_events": 5,
                 "max_chars": 4000
-            }
-        }
+            } } }
     }));
     let parsed = extract_tool_text(&opened);
     let status = parsed

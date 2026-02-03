@@ -26,10 +26,10 @@ fn registry_has_doc_and_schema_for_all_cmds() {
             spec.cmd
         );
         match &spec.schema {
-            SchemaSource::Legacy => {
+            SchemaSource::Handler => {
                 assert!(
-                    spec.legacy_tool.is_some(),
-                    "legacy schema requires legacy_tool for {}",
+                    spec.handler_name.is_some(),
+                    "handler schema requires handler_name for {}",
                     spec.cmd
                 );
             }

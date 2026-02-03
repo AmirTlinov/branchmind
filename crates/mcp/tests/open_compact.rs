@@ -30,7 +30,7 @@ fn open_task_compact_is_minimal() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Compact Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Compact Task" } } }
     }));
     let task_id = focus_id_from_portal_line(&extract_tool_text_str(&started));
 

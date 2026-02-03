@@ -13,7 +13,7 @@ fn anchors_autoregister_from_canon_tagged_cards() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchors_autoregister" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchors_autoregister" } } }
     }));
 
     // Simulate the daily "map attach" flow that uses think_card + v:canon but does not call
@@ -22,7 +22,7 @@ fn anchors_autoregister_from_canon_tagged_cards() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_anchors_autoregister",
             "card": {
                 "type": "note",
@@ -30,14 +30,14 @@ fn anchors_autoregister_from_canon_tagged_cards() {
                 "text": "Anchor should be auto-registered from canon-tagged cards.",
                 "tags": ["a:auto-anchor", "v:canon"]
             }
-        } }
+        } } }
     }));
 
     let list = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "anchors_list", "arguments": { "workspace": "ws_anchors_autoregister", "limit": 50 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.list", "args": { "workspace": "ws_anchors_autoregister", "limit": 50 } } }
     }));
     let list_text = extract_tool_text(&list);
     let anchors = list_text
@@ -79,14 +79,14 @@ fn anchors_macro_note_snapshot_and_export_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchors_smoke" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchors_smoke" } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "macro_anchor_note", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.macro.anchor.note", "args": {
             "workspace": "ws_anchors_smoke",
             "anchor": "a:core",
             "title": "Core",
@@ -94,7 +94,7 @@ fn anchors_macro_note_snapshot_and_export_smoke() {
             "content": "Anchor registry note for a:core",
             "visibility": "canon",
             "pin": true
-        } }
+        } } }
     }));
 
     // Cross-graph linking: cards written into other branches/docs with `a:*` tags should show up in anchor_snapshot.
@@ -102,18 +102,18 @@ fn anchors_macro_note_snapshot_and_export_smoke() {
         "jsonrpc": "2.0",
         "id": 31,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": {
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": {
             "workspace": "ws_anchors_smoke",
             "name": "task/anchor-links-smoke",
             "from": "main"
-        } }
+        } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 32,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_anchors_smoke",
             "branch": "task/anchor-links-smoke",
             "trace_doc": "task-trace",
@@ -124,14 +124,14 @@ fn anchors_macro_note_snapshot_and_export_smoke() {
                 "text": "Test card committed into a task graph doc",
                 "tags": ["a:core"]
             }
-        } }
+        } } }
     }));
 
     let list = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "anchors_list", "arguments": { "workspace": "ws_anchors_smoke", "limit": 50 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.list", "args": { "workspace": "ws_anchors_smoke", "limit": 50 } } }
     }));
     let list_text = extract_tool_text(&list);
     if let Some(anchors) = list_text
@@ -158,7 +158,7 @@ fn anchors_macro_note_snapshot_and_export_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "anchor_snapshot", "arguments": { "workspace": "ws_anchors_smoke", "anchor": "a:core", "limit": 20 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.snapshot", "args": { "workspace": "ws_anchors_smoke", "anchor": "a:core", "limit": 20 } } }
     }));
     let snapshot_text = extract_tool_text(&snapshot);
     if let Some(cards) = snapshot_text
@@ -192,7 +192,7 @@ fn anchors_macro_note_snapshot_and_export_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "anchors_export", "arguments": { "workspace": "ws_anchors_smoke", "format": "text" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.export", "args": { "workspace": "ws_anchors_smoke", "format": "text" } } }
     }));
     let export_1_text = extract_tool_text(&export_1);
     let exported_1 = if let Some(v) = export_1_text
@@ -211,7 +211,7 @@ fn anchors_macro_note_snapshot_and_export_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "anchors_export", "arguments": { "workspace": "ws_anchors_smoke", "format": "text" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.export", "args": { "workspace": "ws_anchors_smoke", "format": "text" } } }
     }));
     let export_2_text = extract_tool_text(&export_2);
     let exported_2 = if let Some(v) = export_2_text
@@ -244,14 +244,14 @@ fn anchors_aliases_expand_snapshot_and_open() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchors_aliases" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchors_aliases" } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "macro_anchor_note", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.macro.anchor.note", "args": {
             "workspace": "ws_anchors_aliases",
             "anchor": "a:core",
             "title": "Core",
@@ -260,14 +260,14 @@ fn anchors_aliases_expand_snapshot_and_open() {
             "content": "Anchor registry note for a:core",
             "visibility": "canon",
             "pin": true
-        } }
+        } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_anchors_aliases",
             "card": {
                 "id": "CARD-ALIAS-1",
@@ -276,14 +276,14 @@ fn anchors_aliases_expand_snapshot_and_open() {
                 "text": "This is old history under the alias id.",
                 "tags": ["a:foundation"]
             }
-        } }
+        } } }
     }));
 
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "anchor_snapshot", "arguments": { "workspace": "ws_anchors_aliases", "anchor": "a:core", "limit": 20 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.snapshot", "args": { "workspace": "ws_anchors_aliases", "anchor": "a:core", "limit": 20 } } }
     }));
     let snapshot_text = extract_tool_text(&snapshot);
     if let Some(cards) = snapshot_text
@@ -353,7 +353,7 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchor_tasks_lens" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchor_tasks_lens" } } }
     }));
 
     // Register anchor (so anchor_snapshot works even before any history exists).
@@ -361,7 +361,7 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "macro_anchor_note", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.macro.anchor.note", "args": {
             "workspace": "ws_anchor_tasks_lens",
             "anchor": "a:storage",
             "title": "Storage",
@@ -369,7 +369,7 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
             "content": "Anchor registry note for a:storage",
             "visibility": "canon",
             "pin": true
-        } }
+        } } }
     }));
 
     // Create a task and commit an anchor-tagged card into its task graph.
@@ -377,11 +377,11 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": {
             "workspace": "ws_anchor_tasks_lens",
             "kind": "plan",
             "title": "Plan"
-        } }
+        } } }
     }));
     let plan_id = extract_tool_text(&plan)
         .get("result")
@@ -394,12 +394,12 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": {
             "workspace": "ws_anchor_tasks_lens",
             "kind": "task",
             "parent": plan_id,
             "title": "Storage task"
-        } }
+        } } }
     }));
     let task_id = extract_tool_text(&task)
         .get("result")
@@ -412,7 +412,7 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_anchor_tasks_lens", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws_anchor_tasks_lens", "task": task_id.clone() } } }
     }));
     let radar_text = extract_tool_text(&radar);
     let branch = radar_text
@@ -441,7 +441,7 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_anchor_tasks_lens",
             "branch": branch,
             "graph_doc": graph_doc,
@@ -452,14 +452,14 @@ fn anchor_snapshot_includes_recent_tasks_lens() {
                 "text": "Anchor-tagged decision inside a task graph",
                 "tags": ["a:storage", "v:canon"]
             }
-        } }
+        } } }
     }));
 
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "anchor_snapshot", "arguments": { "workspace": "ws_anchor_tasks_lens", "anchor": "a:storage", "limit": 20 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.snapshot", "args": { "workspace": "ws_anchor_tasks_lens", "anchor": "a:storage", "limit": 20 } } }
     }));
     let snapshot_text = extract_tool_text(&snapshot);
     if let Some(s) = snapshot_text.as_str() {
@@ -497,20 +497,20 @@ fn anchors_bootstrap_is_idempotent_and_visible_to_open() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchors_bootstrap" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchors_bootstrap" } } }
     }));
 
     let boot_1 = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "anchors_bootstrap", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.bootstrap", "args": {
             "workspace": "ws_anchors_bootstrap",
             "anchors": [
                 { "id": "a:core", "title": "Core", "kind": "component" },
                 { "id": "a:storage", "title": "Storage adapter", "kind": "boundary", "depends_on": ["a:core"] }
             ]
-        } }
+        } } }
     }));
     let boot_1_text = extract_tool_text(&boot_1);
     let created_1 = boot_1_text
@@ -530,13 +530,13 @@ fn anchors_bootstrap_is_idempotent_and_visible_to_open() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "anchors_bootstrap", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.bootstrap", "args": {
             "workspace": "ws_anchors_bootstrap",
             "anchors": [
                 { "id": "a:core", "title": "Core", "kind": "component" },
                 { "id": "a:storage", "title": "Storage adapter", "kind": "boundary", "depends_on": ["a:core"] }
             ]
-        } }
+        } } }
     }));
     let boot_2_text = extract_tool_text(&boot_2);
     let created_2 = boot_2_text
@@ -584,28 +584,28 @@ fn anchors_rename_preserves_history_via_alias() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchors_rename" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchors_rename" } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "macro_anchor_note", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.macro.anchor.note", "args": {
             "workspace": "ws_anchors_rename",
             "anchor": "a:core",
             "title": "Core",
             "kind": "component",
             "content": "Anchor registry note for a:core",
             "visibility": "canon"
-        } }
+        } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_anchors_rename",
             "card": {
                 "id": "CARD-RENAME-1",
@@ -614,18 +614,18 @@ fn anchors_rename_preserves_history_via_alias() {
                 "text": "This history should survive an anchor id refactor.",
                 "tags": ["a:core"]
             }
-        } }
+        } } }
     }));
 
     let renamed = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "anchors_rename", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.rename", "args": {
             "workspace": "ws_anchors_rename",
             "from": "a:core",
             "to": "a:domain"
-        } }
+        } } }
     }));
     let renamed_text = extract_tool_text(&renamed);
     assert_eq!(
@@ -701,27 +701,27 @@ fn anchors_merge_merges_and_preserves_history_via_alias() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchors_merge" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchors_merge" } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "anchors_bootstrap", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.bootstrap", "args": {
             "workspace": "ws_anchors_merge",
             "anchors": [
                 { "id": "a:core", "title": "Core", "kind": "component" },
                 { "id": "a:domain", "title": "Domain", "kind": "component" }
             ]
-        } }
+        } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_anchors_merge",
             "card": {
                 "id": "CARD-MERGE-1",
@@ -730,18 +730,18 @@ fn anchors_merge_merges_and_preserves_history_via_alias() {
                 "text": "History must survive map hygiene merges.",
                 "tags": ["a:core"]
             }
-        } }
+        } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "anchors_merge", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.merge", "args": {
             "workspace": "ws_anchors_merge",
             "into": "a:domain",
             "from": ["a:core"]
-        } }
+        } } }
     }));
 
     let open_domain = server.request(json!( {
@@ -799,26 +799,26 @@ fn anchors_lint_reports_unknown_depends_on() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_anchors_lint" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_anchors_lint" } } }
     }));
 
     let _ = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "anchors_bootstrap", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.bootstrap", "args": {
             "workspace": "ws_anchors_lint",
             "anchors": [
                 { "id": "a:core", "title": "Core", "kind": "component", "depends_on": ["a:missing"] }
             ]
-        } }
+        } } }
     }));
 
     let lint = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "anchors_lint", "arguments": { "workspace": "ws_anchors_lint", "limit": 50 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.anchor.lint", "args": { "workspace": "ws_anchors_lint", "limit": 50 } } }
     }));
     let lint_text = extract_tool_text(&lint);
     let issues = lint_text

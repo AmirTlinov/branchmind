@@ -12,17 +12,14 @@ fn tasks_resume_super_read_only_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Super",
                 "task_title": "Task Super",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -44,14 +41,14 @@ fn tasks_resume_super_read_only_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws1", "task": plan_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.set", "args": { "workspace": "ws1", "task": plan_id.clone() } } }
     }));
 
     let resume_super = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_resume_super", "arguments": { "workspace": "ws1", "task": task_id.clone(), "read_only": true, "max_chars": 4000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": { "workspace": "ws1", "task": task_id.clone(), "read_only": true, "max_chars": 4000 } } }
     }));
     let resume_text = extract_tool_text(&resume_super);
     assert!(
@@ -71,7 +68,7 @@ fn tasks_resume_super_read_only_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws1" } } }
     }));
     let focus_text = extract_tool_text(&focus);
     assert_eq!(

@@ -20,9 +20,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             idempotent: true,
         },
         budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Legacy,
+        schema: SchemaSource::Handler,
         op_aliases: vec!["use".to_string()],
-        legacy_tool: Some("workspace_use".to_string()),
+        handler_name: Some("workspace_use".to_string()),
         handler: None,
     });
 
@@ -41,9 +41,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             idempotent: true,
         },
         budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Legacy,
+        schema: SchemaSource::Handler,
         op_aliases: vec!["reset".to_string()],
-        legacy_tool: Some("workspace_reset".to_string()),
+        handler_name: Some("workspace_reset".to_string()),
         handler: None,
     });
 }

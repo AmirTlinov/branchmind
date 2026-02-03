@@ -30,7 +30,7 @@ fn open_task_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Open Task 1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Open Task 1" } } }
     }));
     let task1 = focus_id_from_portal_line(&extract_tool_text_str(&started1));
     assert!(task1.starts_with("TASK-"), "expected a TASK-* id");
@@ -39,7 +39,7 @@ fn open_task_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Open Task 2" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Open Task 2" } } }
     }));
     let task2 = focus_id_from_portal_line(&extract_tool_text_str(&started2));
     assert!(task2.starts_with("TASK-"), "expected a TASK-* id");
@@ -48,14 +48,14 @@ fn open_task_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "task": task1 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.set", "args": { "task": task1 } } }
     }));
 
     let focused_before = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": {} } }
     }));
     let focused_before = extract_tool_text(&focused_before);
     assert_eq!(
@@ -105,7 +105,7 @@ fn open_task_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": {} } }
     }));
     let focused_after = extract_tool_text(&focused_after);
     assert_eq!(
@@ -129,7 +129,7 @@ fn open_plan_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Focus Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Focus Task" } } }
     }));
     let focus_task = focus_id_from_portal_line(&extract_tool_text_str(&started));
 
@@ -137,7 +137,7 @@ fn open_plan_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_open_plan", "kind": "plan", "title": "Open Plan" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_open_plan", "kind": "plan", "title": "Open Plan" } } }
     }));
     let created_plan = extract_tool_text(&created_plan);
     assert!(
@@ -184,7 +184,7 @@ fn open_plan_is_supported_and_is_read_only() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": {} } }
     }));
     let focused_after = extract_tool_text(&focused_after);
     assert_eq!(

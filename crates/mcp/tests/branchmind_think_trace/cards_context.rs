@@ -12,7 +12,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_think", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_think", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_think", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_think", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,7 +40,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_think", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws_think", "task": task_id.clone() } } }
     }));
     let radar_text = extract_tool_text(&radar);
     let canonical_branch = radar_text
@@ -69,7 +69,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_template", "arguments": { "workspace": "ws_think", "type": "hypothesis" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.reasoning.seed", "args": { "workspace": "ws_think", "type": "hypothesis" } } }
     }));
     let template_text = extract_tool_text(&template);
     assert_eq!(
@@ -81,7 +81,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 55,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": { "workspace": "ws_think", "target": task_id.clone(), "card": "Quick note" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": { "workspace": "ws_think", "target": task_id.clone(), "card": "Quick note" } } }
     }));
     let auto_card_text = extract_tool_text(&auto_card);
     assert_eq!(
@@ -102,7 +102,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": { "workspace": "ws_think", "target": task_id.clone(), "card": { "id": card_id, "type": "hypothesis", "title": title, "text": text, "tags": ["UX", "MVP"], "meta": { "why": "smoke" } } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": { "workspace": "ws_think", "target": task_id.clone(), "card": { "id": card_id, "type": "hypothesis", "title": title, "text": text, "tags": ["UX", "MVP"], "meta": { "why": "smoke" } } } } }
     }));
     let think_card_text = extract_tool_text(&think_card);
     assert_eq!(
@@ -127,7 +127,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws_think", "branch": canonical_branch.clone(), "doc": trace_doc.clone(), "limit": 50 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws_think", "branch": canonical_branch.clone(), "doc": trace_doc.clone(), "limit": 50 } } }
     }));
     let show_trace_text = extract_tool_text(&show_trace);
     let entries = show_trace_text
@@ -152,7 +152,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "graph_query", "arguments": { "workspace": "ws_think", "branch": canonical_branch.clone(), "doc": graph_doc.clone(), "ids": [card_id], "include_edges": false, "limit": 10 } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.query", "args": { "workspace": "ws_think", "branch": canonical_branch.clone(), "doc": graph_doc.clone(), "ids": [card_id], "include_edges": false, "limit": 10 } } }
     }));
     let query_graph_text = extract_tool_text(&query_graph);
     assert_eq!(
@@ -177,7 +177,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": { "workspace": "ws_think", "target": task_id.clone(), "card": { "id": card_id, "type": "hypothesis", "title": title, "text": text, "tags": ["ux", "mvp"], "meta": { "why": "smoke" } } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": { "workspace": "ws_think", "target": task_id.clone(), "card": { "id": card_id, "type": "hypothesis", "title": title, "text": text, "tags": ["ux", "mvp"], "meta": { "why": "smoke" } } } } }
     }));
     let think_card_again_text = extract_tool_text(&think_card_again);
     assert_eq!(
@@ -200,7 +200,7 @@ fn branchmind_think_card_and_context_smoke() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": { "workspace": "ws_think", "branch": canonical_branch, "graph_doc": graph_doc, "include_drafts": true, "limit_cards": 10, "max_chars": 2000 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context", "args": { "workspace": "ws_think", "branch": canonical_branch, "graph_doc": graph_doc, "include_drafts": true, "limit_cards": 10, "max_chars": 2000 } } }
     }));
     let ctx_text = extract_tool_text(&ctx);
     assert_eq!(

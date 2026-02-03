@@ -38,7 +38,7 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Task", "template": "principal-task", "reasoning_mode": "normal" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Task", "template": "principal-task", "reasoning_mode": "normal" } } }
     }));
     let start_text = extract_tool_text_str(&started);
     assert_tag_light(&start_text);
@@ -49,7 +49,7 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
         let text = extract_tool_text_str(&closed);
         assert_tag_light(&text);
@@ -64,7 +64,7 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {} } }
     }));
     let snap_text = extract_tool_text_str(&snapshot);
     assert_tag_light(&snap_text);
@@ -103,7 +103,7 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
     }));
     let err_text = extract_tool_text_str(&close_without_proof);
     assert_tag_light(&err_text);
@@ -127,7 +127,7 @@ fn proof_required_step_fails_portal_first_and_recovers_with_proof() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": { "proof": "cargo test" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "proof": "cargo test" } } }
     }));
     let ok_text = extract_tool_text_str(&close_with_proof);
     assert_tag_light(&ok_text);
@@ -148,7 +148,7 @@ fn proof_weak_warning_is_soft_and_does_not_block_closing() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Weak Task", "template": "principal-task", "reasoning_mode": "normal" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Weak Task", "template": "principal-task", "reasoning_mode": "normal" } } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -158,7 +158,7 @@ fn proof_weak_warning_is_soft_and_does_not_block_closing() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
         let text = extract_tool_text_str(&closed);
         assert_tag_light(&text);
@@ -171,12 +171,9 @@ fn proof_weak_warning_is_soft_and_does_not_block_closing() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
                 "proof": "cargo test"
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&closed);
     assert_tag_light(&text);
@@ -201,7 +198,7 @@ fn proof_markdown_bullets_are_normalized_and_do_not_trigger_proof_weak() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof MD Bullets", "template": "principal-task", "reasoning_mode": "normal" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof MD Bullets", "template": "principal-task", "reasoning_mode": "normal" } } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -211,7 +208,7 @@ fn proof_markdown_bullets_are_normalized_and_do_not_trigger_proof_weak() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
         let text = extract_tool_text_str(&closed);
         assert_tag_light(&text);
@@ -224,12 +221,9 @@ fn proof_markdown_bullets_are_normalized_and_do_not_trigger_proof_weak() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
                 "proof": "- cargo test\n- LINK: https://example.com/ci/run/123"
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&closed);
     assert_tag_light(&text);
@@ -259,7 +253,7 @@ fn proof_url_attachment_satisfies_soft_link_receipt_lint() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Attachment Link", "template": "principal-task", "reasoning_mode": "normal" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Attachment Link", "template": "principal-task", "reasoning_mode": "normal" } } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -269,7 +263,7 @@ fn proof_url_attachment_satisfies_soft_link_receipt_lint() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
         let text = extract_tool_text_str(&closed);
         assert_tag_light(&text);
@@ -281,15 +275,12 @@ fn proof_url_attachment_satisfies_soft_link_receipt_lint() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
                 "proof": {
                     "checks": ["cargo test"],
                     "attachments": ["https://example.com/ci/run/456"]
                 }
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&closed);
     assert_tag_light(&text);
@@ -314,7 +305,7 @@ fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Placeholder Task", "template": "principal-task", "reasoning_mode": "normal" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Placeholder Task", "template": "principal-task", "reasoning_mode": "normal" } } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -324,7 +315,7 @@ fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
         let text = extract_tool_text_str(&closed);
         assert_tag_light(&text);
@@ -337,15 +328,12 @@ fn proof_placeholder_is_ignored_and_does_not_satisfy_proof_required_gate() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
                 "proof": [
                     "CMD: <fill: command you ran>",
                     "LINK: <fill: CI run / artifact / log>"
                 ]
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&closed);
     assert_tag_light(&text);
@@ -376,7 +364,7 @@ fn proof_in_note_is_salvaged_and_satisfies_proof_required_gate() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Proof Note Salvage", "template": "principal-task", "reasoning_mode": "normal" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Note Salvage", "template": "principal-task", "reasoning_mode": "normal" } } }
     }));
     assert_tag_light(&extract_tool_text_str(&started));
 
@@ -386,7 +374,7 @@ fn proof_in_note_is_salvaged_and_satisfies_proof_required_gate() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
         let text = extract_tool_text_str(&closed);
         assert_tag_light(&text);
@@ -399,12 +387,9 @@ fn proof_in_note_is_salvaged_and_satisfies_proof_required_gate() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
                 "note": "CMD: cargo test\nLINK: https://example.com/ci/run/789"
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&closed);
     assert_tag_light(&text);

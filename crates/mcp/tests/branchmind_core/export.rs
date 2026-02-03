@@ -12,7 +12,7 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -41,7 +41,7 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": note_content } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws1", "target": task_id.clone(), "content": note_content } } }
     }));
     let notes_commit_text = extract_tool_text(&notes_commit);
     assert_eq!(
@@ -55,7 +55,7 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": { "workspace": "ws1", "target": task_id.clone(), "card": { "id": context_card_id, "type": "decision", "title": "Context pack", "text": context_card_text } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": { "workspace": "ws1", "target": task_id.clone(), "card": { "id": context_card_id, "type": "decision", "title": "Context pack", "text": context_card_text } } } }
     }));
     let think_card_text = extract_tool_text(&think_card);
     assert_eq!(
@@ -67,7 +67,7 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "context_pack", "arguments": { "workspace": "ws1", "target": task_id.clone(), "notes_limit": 10, "trace_limit": 50, "limit_cards": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context.pack", "args": { "workspace": "ws1", "target": task_id.clone(), "notes_limit": 10, "trace_limit": 50, "limit_cards": 10 } } }
     }));
     let context_pack_text = extract_tool_text(&context_pack);
     assert_eq!(
@@ -90,7 +90,7 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "export", "arguments": { "workspace": "ws1", "target": task_id.clone(), "notes_limit": 10, "trace_limit": 50 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.export", "args": { "workspace": "ws1", "target": task_id.clone(), "notes_limit": 10, "trace_limit": 50 } } }
     }));
     let export_text = extract_tool_text(&export);
     assert_eq!(
@@ -129,14 +129,14 @@ fn branchmind_export_smoke() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": long_note } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws1", "target": task_id.clone(), "content": long_note } } }
     }));
 
     let export_budget = server.request(json!({
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "export", "arguments": { "workspace": "ws1", "target": task_id, "notes_limit": 50, "trace_limit": 50, "max_chars": 400 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.export", "args": { "workspace": "ws1", "target": task_id, "notes_limit": 50, "trace_limit": 50, "max_chars": 400 } } }
     }));
     let export_budget_text = extract_tool_text(&export_budget);
     assert_eq!(
@@ -166,7 +166,7 @@ fn branchmind_context_pack_export_writes_file() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -180,7 +180,7 @@ fn branchmind_context_pack_export_writes_file() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -195,7 +195,7 @@ fn branchmind_context_pack_export_writes_file() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": note_content } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws1", "target": task_id.clone(), "content": note_content } } }
     }));
     let notes_commit_text = extract_tool_text(&notes_commit);
     assert_eq!(
@@ -216,17 +216,14 @@ fn branchmind_context_pack_export_writes_file() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "context_pack_export",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context.pack.export", "args": {
                 "workspace": "ws1",
                 "target": task_id,
                 "notes_limit": 10,
                 "trace_limit": 50,
                 "limit_cards": 5,
                 "out_file": out_file.to_string_lossy()
-            }
-        }
+            } } }
     }));
     let export_text = extract_tool_text(&export);
     assert_eq!(

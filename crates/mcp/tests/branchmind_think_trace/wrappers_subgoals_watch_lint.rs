@@ -13,7 +13,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_think_wrap" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_think_wrap" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -25,7 +25,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.hypothesis", "args": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } } }
     }));
     let hypo1_text = extract_tool_text(&hypo1);
     let hypo1_id = hypo1_text
@@ -39,7 +39,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_add_hypothesis", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.hypothesis", "args": { "workspace": "ws_think_wrap", "card": { "title": "Hypo", "text": "Same" } } } }
     }));
     let hypo2_text = extract_tool_text(&hypo2);
     let hypo2_id = hypo2_text
@@ -53,7 +53,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_add_question", "arguments": { "workspace": "ws_think_wrap", "card": { "title": "Question", "text": "Why?" } } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.question", "args": { "workspace": "ws_think_wrap", "card": { "title": "Question", "text": "Why?" } } } }
     }));
     let question_text = extract_tool_text(&question);
     let question_id = question_text
@@ -67,7 +67,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 15,
         "method": "tools/call",
-        "params": { "name": "think_nominal_merge", "arguments": { "workspace": "ws_think_wrap", "candidate_ids": [hypo1_id.clone(), hypo2_id.clone()] } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.nominal.merge", "args": { "workspace": "ws_think_wrap", "candidate_ids": [hypo1_id.clone(), hypo2_id.clone()] } } }
     }));
     let merge_text = extract_tool_text(&merge);
     assert_eq!(
@@ -79,7 +79,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 16,
         "method": "tools/call",
-        "params": { "name": "think_playbook", "arguments": { "workspace": "ws_think_wrap", "name": "default" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.playbook", "args": { "workspace": "ws_think_wrap", "name": "default" } } }
     }));
     let playbook_text = extract_tool_text(&playbook);
     assert_eq!(
@@ -91,7 +91,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 161,
         "method": "tools/call",
-        "params": { "name": "think_playbook", "arguments": { "workspace": "ws_think_wrap", "name": "strict" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.playbook", "args": { "workspace": "ws_think_wrap", "name": "strict" } } }
     }));
     let playbook_strict_text = extract_tool_text(&playbook_strict);
     assert_eq!(
@@ -136,7 +136,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 162,
         "method": "tools/call",
-        "params": { "name": "think_playbook", "arguments": { "workspace": "ws_think_wrap", "name": "breakthrough" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.playbook", "args": { "workspace": "ws_think_wrap", "name": "breakthrough" } } }
     }));
     let playbook_breakthrough_text = extract_tool_text(&playbook_breakthrough);
     assert_eq!(
@@ -179,7 +179,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 17,
         "method": "tools/call",
-        "params": { "name": "think_subgoal_open", "arguments": { "workspace": "ws_think_wrap", "question_id": question_id.clone() } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.subgoal.open", "args": { "workspace": "ws_think_wrap", "question_id": question_id.clone() } } }
     }));
     let subgoal_open_text = extract_tool_text(&subgoal_open);
     let subgoal_id = subgoal_open_text
@@ -193,7 +193,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 18,
         "method": "tools/call",
-        "params": { "name": "think_subgoal_close", "arguments": { "workspace": "ws_think_wrap", "subgoal_id": subgoal_id, "return_card": "done" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.subgoal.close", "args": { "workspace": "ws_think_wrap", "subgoal_id": subgoal_id, "return_card": "done" } } }
     }));
     let subgoal_close_text = extract_tool_text(&subgoal_close);
     assert_eq!(
@@ -205,14 +205,14 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 19,
         "method": "tools/call",
-        "params": { "name": "think_add_note", "arguments": { "workspace": "ws_think_wrap", "card": "Note for watch" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.note", "args": { "workspace": "ws_think_wrap", "card": "Note for watch" } } }
     }));
 
     let watch = server.request(json!({
         "jsonrpc": "2.0",
         "id": 20,
         "method": "tools/call",
-        "params": { "name": "think_watch", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.watch", "args": { "workspace": "ws_think_wrap", "limit_candidates": 10 } } }
     }));
     let watch_text = extract_tool_text(&watch);
     assert_eq!(
@@ -224,7 +224,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 21,
         "method": "tools/call",
-        "params": { "name": "think_watch", "arguments": { "workspace": "ws_think_wrap", "limit_candidates": 10, "trace_limit_steps": 20, "max_chars": 400 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.watch", "args": { "workspace": "ws_think_wrap", "limit_candidates": 10, "trace_limit_steps": 20, "max_chars": 400 } } }
     }));
     let watch_budget_text = extract_tool_text(&watch_budget);
     let watch_budget_obj = watch_budget_text
@@ -266,7 +266,7 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "jsonrpc": "2.0",
         "id": 22,
         "method": "tools/call",
-        "params": { "name": "think_lint", "arguments": { "workspace": "ws_think_wrap" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.knowledge.lint", "args": { "workspace": "ws_think_wrap" } } }
     }));
     let lint_text = extract_tool_text(&lint);
     assert_eq!(

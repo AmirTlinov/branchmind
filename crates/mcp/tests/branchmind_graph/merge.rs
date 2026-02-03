@@ -11,7 +11,7 @@ fn branchmind_graph_merge_dry_run_preview_and_merge_to_base() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_preview", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_preview", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -25,7 +25,7 @@ fn branchmind_graph_merge_dry_run_preview_and_merge_to_base() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_preview", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_preview", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,7 +40,7 @@ fn branchmind_graph_merge_dry_run_preview_and_merge_to_base() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_preview", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Initial title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_preview", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Initial title" } ] } } }
     }));
     let apply_initial_text = extract_tool_text(&apply_initial);
     let base_branch = apply_initial_text
@@ -61,27 +61,27 @@ fn branchmind_graph_merge_dry_run_preview_and_merge_to_base() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws_graph_preview", "name": derived_branch.clone(), "from": base_branch.clone() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws_graph_preview", "name": derived_branch.clone(), "from": base_branch.clone() } } }
     }));
 
     server.request(json!( {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_preview", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Base title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_preview", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Base title" } ] } } }
     }));
     server.request(json!( {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_preview", "branch": derived_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Derived title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_preview", "branch": derived_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Derived title" } ] } } }
     }));
 
     let merge_preview = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "graph_merge", "arguments": { "workspace": "ws_graph_preview", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": true, "merge_to_base": true } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.merge", "args": { "workspace": "ws_graph_preview", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": true, "merge_to_base": true } } }
     }));
     let merge_preview_text = extract_tool_text(&merge_preview);
     assert_eq!(
@@ -122,7 +122,7 @@ fn branchmind_graph_merge_dry_run_preview_and_merge_to_base() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "graph_conflicts", "arguments": { "workspace": "ws_graph_preview", "into": base_branch.clone(), "doc": doc.clone(), "limit": 50 } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.conflicts", "args": { "workspace": "ws_graph_preview", "into": base_branch.clone(), "doc": doc.clone(), "limit": 50 } } }
     }));
     let conflicts_list_text = extract_tool_text(&conflicts_list);
     let conflicts = conflicts_list_text
@@ -141,7 +141,7 @@ fn branchmind_graph_merge_resolved_conflict_does_not_resurface() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_resolved", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_resolved", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -155,7 +155,7 @@ fn branchmind_graph_merge_resolved_conflict_does_not_resurface() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_resolved", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_resolved", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -170,7 +170,7 @@ fn branchmind_graph_merge_resolved_conflict_does_not_resurface() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_resolved", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Initial title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_resolved", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Initial title" } ] } } }
     }));
     let apply_initial_text = extract_tool_text(&apply_initial);
     let base_branch = apply_initial_text
@@ -191,27 +191,27 @@ fn branchmind_graph_merge_resolved_conflict_does_not_resurface() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws_graph_resolved", "name": derived_branch.clone(), "from": base_branch.clone() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws_graph_resolved", "name": derived_branch.clone(), "from": base_branch.clone() } } }
     }));
 
     server.request(json!( {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_resolved", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Base title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_resolved", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Base title" } ] } } }
     }));
     server.request(json!( {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_resolved", "branch": derived_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Derived title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_resolved", "branch": derived_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Derived title" } ] } } }
     }));
 
     let merge_first = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "graph_merge", "arguments": { "workspace": "ws_graph_resolved", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.merge", "args": { "workspace": "ws_graph_resolved", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } } }
     }));
     let merge_first_text = extract_tool_text(&merge_first);
     assert_eq!(
@@ -235,7 +235,7 @@ fn branchmind_graph_merge_resolved_conflict_does_not_resurface() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "graph_conflict_resolve", "arguments": { "workspace": "ws_graph_resolved", "conflict_id": conflict_id.clone(), "resolution": "use_into" } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.conflict.resolve", "args": { "workspace": "ws_graph_resolved", "conflict_id": conflict_id.clone(), "resolution": "use_into" } } }
     }));
     let resolve_text = extract_tool_text(&resolve);
     assert_eq!(
@@ -247,7 +247,7 @@ fn branchmind_graph_merge_resolved_conflict_does_not_resurface() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "graph_merge", "arguments": { "workspace": "ws_graph_resolved", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.merge", "args": { "workspace": "ws_graph_resolved", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } } }
     }));
     let merge_again_text = extract_tool_text(&merge_again);
     assert_eq!(
@@ -277,7 +277,7 @@ fn branchmind_graph_merge_resolved_conflict_does_not_resurface() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "graph_conflicts", "arguments": { "workspace": "ws_graph_resolved", "into": base_branch.clone(), "doc": doc.clone(), "limit": 50 } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.conflicts", "args": { "workspace": "ws_graph_resolved", "into": base_branch.clone(), "doc": doc.clone(), "limit": 50 } } }
     }));
     let conflicts_list_text = extract_tool_text(&conflicts_list);
     let conflicts = conflicts_list_text
@@ -299,7 +299,7 @@ fn branchmind_graph_merge_use_from_does_not_resurface_due_to_merge_meta() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_use_from", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_use_from", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -313,7 +313,7 @@ fn branchmind_graph_merge_use_from_does_not_resurface_due_to_merge_meta() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_use_from", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_use_from", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -328,7 +328,7 @@ fn branchmind_graph_merge_use_from_does_not_resurface_due_to_merge_meta() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_use_from", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Initial title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_use_from", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Initial title" } ] } } }
     }));
     let apply_initial_text = extract_tool_text(&apply_initial);
     let base_branch = apply_initial_text
@@ -349,27 +349,27 @@ fn branchmind_graph_merge_use_from_does_not_resurface_due_to_merge_meta() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws_graph_use_from", "name": derived_branch.clone(), "from": base_branch.clone() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws_graph_use_from", "name": derived_branch.clone(), "from": base_branch.clone() } } }
     }));
 
     server.request(json!( {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_use_from", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Base title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_use_from", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Base title" } ] } } }
     }));
     server.request(json!( {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_use_from", "branch": derived_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Derived title" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_use_from", "branch": derived_branch.clone(), "doc": doc.clone(), "ops": [ { "op": "node_upsert", "id": node_id, "type": "idea", "title": "Derived title" } ] } } }
     }));
 
     let merge_first = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "graph_merge", "arguments": { "workspace": "ws_graph_use_from", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.merge", "args": { "workspace": "ws_graph_use_from", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } } }
     }));
     let merge_first_text = extract_tool_text(&merge_first);
     assert_eq!(
@@ -393,7 +393,7 @@ fn branchmind_graph_merge_use_from_does_not_resurface_due_to_merge_meta() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "graph_conflict_resolve", "arguments": { "workspace": "ws_graph_use_from", "conflict_id": conflict_id.clone(), "resolution": "use_from" } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.conflict.resolve", "args": { "workspace": "ws_graph_use_from", "conflict_id": conflict_id.clone(), "resolution": "use_from" } } }
     }));
     let resolve_text = extract_tool_text(&resolve);
     assert_eq!(
@@ -405,7 +405,7 @@ fn branchmind_graph_merge_use_from_does_not_resurface_due_to_merge_meta() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "graph_merge", "arguments": { "workspace": "ws_graph_use_from", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.merge", "args": { "workspace": "ws_graph_use_from", "from": derived_branch.clone(), "doc": doc.clone(), "limit": 200, "dry_run": false, "merge_to_base": true } } }
     }));
     let merge_again_text = extract_tool_text(&merge_again);
     assert_eq!(

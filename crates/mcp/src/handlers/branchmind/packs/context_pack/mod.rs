@@ -58,7 +58,7 @@ impl McpServer {
         };
 
         let step_ctx = if let Some(step_raw) = step.as_deref() {
-            match crate::tools::branchmind::think::resolve_step_context_from_args(
+            match crate::handlers::branchmind::think::resolve_step_context_from_args(
                 self, &workspace, args_obj, step_raw,
             ) {
                 Ok(v) => v,

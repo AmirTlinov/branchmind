@@ -17,20 +17,20 @@ fn jobs_radar_fmt_lines_includes_bounded_runner_lines() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-live", "status": "live", "active_job_id": "JOB-001", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-live", "status": "live", "active_job_id": "JOB-001", "lease_ttl_ms": 5000 } } }
     }));
     let _hb2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-idle", "status": "idle", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-idle", "status": "idle", "lease_ttl_ms": 5000 } } }
     }));
 
     let radar_lines = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5 } } }
     }));
     let text = extract_tool_text_str(&radar_lines);
     let header = text.lines().next().unwrap_or("");
@@ -68,7 +68,7 @@ fn jobs_radar_fmt_lines_includes_recent_offline_runners_section() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-offline", "status": "idle", "lease_ttl_ms": 2000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-offline", "status": "idle", "lease_ttl_ms": 2000 } } }
     }));
 
     // Heartbeat TTL is intentionally "sleep-safe" to avoid flapping, so we wait past expiry.
@@ -78,7 +78,7 @@ fn jobs_radar_fmt_lines_includes_recent_offline_runners_section() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5, "offline_limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5, "offline_limit": 5 } } }
     }));
     let text = extract_tool_text_str(&radar_lines);
 
@@ -101,10 +101,7 @@ fn jobs_radar_fmt_lines_marks_running_job_runner_offline_when_no_lease() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do it" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do it" } } }
     }));
     let job_id = extract_tool_text(&created)
         .get("result")
@@ -118,17 +115,14 @@ fn jobs_radar_fmt_lines_marks_running_job_runner_offline_when_no_lease() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_claim",
-            "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r-offline", "lease_ttl_ms": 5000 }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r-offline", "lease_ttl_ms": 5000 } } }
     }));
 
     let radar_lines = server.request(json!({
         "jsonrpc": "2.0",
         "id": 12,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5 } } }
     }));
     let text = extract_tool_text_str(&radar_lines);
     assert!(
@@ -149,19 +143,19 @@ fn jobs_radar_fmt_lines_keeps_running_job_runner_state_explicit_when_runner_leas
         "jsonrpc": "2.0",
         "id": 20,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-a", "status": "live", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-a", "status": "live", "lease_ttl_ms": 5000 } } }
     }));
     let _hb2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 21,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-b", "status": "idle", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-b", "status": "idle", "lease_ttl_ms": 5000 } } }
     }));
     let _hb3 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 22,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-unknown", "status": "idle", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-unknown", "status": "idle", "lease_ttl_ms": 5000 } } }
     }));
 
     // Create and claim a job (RUNNING) with a runner id that has an active lease, but is not
@@ -170,10 +164,7 @@ fn jobs_radar_fmt_lines_keeps_running_job_runner_state_explicit_when_runner_leas
         "jsonrpc": "2.0",
         "id": 23,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_create",
-            "arguments": { "workspace": "ws1", "title": "Job B", "prompt": "do it" }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job B", "prompt": "do it" } } }
     }));
     let job_id = extract_tool_text(&created)
         .get("result")
@@ -187,17 +178,14 @@ fn jobs_radar_fmt_lines_keeps_running_job_runner_state_explicit_when_runner_leas
         "jsonrpc": "2.0",
         "id": 24,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_jobs_claim",
-            "arguments": { "workspace": "ws1", "job": job_id, "runner_id": "r-unknown", "lease_ttl_ms": 5000 }
-        }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r-unknown", "lease_ttl_ms": 5000 } } }
     }));
 
     let radar_lines = server.request(json!({
         "jsonrpc": "2.0",
         "id": 25,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5, "runners_limit": 1 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5, "runners_limit": 1 } } }
     }));
     let text = extract_tool_text_str(&radar_lines);
     assert!(

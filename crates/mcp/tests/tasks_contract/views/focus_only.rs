@@ -12,17 +12,14 @@ fn tasks_snapshot_focus_only_returns_step_focus_and_minimized_memory() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_focus_only",
                 "plan_title": "Plan Focus",
                 "task_title": "Task Focus",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": ["b1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -37,10 +34,7 @@ fn tasks_snapshot_focus_only_returns_step_focus_and_minimized_memory() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": { "workspace": "ws_focus_only", "task": task_id, "view": "focus_only", "max_chars": 4000 }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": { "workspace": "ws_focus_only", "task": task_id, "view": "focus_only", "max_chars": 4000 } } }
     }));
     let resume_text = extract_tool_text(&resume);
 

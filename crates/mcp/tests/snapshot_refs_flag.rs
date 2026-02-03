@@ -29,21 +29,18 @@ fn tasks_snapshot_refs_flag_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Refs Flag Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Refs Flag Task" } } }
     }));
 
     let _note = server.request(json!({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_refs_flag",
                 "path": "s:0",
                 "note": "note for refs flag test"
-            }
-        }
+            } } }
     }));
 
     // `refs=true` must emit at least one openable reference even without explicit budgets.
@@ -51,7 +48,7 @@ fn tasks_snapshot_refs_flag_emits_openable_refs() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "refs": true, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "refs": true, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
 
