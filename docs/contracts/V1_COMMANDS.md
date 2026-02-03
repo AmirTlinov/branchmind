@@ -110,6 +110,15 @@ Low-noise job radar (legacy `tasks_jobs_radar`).
 
 Open a job record (legacy `tasks_jobs_open`).
 
+## jobs.proof.attach
+
+Attach proof receipts from a job to a task/step (legacy `tasks_jobs_proof_attach`).
+
+Notes:
+- Input includes `{ job, task?, step_id?|path?, checkpoint?, artifact_ref? }`.
+- The server resolves stable refs from the job (summary/refs + `artifact_ref`) and records evidence.
+- Attachments are emitted as `LINK: file://...` (with `sha256` when available) when possible.
+
 ## jobs.cancel
 
 Cancel a **queued** job (QUEUED → CANCELED).
@@ -153,6 +162,20 @@ Notes:
   to the latest version (history stays in the graph).
 - Visibility: knowledge defaults to `v:draft` unless explicitly tagged (`v:canon`) or later promoted via publish.
 - v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`, `kb-trace`).
+- `key_mode`:
+  - `explicit` (default): requires `anchor` + `key` when a stable identity is desired.
+  - `auto`: derives a deterministic key from the card title/text when `key` is omitted.
+- `lint_mode`:
+  - `manual` (default): no lint side-effects.
+  - `auto`: emits bounded, low-noise warnings for key hygiene (no blocking).
+
+## think.knowledge.key.suggest
+
+Suggest a stable knowledge key for a given anchor/title.
+
+Notes:
+- Returns `{ suggested_key, key_tag, collisions[] }`.
+- `collisions[]` lists existing `(anchor,key)` hits to prevent noisy key reuse.
 
 ## think.knowledge.query
 
@@ -187,6 +210,14 @@ research-heavy workspaces by helping agents:
 - detect same-key duplicate content across anchors (same `(key,content)` in multiple anchors),
 - spot potentially too-generic / overloaded keys via objective metrics (fanout / variants),
 - open the exact cards involved so consolidation is cheap.
+
+## think.note.promote
+
+Promote an existing `notes@seq` entry into a knowledge card (draft by default).
+
+Notes:
+- Input: `{ note_ref, anchor?, key?, title?, key_mode? }`
+- Uses the note content as card text; visibility defaults to `v:draft` unless overridden.
 
 ### Inputs (selected)
 

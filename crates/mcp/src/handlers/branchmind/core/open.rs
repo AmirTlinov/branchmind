@@ -69,6 +69,12 @@ fn compact_open_result(id: &str, result: &Value) -> Value {
     if let Some(ref_val) = result.get("ref") {
         out.insert("ref".to_string(), ref_val.clone());
     }
+    if let Some(budget) = result.get("budget") {
+        out.insert("budget".to_string(), budget.clone());
+    }
+    if let Some(truncated) = result.get("truncated") {
+        out.insert("truncated".to_string(), truncated.clone());
+    }
     if let Some(reasoning_ref) = result.get("reasoning_ref") {
         out.insert("reasoning_ref".to_string(), reasoning_ref.clone());
     }
@@ -656,6 +662,7 @@ impl McpServer {
                 "id": id,
                 "target": resume.get("target").cloned().unwrap_or(Value::Null),
                 "reasoning_ref": resume.get("reasoning_ref").cloned().unwrap_or(Value::Null),
+                "budget": resume.get("budget").cloned().unwrap_or(Value::Null),
                 "capsule": resume.get("capsule").cloned().unwrap_or(Value::Null),
                 "step_focus": resume.get("step_focus").cloned().unwrap_or(Value::Null),
                 "degradation": resume.get("degradation").cloned().unwrap_or(Value::Null),

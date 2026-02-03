@@ -203,10 +203,26 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let key = match optional_string(args_obj, "key") {
+        let mut key = match optional_string(args_obj, "key") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let key_mode = match optional_string(args_obj, "key_mode") {
+            Ok(v) => v.unwrap_or_else(|| "explicit".to_string()),
+            Err(resp) => return resp,
+        };
+        let key_mode = key_mode.trim().to_ascii_lowercase();
+        if !matches!(key_mode.as_str(), "explicit" | "auto") {
+            return ai_error("INVALID_INPUT", "key_mode must be explicit|auto");
+        }
+        let lint_mode = match optional_string(args_obj, "lint_mode") {
+            Ok(v) => v.unwrap_or_else(|| "manual".to_string()),
+            Err(resp) => return resp,
+        };
+        let lint_mode = lint_mode.trim().to_ascii_lowercase();
+        if !matches!(lint_mode.as_str(), "manual" | "auto") {
+            return ai_error("INVALID_INPUT", "lint_mode must be manual|auto");
+        }
 
         let card_value = args_obj.get("card").cloned().unwrap_or(Value::Null);
         let mut parsed = match parse_think_card(&workspace, card_value) {
@@ -214,11 +230,28 @@ impl McpServer {
             Err(resp) => return resp,
         };
         parsed.card_type = "knowledge".to_string();
+        if key.is_none() && key_mode == "auto" {
+            if anchor.as_deref().is_none() {
+                return ai_error("INVALID_INPUT", "key_mode=auto requires anchor");
+            }
+            let source = parsed.title.as_deref().or(parsed.text.as_deref());
+            let Some(source) = source else {
+                return ai_error("INVALID_INPUT", "auto key requires card title or text");
+            };
+            let Some(slug) = crate::slugify_key(source) else {
+                return ai_error("INVALID_INPUT", "auto key could not be derived");
+            };
+            key = Some(slug);
+        }
+
+        let mut resolved_anchor_tag: Option<String> = None;
+        let mut resolved_key_tag: Option<String> = None;
         if let Some(anchor) = anchor {
             let tag = match normalize_anchor_tag(&anchor) {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };
+            resolved_anchor_tag = Some(tag.clone());
             if !tags_has(&parsed.tags, &tag) {
                 parsed.tags.push(tag);
             }
@@ -228,6 +261,7 @@ impl McpServer {
                 Ok(v) => v,
                 Err(resp) => return resp,
             };
+            resolved_key_tag = Some(tag.clone());
             if !tags_has(&parsed.tags, &tag) {
                 parsed.tags.push(tag);
             }
@@ -260,6 +294,56 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+
+        if lint_mode == "auto"
+            && let Some(key_tag) = resolved_key_tag.as_deref()
+        {
+            let key_slug = key_tag
+                .trim_start_matches(crate::KEY_TAG_PREFIX)
+                .to_string();
+            let anchor_ids = resolved_anchor_tag
+                .as_ref()
+                .map(|a| vec![a.clone()])
+                .unwrap_or_default();
+            match self.store.knowledge_keys_list_by_key(
+                &workspace,
+                bm_storage::KnowledgeKeysListByKeyRequest {
+                    key: key_slug,
+                    anchor_ids,
+                    limit: 10,
+                },
+            ) {
+                Ok(list) => {
+                    let mut collisions = Vec::<String>::new();
+                    for row in list.items {
+                        if resolved_anchor_tag
+                            .as_ref()
+                            .is_some_and(|a| a == &row.anchor_id)
+                        {
+                            continue;
+                        }
+                        collisions.push(row.anchor_id);
+                    }
+                    if !collisions.is_empty() {
+                        collisions.sort();
+                        collisions.dedup();
+                        warnings.push(warning(
+                            "KNOWLEDGE_KEY_COLLISION",
+                            &format!(
+                                "key already used in other anchors: {}",
+                                collisions.join(", ")
+                            ),
+                            "Consider a more specific key or reuse the existing anchor/key pairing.",
+                        ));
+                    }
+                }
+                Err(_) => warnings.push(warning(
+                    "KNOWLEDGE_LINT_FAILED",
+                    "auto lint failed to read knowledge key index",
+                    "Retry with lint_mode=manual or run think.knowledge.lint separately.",
+                )),
+            }
+        }
 
         let trace_ref = format!("{}@{}", trace_doc, result.trace_seq);
         let graph_ref = result.last_seq.map(|seq| format!("{}@{seq}", graph_doc));

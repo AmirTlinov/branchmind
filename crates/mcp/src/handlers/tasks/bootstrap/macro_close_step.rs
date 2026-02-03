@@ -28,25 +28,22 @@ impl McpServer {
             Err(resp) => return resp,
         };
         let mut proof = args_obj.get("proof").cloned().filter(|v| !v.is_null());
+        let proof_input = args_obj
+            .get("proof_input")
+            .cloned()
+            .filter(|v| !v.is_null());
+        let proof_parse_policy = match optional_string(args_obj, "proof_parse_policy") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let proof_from_job = args_obj
+            .get("proof_from_job")
+            .cloned()
+            .filter(|v| !v.is_null());
         let reasoning_override = match parse_strict_reasoning_override(args_obj.get("override")) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-
-        // Proof UX salvage: when a user/agent pastes receipts into the note (CMD/LINK) but
-        // forgets to populate the explicit `proof` field, auto-extract the receipts and attach
-        // them as proof checks. This reduces portal friction without changing the proof-required
-        // gate semantics (placeholders are still ignored).
-        if proof.is_none()
-            && let Some(note) = note.as_deref()
-        {
-            let checks = extract_proof_checks_from_text(note);
-            if !checks.is_empty() {
-                proof = Some(Value::Array(
-                    checks.into_iter().map(Value::String).collect::<Vec<_>>(),
-                ));
-            }
-        }
 
         let mut warnings = Vec::new();
         let mut note_event: Option<Value> = None;
@@ -265,6 +262,87 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .map(|v| v.to_string());
 
+        if proof.is_none()
+            && let Some(proof_input_value) = proof_input.clone()
+        {
+            let mut raw_lines = Vec::<String>::new();
+            match proof_input_value {
+                Value::String(s) => raw_lines.push(s),
+                Value::Array(arr) => {
+                    for item in arr {
+                        let Some(s) = item.as_str() else {
+                            return ai_error(
+                                "INVALID_INPUT",
+                                "proof_input array must contain only strings",
+                            );
+                        };
+                        raw_lines.push(s.to_string());
+                    }
+                }
+                _ => {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "proof_input must be a string or array of strings",
+                    );
+                }
+            }
+
+            if !raw_lines.is_empty() {
+                let policy = match proof_parse_policy.as_deref() {
+                    None => ProofParsePolicy::Warn,
+                    Some(raw) => match ProofParsePolicy::from_str(raw) {
+                        Some(v) => v,
+                        None => {
+                            return ai_error(
+                                "INVALID_INPUT",
+                                "proof_parse_policy must be warn|strict",
+                            );
+                        }
+                    },
+                };
+                let parsed = parse_proof_input_lines(&raw_lines);
+                if !parsed.ambiguous.is_empty() {
+                    if policy == ProofParsePolicy::Strict {
+                        return ai_error_with(
+                            "PROOF_PARSE_AMBIGUOUS",
+                            "proof_input contains ambiguous lines",
+                            Some("Tag ambiguous lines as CMD:/LINK: or provide explicit proof."),
+                            Vec::new(),
+                        );
+                    }
+                    warnings.push(warning(
+                        "PROOF_PARSE_AMBIGUOUS",
+                        "proof_input contains ambiguous lines",
+                        "Tag ambiguous lines as CMD:/LINK: to avoid misclassification.",
+                    ));
+                }
+                if !parsed.checks.is_empty() {
+                    proof = Some(Value::Array(
+                        parsed
+                            .checks
+                            .into_iter()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    ));
+                }
+            }
+        }
+
+        // Proof UX salvage: when a user/agent pastes receipts into the note (CMD/LINK) but
+        // forgets to populate the explicit `proof` field, auto-extract the receipts and attach
+        // them as proof checks. This reduces portal friction without changing the proof-required
+        // gate semantics (placeholders are still ignored).
+        if proof.is_none()
+            && let Some(note) = note.as_deref()
+        {
+            let checks = extract_proof_checks_from_text(note);
+            if !checks.is_empty() {
+                proof = Some(Value::Array(
+                    checks.into_iter().map(Value::String).collect::<Vec<_>>(),
+                ));
+            }
+        }
+
         if let Some(note) = note {
             close_args_obj.insert("note".to_string(), Value::String(note.clone()));
             let note_resp = self.tool_tasks_note(Value::Object(close_args_obj.clone()));
@@ -283,6 +361,84 @@ impl McpServer {
                 .and_then(|v| v.get("event"))
                 .cloned();
             if let Some(revision) = note_resp
+                .get("result")
+                .and_then(|v| v.get("revision"))
+                .and_then(|v| v.as_i64())
+            {
+                close_args_obj.insert(
+                    "expected_revision".to_string(),
+                    Value::Number(serde_json::Number::from(revision)),
+                );
+            }
+        }
+
+        if let Some(job_value) = proof_from_job.clone() {
+            let mut job_args = serde_json::Map::new();
+            job_args.insert(
+                "workspace".to_string(),
+                Value::String(workspace.as_str().to_string()),
+            );
+
+            let mut job_id: Option<String> = None;
+            let mut artifact_ref: Option<String> = None;
+            let mut checkpoint_value: Option<Value> = None;
+
+            match job_value {
+                Value::String(s) => {
+                    job_id = Some(s);
+                }
+                Value::Object(obj) => {
+                    if let Some(j) = obj.get("job_id").and_then(|v| v.as_str()) {
+                        job_id = Some(j.to_string());
+                    } else if let Some(j) = obj.get("job").and_then(|v| v.as_str()) {
+                        job_id = Some(j.to_string());
+                    }
+                    artifact_ref = obj
+                        .get("artifact_ref")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.to_string());
+                    if let Some(cp) = obj.get("checkpoint") {
+                        checkpoint_value = Some(cp.clone());
+                    }
+                }
+                _ => {
+                    return ai_error("INVALID_INPUT", "proof_from_job must be a string or object");
+                }
+            }
+
+            let Some(job_id) = job_id.filter(|v| !v.trim().is_empty()) else {
+                return ai_error("INVALID_INPUT", "proof_from_job.job_id is required");
+            };
+            job_args.insert("job".to_string(), Value::String(job_id));
+            if let Some(task) = resolved_task.clone() {
+                job_args.insert("task".to_string(), Value::String(task));
+            }
+            if let Some(step_id) = resolved_step_id.clone() {
+                job_args.insert("step_id".to_string(), Value::String(step_id));
+            }
+            if let Some(path) = resolved_path.clone() {
+                job_args.insert("path".to_string(), Value::String(path));
+            }
+            if let Some(artifact_ref) = artifact_ref {
+                job_args.insert("artifact_ref".to_string(), Value::String(artifact_ref));
+            }
+            if let Some(checkpoint) = checkpoint_value {
+                job_args.insert("checkpoint".to_string(), checkpoint);
+            }
+
+            let job_resp = self.tool_tasks_jobs_proof_attach(Value::Object(job_args));
+            if !job_resp
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return job_resp;
+            }
+            if let Some(w) = job_resp.get("warnings").and_then(|v| v.as_array()) {
+                warnings.extend(w.clone());
+            }
+            evidence_event = job_resp.get("result").and_then(|v| v.get("event")).cloned();
+            if let Some(revision) = job_resp
                 .get("result")
                 .and_then(|v| v.get("revision"))
                 .and_then(|v| v.as_i64())

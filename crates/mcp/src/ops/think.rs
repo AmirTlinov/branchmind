@@ -35,6 +35,8 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 "properties": {
                     "anchor": { "type": "string" },
                     "key": { "type": "string", "description": "Stable knowledge key slug (enables evolvable upsert)." },
+                    "key_mode": { "type": "string", "enum": ["explicit", "auto"] },
+                    "lint_mode": { "type": "string", "enum": ["manual", "auto"] },
                     "card": { "type": ["object", "string"] },
                     "supports": { "type": "array", "items": { "type": "string" } },
                     "blocks": { "type": "array", "items": { "type": "string" } }
@@ -50,6 +52,81 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         op_aliases: vec!["knowledge.upsert".to_string()],
         handler_name: None,
         handler: Some(handle_knowledge_upsert),
+    });
+
+    specs.push(CommandSpec {
+        cmd: "think.knowledge.key.suggest".to_string(),
+        domain_tool: ToolName::ThinkOps,
+        tier: Tier::Advanced,
+        stability: Stability::Experimental,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#think.knowledge.key.suggest".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: true,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Custom {
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "anchor": { "type": "string" },
+                    "title": { "type": "string" },
+                    "text": { "type": "string" },
+                    "card": { "type": ["object", "string"] },
+                    "limit": { "type": "integer" }
+                },
+                "required": []
+            }),
+            example_minimal_args: json!({
+                "anchor": "core",
+                "title": "Determinism invariants"
+            }),
+        },
+        op_aliases: vec!["knowledge.key.suggest".to_string()],
+        handler_name: None,
+        handler: Some(handle_knowledge_key_suggest),
+    });
+
+    specs.push(CommandSpec {
+        cmd: "think.note.promote".to_string(),
+        domain_tool: ToolName::ThinkOps,
+        tier: Tier::Advanced,
+        stability: Stability::Experimental,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#think.note.promote".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: false,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Custom {
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "note_ref": { "type": "string" },
+                    "anchor": { "type": "string" },
+                    "key": { "type": "string" },
+                    "title": { "type": "string" },
+                    "key_mode": { "type": "string", "enum": ["explicit", "auto"] },
+                    "lint_mode": { "type": "string", "enum": ["manual", "auto"] }
+                },
+                "required": ["note_ref"]
+            }),
+            example_minimal_args: json!({
+                "note_ref": "notes@123",
+                "anchor": "core"
+            }),
+        },
+        op_aliases: vec!["note.promote".to_string()],
+        handler_name: None,
+        handler: Some(handle_note_promote),
     });
 
     specs.push(CommandSpec {
@@ -363,11 +440,93 @@ fn handle_knowledge_upsert(server: &mut crate::McpServer, env: &Envelope) -> OpR
         }
     };
 
-    let anchor = args_obj.get("anchor").and_then(|v| v.as_str());
-    let key = args_obj.get("key").and_then(|v| v.as_str());
+    let anchor = args_obj
+        .get("anchor")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let mut key = args_obj
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let key_mode = args_obj
+        .get("key_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("explicit")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(key_mode.as_str(), "explicit" | "auto") {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "key_mode must be explicit|auto".to_string(),
+                recovery: Some("Use key_mode=\"explicit\" or key_mode=\"auto\".".to_string()),
+            },
+        );
+    }
+    let lint_mode = args_obj
+        .get("lint_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(lint_mode.as_str(), "manual" | "auto") {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "lint_mode must be manual|auto".to_string(),
+                recovery: Some("Use lint_mode=\"manual\" or lint_mode=\"auto\".".to_string()),
+            },
+        );
+    }
 
-    let card_id = if let Some(key) = key {
-        let Some(anchor) = anchor else {
+    if key.is_none() && key_mode == "auto" {
+        if anchor.as_deref().is_none() {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "key_mode=auto requires anchor".to_string(),
+                    recovery: Some(
+                        "Provide args={anchor:\"...\", key_mode:\"auto\", card:{...}}".to_string(),
+                    ),
+                },
+            );
+        }
+        let source = parsed.title.as_deref().or(parsed.text.as_deref());
+        let Some(source) = source else {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "auto key requires card title or text".to_string(),
+                    recovery: Some(
+                        "Provide card={title:\"...\"} or card={text:\"...\"}.".to_string(),
+                    ),
+                },
+            );
+        };
+        let Some(slug) = crate::slugify_key(source) else {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "auto key could not be derived".to_string(),
+                    recovery: Some(
+                        "Provide key explicitly or use a more specific title.".to_string(),
+                    ),
+                },
+            );
+        };
+        key = Some(slug);
+    }
+
+    let mut resolved_anchor_tag: Option<String> = None;
+    let mut resolved_key_tag: Option<String> = None;
+
+    let card_id = if let Some(key) = key.as_deref() {
+        let Some(anchor) = anchor.as_deref() else {
             return OpResponse::error(
                 env.cmd.clone(),
                 OpError {
@@ -414,6 +573,9 @@ fn handle_knowledge_upsert(server: &mut crate::McpServer, env: &Envelope) -> OpR
             Ok(v) => v,
             Err(e) => return OpResponse::error(env.cmd.clone(), e),
         };
+
+        resolved_anchor_tag = Some(anchor_tag.clone());
+        resolved_key_tag = Some(key_tag.clone());
 
         let claim = normalized_claim(parsed.title.as_deref(), parsed.text.as_deref());
         if claim.is_empty() {
@@ -496,7 +658,484 @@ fn handle_knowledge_upsert(server: &mut crate::McpServer, env: &Envelope) -> OpR
                 crate::ai_error("INTERNAL_ERROR", "think_add_knowledge dispatch failed")
             });
 
-    crate::ops::handler_to_op_response(&env.cmd, Some(workspace.as_str()), handler_resp)
+    let mut response =
+        crate::ops::handler_to_op_response(&env.cmd, Some(workspace.as_str()), handler_resp);
+
+    if lint_mode == "auto"
+        && let Some(key_tag) = resolved_key_tag.as_deref()
+    {
+        let key_slug = key_tag
+            .trim_start_matches(crate::KEY_TAG_PREFIX)
+            .to_string();
+        let anchor_ids = resolved_anchor_tag
+            .as_ref()
+            .map(|a| vec![a.clone()])
+            .unwrap_or_default();
+        match server.store.knowledge_keys_list_by_key(
+            &workspace,
+            bm_storage::KnowledgeKeysListByKeyRequest {
+                key: key_slug,
+                anchor_ids,
+                limit: 10,
+            },
+        ) {
+            Ok(list) => {
+                let mut collisions = Vec::<String>::new();
+                for row in list.items {
+                    if resolved_anchor_tag
+                        .as_ref()
+                        .is_some_and(|a| a == &row.anchor_id)
+                    {
+                        continue;
+                    }
+                    collisions.push(row.anchor_id);
+                }
+                if !collisions.is_empty() {
+                    collisions.sort();
+                    collisions.dedup();
+                    response.warnings.push(crate::warning(
+                        "KNOWLEDGE_KEY_COLLISION",
+                        &format!(
+                            "key already used in other anchors: {}",
+                            collisions.join(", ")
+                        ),
+                        "Consider a more specific key or reuse the existing anchor/key pairing.",
+                    ));
+                }
+            }
+            Err(_) => {
+                response.warnings.push(crate::warning(
+                    "KNOWLEDGE_LINT_FAILED",
+                    "auto lint failed to read knowledge key index",
+                    "Retry with lint_mode=manual or run think.knowledge.lint separately.",
+                ));
+            }
+        }
+    }
+
+    response
+}
+
+fn handle_knowledge_key_suggest(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+    let Some(ws) = env.workspace.as_deref() else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "workspace is required".to_string(),
+                recovery: Some(
+                    "Call workspace op=use first (or configure default workspace).".to_string(),
+                ),
+            },
+        );
+    };
+    let workspace = match crate::WorkspaceId::try_new(ws.to_string()) {
+        Ok(v) => v,
+        Err(_) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "workspace: expected WorkspaceId".to_string(),
+                    recovery: Some("Use workspace like my-workspace".to_string()),
+                },
+            );
+        }
+    };
+
+    let Some(args_obj) = env.args.as_object() else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "args must be an object".to_string(),
+                recovery: None,
+            },
+        );
+    };
+
+    let anchor_raw = args_obj.get("anchor").and_then(|v| v.as_str());
+    let title = args_obj
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let text = args_obj
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let limit = args_obj
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(6)
+        .clamp(1, 20);
+
+    let card_value = args_obj.get("card").cloned().unwrap_or(Value::Null);
+    let parsed = if card_value.is_null() {
+        None
+    } else {
+        match crate::parse_think_card(&workspace, card_value) {
+            Ok(v) => Some(v),
+            Err(resp) => {
+                return crate::ops::handler_to_op_response(
+                    &env.cmd,
+                    Some(workspace.as_str()),
+                    resp,
+                );
+            }
+        }
+    };
+
+    let source = title
+        .as_deref()
+        .or(text.as_deref())
+        .or_else(|| parsed.as_ref().and_then(|p| p.title.as_deref()))
+        .or_else(|| parsed.as_ref().and_then(|p| p.text.as_deref()));
+    let Some(source) = source else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "title/text is required to suggest a key".to_string(),
+                recovery: Some("Provide title or text (or card with title/text).".to_string()),
+            },
+        );
+    };
+
+    let Some(slug) = crate::slugify_key(source) else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "could not derive key from input".to_string(),
+                recovery: Some("Provide a more specific title or an explicit key.".to_string()),
+            },
+        );
+    };
+
+    let mut anchor_ids = Vec::<String>::new();
+    let mut anchor_tag: Option<String> = None;
+    if let Some(anchor_raw) = anchor_raw {
+        let candidate = if anchor_raw.trim().starts_with(crate::ANCHOR_TAG_PREFIX) {
+            anchor_raw.trim().to_string()
+        } else {
+            format!("{}{}", crate::ANCHOR_TAG_PREFIX, anchor_raw.trim())
+        };
+        let Some(normalized) = crate::normalize_anchor_id_tag(&candidate) else {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "anchor must be a valid slug (a:<slug>)".to_string(),
+                    recovery: Some("Use anchor like: core | a:core | storage-sqlite".to_string()),
+                },
+            );
+        };
+        let resolved = match server.store.anchor_resolve_id(&workspace, &normalized) {
+            Ok(Some(v)) => v,
+            Ok(None) => normalized.clone(),
+            Err(bm_storage::StoreError::InvalidInput(msg)) => {
+                return OpResponse::error(
+                    env.cmd.clone(),
+                    OpError {
+                        code: "INVALID_INPUT".to_string(),
+                        message: msg.to_string(),
+                        recovery: None,
+                    },
+                );
+            }
+            Err(err) => {
+                return OpResponse::error(
+                    env.cmd.clone(),
+                    OpError {
+                        code: "INTERNAL_ERROR".to_string(),
+                        message: format!("store error: {err}"),
+                        recovery: None,
+                    },
+                );
+            }
+        };
+        anchor_tag = Some(resolved.clone());
+        anchor_ids.push(resolved);
+    }
+
+    let list = match server.store.knowledge_keys_list_by_key(
+        &workspace,
+        bm_storage::KnowledgeKeysListByKeyRequest {
+            key: slug.clone(),
+            anchor_ids,
+            limit,
+        },
+    ) {
+        Ok(v) => v,
+        Err(bm_storage::StoreError::InvalidInput(msg)) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: msg.to_string(),
+                    recovery: None,
+                },
+            );
+        }
+        Err(err) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: format!("store error: {err}"),
+                    recovery: None,
+                },
+            );
+        }
+    };
+
+    let collisions = list
+        .items
+        .into_iter()
+        .map(|row| {
+            json!({
+                "anchor": row.anchor_id,
+                "key": row.key,
+                "card_id": row.card_id
+            })
+        })
+        .collect::<Vec<_>>();
+
+    OpResponse::success(
+        env.cmd.clone(),
+        json!({
+            "workspace": workspace.as_str(),
+            "anchor": anchor_tag,
+            "suggested_key": slug,
+            "key_tag": format!("{}{}", crate::KEY_TAG_PREFIX, slugify_key_for_tag(&slug)),
+            "collisions": collisions,
+            "has_more": list.has_more
+        }),
+    )
+}
+
+fn handle_note_promote(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+    let Some(ws) = env.workspace.as_deref() else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "workspace is required".to_string(),
+                recovery: Some(
+                    "Call workspace op=use first (or configure default workspace).".to_string(),
+                ),
+            },
+        );
+    };
+    let workspace = match crate::WorkspaceId::try_new(ws.to_string()) {
+        Ok(v) => v,
+        Err(_) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "workspace: expected WorkspaceId".to_string(),
+                    recovery: Some("Use workspace like my-workspace".to_string()),
+                },
+            );
+        }
+    };
+
+    let Some(args_obj) = env.args.as_object() else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "args must be an object".to_string(),
+                recovery: None,
+            },
+        );
+    };
+
+    let note_ref = match args_obj.get("note_ref").and_then(|v| v.as_str()) {
+        Some(v) => v.trim().to_string(),
+        None => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "note_ref is required".to_string(),
+                    recovery: Some("Provide note_ref like notes@123".to_string()),
+                },
+            );
+        }
+    };
+    let Some((doc, seq)) = parse_doc_entry_ref(&note_ref) else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "note_ref must be <doc>@<seq> (e.g. notes@123)".to_string(),
+                recovery: None,
+            },
+        );
+    };
+
+    let entry = match server.store.doc_entry_get_by_seq(&workspace, seq) {
+        Ok(v) => v,
+        Err(bm_storage::StoreError::InvalidInput(msg)) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: msg.to_string(),
+                    recovery: None,
+                },
+            );
+        }
+        Err(err) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INTERNAL_ERROR".to_string(),
+                    message: format!("store error: {err}"),
+                    recovery: None,
+                },
+            );
+        }
+    };
+    let Some(entry) = entry else {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "UNKNOWN_ID".to_string(),
+                message: "note_ref not found".to_string(),
+                recovery: Some("Use notes@seq from a prior notes_commit response.".to_string()),
+            },
+        );
+    };
+    if entry.doc != doc {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "doc prefix mismatch for note_ref".to_string(),
+                recovery: Some(format!("Expected {}@{}", entry.doc, entry.seq)),
+            },
+        );
+    }
+
+    let note_text = entry.content.clone().unwrap_or_default();
+    if note_text.trim().is_empty() {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "note content is empty".to_string(),
+                recovery: None,
+            },
+        );
+    }
+
+    let title_override = args_obj
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    let title = title_override.or(entry.title.clone());
+
+    let mut key_mode = args_obj
+        .get("key_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("auto")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(key_mode.as_str(), "explicit" | "auto") {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "key_mode must be explicit|auto".to_string(),
+                recovery: Some("Use key_mode=\"explicit\" or key_mode=\"auto\".".to_string()),
+            },
+        );
+    }
+    let lint_mode = args_obj
+        .get("lint_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(lint_mode.as_str(), "manual" | "auto") {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: "lint_mode must be manual|auto".to_string(),
+                recovery: Some("Use lint_mode=\"manual\" or lint_mode=\"auto\".".to_string()),
+            },
+        );
+    }
+
+    let anchor = args_obj
+        .get("anchor")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    if key_mode == "auto" && anchor.is_none() {
+        key_mode = "explicit".to_string();
+    }
+    let key = args_obj
+        .get("key")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+
+    let mut card_obj = serde_json::Map::new();
+    if let Some(title) = title.clone() {
+        card_obj.insert("title".to_string(), Value::String(title));
+    }
+    card_obj.insert("text".to_string(), Value::String(note_text));
+    card_obj.insert(
+        "tags".to_string(),
+        Value::Array(vec![Value::String(crate::VIS_TAG_DRAFT.to_string())]),
+    );
+
+    let mut forwarded = serde_json::Map::new();
+    if let Some(anchor) = anchor {
+        forwarded.insert("anchor".to_string(), Value::String(anchor));
+    }
+    if let Some(key) = key {
+        forwarded.insert("key".to_string(), Value::String(key));
+    }
+    forwarded.insert("key_mode".to_string(), Value::String(key_mode));
+    forwarded.insert("lint_mode".to_string(), Value::String(lint_mode));
+    forwarded.insert("card".to_string(), Value::Object(card_obj));
+
+    let sub_env = Envelope {
+        workspace: env.workspace.clone(),
+        cmd: env.cmd.clone(),
+        args: Value::Object(forwarded),
+    };
+    let mut resp = handle_knowledge_upsert(server, &sub_env);
+    if resp.error.is_none()
+        && let Some(obj) = resp.result.as_object_mut()
+    {
+        obj.insert("note_ref".to_string(), Value::String(note_ref));
+    }
+    resp
+}
+
+fn slugify_key_for_tag(slug: &str) -> String {
+    slug.trim().to_string()
+}
+
+fn parse_doc_entry_ref(raw: &str) -> Option<(String, i64)> {
+    let raw = raw.trim();
+    let (doc, seq_str) = raw.rsplit_once('@')?;
+    let doc = doc.trim();
+    let seq_str = seq_str.trim();
+    if doc.is_empty() || seq_str.is_empty() {
+        return None;
+    }
+    let seq = seq_str.parse::<i64>().ok()?;
+    if seq < 0 {
+        return None;
+    }
+    Some((doc.to_string(), seq))
 }
 
 fn handle_knowledge_query(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {

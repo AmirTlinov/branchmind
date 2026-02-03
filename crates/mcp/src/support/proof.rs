@@ -18,6 +18,28 @@ pub(crate) struct ProofReceiptsLint {
     pub(crate) link_placeholder: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProofParsePolicy {
+    Warn,
+    Strict,
+}
+
+impl ProofParsePolicy {
+    pub(crate) fn from_str(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "warn" => Some(Self::Warn),
+            "strict" => Some(Self::Strict),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ProofParseOutcome {
+    pub(crate) checks: Vec<String>,
+    pub(crate) ambiguous: Vec<String>,
+}
+
 pub(crate) fn proof_checks_placeholder_json() -> Value {
     Value::Array(vec![
         Value::String(PROOF_CHECK_CMD.to_string()),
@@ -223,6 +245,92 @@ pub(crate) fn coerce_proof_check_line(raw: &str) -> Option<String> {
     } else {
         Some(format!("CMD: {trimmed}"))
     }
+}
+
+pub(crate) fn coerce_proof_input_line(raw: &str) -> Option<(String, bool)> {
+    let trimmed = strip_markdown_prefixes(raw).trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let cmd_tagged = trimmed
+        .get(..4)
+        .is_some_and(|p| p.eq_ignore_ascii_case("CMD:"))
+        || (trimmed
+            .get(..3)
+            .is_some_and(|p| p.eq_ignore_ascii_case("CMD"))
+            && trimmed
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| b.is_ascii_whitespace()));
+    if cmd_tagged {
+        let rest = if trimmed
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("CMD:"))
+        {
+            trimmed.get(4..).unwrap_or_default()
+        } else {
+            trimmed.get(3..).unwrap_or_default()
+        };
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return Some(("CMD:".to_string(), false));
+        }
+        return Some((format!("CMD: {rest}"), false));
+    }
+
+    let link_tagged = trimmed
+        .get(..5)
+        .is_some_and(|p| p.eq_ignore_ascii_case("LINK:"))
+        || (trimmed
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LINK"))
+            && trimmed
+                .as_bytes()
+                .get(4)
+                .is_some_and(|b| b.is_ascii_whitespace()));
+    if link_tagged {
+        let rest = if trimmed
+            .get(..5)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LINK:"))
+        {
+            trimmed.get(5..).unwrap_or_default()
+        } else {
+            trimmed.get(4..).unwrap_or_default()
+        };
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return Some(("LINK:".to_string(), false));
+        }
+        return Some((format!("LINK: {rest}"), false));
+    }
+
+    let url_candidate = strip_wrapping_angle_brackets(trimmed);
+    if looks_like_bare_url(url_candidate) {
+        return Some((format!("LINK: {url_candidate}"), false));
+    }
+
+    if looks_like_shell_command_line(trimmed) {
+        return Some((format!("CMD: {trimmed}"), false));
+    }
+
+    Some((format!("CMD: {trimmed}"), true))
+}
+
+pub(crate) fn parse_proof_input_lines(raw: &[String]) -> ProofParseOutcome {
+    let mut outcome = ProofParseOutcome::default();
+    for item in raw {
+        for line in item.lines() {
+            if let Some((coerced, ambiguous)) = coerce_proof_input_line(line) {
+                if ambiguous {
+                    outcome.ambiguous.push(line.trim().to_string());
+                }
+                outcome.checks.push(coerced);
+            }
+        }
+    }
+    outcome.checks = normalize_proof_checks(&outcome.checks);
+    outcome
 }
 
 pub(crate) fn lint_proof_checks(checks: &[String]) -> ProofReceiptsLint {

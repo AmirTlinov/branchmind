@@ -238,6 +238,80 @@ fn proof_markdown_bullets_are_normalized_and_do_not_trigger_proof_weak() {
 }
 
 #[test]
+fn proof_input_parses_and_supports_strict_policy() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_input_parses_and_supports_strict_policy",
+        &["--toolset", "daily", "--workspace", "ws_proof_input"],
+    );
+
+    let started = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Input Task", "template": "principal-task", "reasoning_mode": "normal" } } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    for id in 2..=4 {
+        let closed = server.request(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    let close_with_proof_input = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
+            "proof_input": ["cargo test -q", "https://example.com/log"]
+        } } }
+    }));
+    let ok_text = extract_tool_text_str(&close_with_proof_input);
+    assert_tag_light(&ok_text);
+    assert!(
+        !ok_text.starts_with("ERROR:"),
+        "macro_close_step should accept proof_input"
+    );
+
+    let mut server_strict = Server::start_initialized_with_args(
+        "proof_input_strict_rejects_ambiguous",
+        &["--toolset", "daily", "--workspace", "ws_proof_input_strict"],
+    );
+    let started = server_strict.request(json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Input Strict", "template": "basic-task", "reasoning_mode": "normal" } } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    let strict_close = server_strict.request(json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
+            "proof_input": "ran tests",
+            "proof_parse_policy": "strict"
+        } } }
+    }));
+    let err_text = extract_tool_text_str(&strict_close);
+    assert_tag_light(&err_text);
+    assert!(
+        err_text
+            .lines()
+            .next()
+            .is_some_and(|l| l.starts_with("ERROR: PROOF_PARSE_AMBIGUOUS")),
+        "strict proof_input should fail with PROOF_PARSE_AMBIGUOUS"
+    );
+}
+
+#[test]
 fn proof_url_attachment_satisfies_soft_link_receipt_lint() {
     let mut server = Server::start_initialized_with_args(
         "proof_url_attachment_satisfies_soft_link_receipt_lint",

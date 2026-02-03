@@ -982,7 +982,7 @@ Semantics:
 
 One‑call закрытие шага: подтвердить чекпойнты → закрыть → вернуть супер‑резюме.
 
-Input: `{ workspace, agent_id?, task?, path?|step_id?, checkpoints?, expected_revision?, note?, proof?, override?, view?, resume_max_chars? }`
+Input: `{ workspace, agent_id?, task?, path?|step_id?, checkpoints?, expected_revision?, note?, proof?, proof_input?, proof_parse_policy?, proof_from_job?, override?, view?, resume_max_chars? }`
 
 Output: `{ task, revision, step, resume }`
 
@@ -996,6 +996,13 @@ Semantics:
     - object → forwarded as `{ items?, checks?, attachments?, checkpoint? }` (same shape as `tasks_evidence_capture` minus target fields).
   - If `checkpoint` is omitted, proof is linked to `"tests"` by default.
   - Input DX: `checks[]` lines may be pasted as markdown (bullets like `- ...`, `* ...`, `1. ...`); list prefixes are ignored.
+- If `proof` is **not** provided, `proof_input` can be used as a copy/paste‑minimal alternative:
+  - `proof_input` accepts string or array of strings.
+  - Lines are auto‑normalized to receipts (same rules as `proof`), but ambiguous lines (non‑tagged, non‑URL, non‑command) are flagged.
+  - `proof_parse_policy` controls ambiguous handling: `warn` (default) emits `WARNING: PROOF_PARSE_AMBIGUOUS`, `strict` fails fast with a typed error.
+- `proof_from_job` optionally attaches proof from a delegated job without manual copy/paste.
+  - Shape: `{ job_id, artifact_ref?, checkpoint? }`
+  - The server resolves the job, emits proof attachments (e.g. `LINK: file://...` with `sha256`) and records evidence for the step.
 - `checkpoints` defaults to `"gate"` when omitted.
 - `checkpoints` can be either:
   - `"gate"` (string shortcut: criteria+tests), or

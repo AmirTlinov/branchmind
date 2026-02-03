@@ -62,6 +62,39 @@ pub(crate) fn normalize_key_id_tag(raw: &str) -> Option<String> {
     Some(format!("{KEY_TAG_PREFIX}{slug}"))
 }
 
+pub(crate) fn slugify_key(raw: &str) -> Option<String> {
+    slugify_slug(raw, KEY_MAX_SLUG_LEN)
+}
+
+fn slugify_slug(raw: &str, max_len: usize) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in raw.chars() {
+        let lower = ch.to_ascii_lowercase();
+        let is_alnum = lower.is_ascii_lowercase() || lower.is_ascii_digit();
+        if is_alnum {
+            out.push(lower);
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+        if out.len() >= max_len {
+            break;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 pub(crate) fn tags_has(tags: &[String], needle: &str) -> bool {
     let needle = needle.trim().to_ascii_lowercase();
     if needle.is_empty() {

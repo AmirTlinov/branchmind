@@ -82,6 +82,7 @@ define_tasks_dispatch! {
     "jobs_list" => tool_tasks_jobs_list,
     "jobs_radar" => tool_tasks_jobs_radar,
     "jobs_open" => tool_tasks_jobs_open,
+    "jobs_proof_attach" => tool_tasks_jobs_proof_attach,
     "jobs_tail" => tool_tasks_jobs_tail,
     "jobs_claim" => tool_tasks_jobs_claim,
     "jobs_message" => tool_tasks_jobs_message,

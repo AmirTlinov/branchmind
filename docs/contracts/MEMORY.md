@@ -169,8 +169,8 @@ Appends a single note entry to the **notes** document of a target (plan/task), o
 
 Input (one of):
 
-- `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta?, agent_id? }`
-- `{ workspace, branch, doc, content, title?, format?, meta?, agent_id? }`
+- `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta?, agent_id?, promote_to_knowledge?, knowledge_anchor?, knowledge_key?, knowledge_title? }`
+- `{ workspace, branch, doc, content, title?, format?, meta?, agent_id?, promote_to_knowledge?, knowledge_anchor?, knowledge_key?, knowledge_title? }`
 
 `target` may be a string id or `TargetRef` (see `TYPES.md`), e.g. `{ "id": "TASK-001", "kind": "task" }`.
 
@@ -184,6 +184,13 @@ Defaults:
 Output:
 
 - `{ entry: { seq, ts, branch, doc, kind:"note", title?, format?, meta?, content } }`
+
+Notes:
+
+- If `promote_to_knowledge=true`, the server creates a **draft** knowledge card from the note content.
+  - `knowledge_anchor` / `knowledge_key` / `knowledge_title` can override the defaults (anchor from target if available, title from note title).
+  - `knowledge_key_mode` controls key derivation: `auto` (default) derives a slug from title/text, `explicit` requires `knowledge_key`.
+  - The created knowledge card is tagged `v:draft` unless explicitly promoted later.
 
 ### `show`
 

@@ -189,6 +189,32 @@ pub(crate) fn bootstrap_definitions() -> Vec<Value> {
                             { "type": "object" }
                         ]
                     },
+                    "proof_input": {
+                        "anyOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ]
+                    },
+                    "proof_parse_policy": { "type": "string", "enum": ["warn", "strict"] },
+                    "proof_from_job": {
+                        "anyOf": [
+                            { "type": "string" },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "job_id": { "type": "string" },
+                                    "artifact_ref": { "type": "string" },
+                                    "checkpoint": {
+                                        "anyOf": [
+                                            { "type": "string" },
+                                            { "type": "array", "items": { "type": "string" } }
+                                        ]
+                                    }
+                                },
+                                "required": ["job_id"]
+                            }
+                        ]
+                    },
                     "view": { "type": "string" },
                     "refs": { "type": "boolean" },
                     "resume_max_chars": { "type": "integer" }

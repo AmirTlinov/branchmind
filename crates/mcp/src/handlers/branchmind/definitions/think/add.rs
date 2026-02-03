@@ -174,6 +174,8 @@ pub(super) fn definitions() -> Vec<Value> {
                     "step": { "type": "string" },
                     "anchor": { "type": "string", "description": "Anchor slug or a:<slug> (adds tag)." },
                     "key": { "type": "string", "description": "Knowledge key slug (adds k:<slug> tag)." },
+                    "key_mode": { "type": "string", "enum": ["explicit", "auto"] },
+                    "lint_mode": { "type": "string", "enum": ["manual", "auto"] },
                     "agent_id": { "type": "string" },
                     "card": {
                         "anyOf": [

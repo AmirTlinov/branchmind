@@ -93,6 +93,29 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "tasks_jobs_proof_attach",
+            "description": "Attach proof receipts from a job to a task/step (evidence capture).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "job": { "type": "string" },
+                    "task": { "type": "string" },
+                    "step_id": { "type": "string" },
+                    "path": { "type": "string" },
+                    "checkpoint": {
+                        "anyOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                        ]
+                    },
+                    "artifact_ref": { "type": "string" },
+                    "max_refs": { "type": "integer" }
+                },
+                "required": ["workspace", "job"]
+            }
+        }),
+        json!({
             "name": "tasks_jobs_tail",
             "description": "Tail job events incrementally (seq > after_seq).",
             "inputSchema": {

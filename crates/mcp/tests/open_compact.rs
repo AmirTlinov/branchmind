@@ -52,6 +52,10 @@ fn open_task_compact_is_minimal() {
         Some("task"),
         "open compact should preserve kind"
     );
+    assert!(
+        result.get("budget").is_some(),
+        "open compact must include budget"
+    );
     assert!(result.get("capsule").is_none(), "compact must omit capsule");
     assert!(
         result.get("focus").is_some() || result.get("next_action").is_some(),
