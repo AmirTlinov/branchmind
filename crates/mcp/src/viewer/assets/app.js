@@ -2619,12 +2619,22 @@ function onGraphFrame(ts) {
 
   if (graphState.cameraAnim && graphState.view) {
     const anim = graphState.cameraAnim;
+    const prevLod = graphState.lod;
     const t = (now - anim.startAt) / Math.max(1, anim.endAt - anim.startAt);
     const e = easeOutCubic(t);
     graphState.view.offsetX = anim.from.offsetX + (anim.to.offsetX - anim.from.offsetX) * e;
     graphState.view.offsetY = anim.from.offsetY + (anim.to.offsetY - anim.from.offsetY) * e;
     graphState.view.scale = anim.from.scale + (anim.to.scale - anim.from.scale) * e;
     graphState.lod = computeLod(graphState.view.scale);
+    const lodChanged = prevLod && prevLod !== graphState.lod;
+    if (lodChanged && state.snapshot && UI_MODE === "flagship") {
+      const display = buildDisplayModelFlagship(state.snapshot, graphState.view);
+      mergeDisplayModelIntoCache(display);
+      const snapshotKey = graphDataKey(state.snapshot);
+      graphState.displayKey = `${snapshotKey}:${display.selectedPlanId || "none"}:${display.lod}`;
+      graphState.snapshotKey = snapshotKey;
+      startSettleAnimation();
+    }
     if (t >= 1) {
       graphState.cameraAnim = null;
     } else {
