@@ -127,6 +127,10 @@ pub(crate) fn run_socket_daemon(config: DaemonConfig) -> Result<(), Box<dyn std:
 
         match listener.accept() {
             Ok((stream, _addr)) => {
+                // The listener is set to nonblocking so the daemon main loop can poll hot reload,
+                // idle exit conditions, etc. Ensure per-connection streams are blocking so we
+                // don't accidentally treat "no data yet" as EOF/error and close the transport.
+                let _ = stream.set_nonblocking(false);
                 let config = Arc::clone(&config);
                 let counter = Arc::clone(&active_connections);
                 counter.fetch_add(1, Ordering::SeqCst);

@@ -7,14 +7,18 @@ mod unix {
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SOCKET_SEQ: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn shared_proxy_can_serve_tools_call_when_daemon_spawn_fails() {
         let storage_dir = temp_dir("shared_proxy_local_fallback");
         std::fs::create_dir_all(&storage_dir).expect("create storage dir");
-        let socket_path = storage_dir.join("branchmind_test.sock");
+        let socket_path = short_socket_path();
 
         // Some sandboxed environments disallow unix domain sockets (EPERM). In that case, skip.
+        let _ = std::fs::remove_file(&socket_path);
         match UnixListener::bind(&socket_path) {
             Ok(listener) => {
                 drop(listener);
@@ -47,11 +51,6 @@ mod unix {
             .spawn()
             .expect("spawn proxy");
 
-        // Simulate a common “zombie proxy” failure mode: the proxy process is alive but its
-        // on-disk binary path is gone (e.g. rebuild/cleanup). In this case spawning a daemon
-        // should fail, but the proxy must still answer tool calls via an in-process fallback.
-        std::fs::remove_file(&proxy_exe).expect("unlink proxy binary");
-
         let stdin = proxy.stdin.as_mut().expect("proxy stdin");
         let stdout = proxy.stdout.as_mut().expect("proxy stdout");
         let mut reader = BufReader::new(stdout);
@@ -69,6 +68,14 @@ mod unix {
         .expect("write initialize");
         stdin.flush().expect("flush initialize");
         let _ = read_line_json(&mut reader);
+
+        // Simulate a common “zombie proxy” failure mode: the proxy process is alive but its
+        // on-disk binary path is gone (e.g. rebuild/cleanup). In this case spawning a daemon
+        // should fail, but the proxy must still answer tool calls via an in-process fallback.
+        //
+        // Important: do this *after* the proxy successfully responded to initialize, otherwise
+        // some platforms can race process start vs. unlink and the proxy never comes up.
+        std::fs::remove_file(&proxy_exe).expect("unlink proxy binary");
 
         writeln!(
             stdin,
@@ -104,7 +111,7 @@ mod unix {
             "proxy should answer via in-process fallback when daemon is unavailable"
         );
 
-        cleanup(proxy, storage_dir);
+        cleanup(proxy, storage_dir, socket_path);
     }
 
     fn copy_executable(from: &str, to: &PathBuf) {
@@ -121,9 +128,10 @@ mod unix {
         serde_json::from_str(&line).expect("parse response json")
     }
 
-    fn cleanup(mut proxy: Child, storage_dir: PathBuf) {
+    fn cleanup(mut proxy: Child, storage_dir: PathBuf, socket_path: PathBuf) {
         let _ = proxy.kill();
         let _ = proxy.wait();
+        let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_dir_all(storage_dir);
     }
 
@@ -139,5 +147,21 @@ mod unix {
                 .as_millis()
         ));
         dir
+    }
+
+    fn short_socket_path() -> PathBuf {
+        let pid = std::process::id();
+        let seq = SOCKET_SEQ.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = PathBuf::from("/tmp");
+        let filename = format!("bm_proxy_{pid}_{nonce}_{seq}.sock");
+        if base.is_dir() {
+            base.join(filename)
+        } else {
+            std::env::temp_dir().join(filename)
+        }
     }
 }

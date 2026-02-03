@@ -7,18 +7,22 @@ mod unix {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
     use std::time::Instant;
 
+    static SOCKET_SEQ: AtomicUsize = AtomicUsize::new(0);
+
     #[test]
     fn shared_proxy_does_not_kill_daemon_on_daemon_info_timeout() {
         let storage_dir = temp_dir("shared_proxy_daemon_info_fail_open");
         std::fs::create_dir_all(&storage_dir).expect("create storage dir");
-        let socket_path = storage_dir.join("branchmind_test.sock");
+        let socket_path = short_socket_path();
 
         // Some sandboxed environments disallow unix domain sockets (EPERM). In that case, skip.
+        let _ = std::fs::remove_file(&socket_path);
         match UnixListener::bind(&socket_path) {
             Ok(listener) => {
                 drop(listener);
@@ -145,16 +149,17 @@ mod unix {
         );
 
         let _ = daemon_thread.join();
-        cleanup(proxy, storage_dir);
+        cleanup(proxy, storage_dir, socket_path);
     }
 
     #[test]
     fn shared_proxy_recovers_quickly_from_unresponsive_daemon() {
         let storage_dir = temp_dir("shared_proxy_timeout_recovery");
         std::fs::create_dir_all(&storage_dir).expect("create storage dir");
-        let socket_path = storage_dir.join("branchmind_timeout.sock");
+        let socket_path = short_socket_path();
 
         // Some sandboxed environments disallow unix domain sockets (EPERM). In that case, skip.
+        let _ = std::fs::remove_file(&socket_path);
         match UnixListener::bind(&socket_path) {
             Ok(listener) => {
                 drop(listener);
@@ -284,7 +289,7 @@ mod unix {
         assert_eq!(second_method, "tools/call");
 
         let _ = daemon_thread.join();
-        cleanup(proxy, storage_dir);
+        cleanup(proxy, storage_dir, socket_path);
     }
 
     fn send_frame(stream: &mut UnixStream, value: serde_json::Value) {
@@ -322,9 +327,10 @@ mod unix {
         serde_json::from_str(&line).expect("parse response json")
     }
 
-    fn cleanup(mut proxy: Child, storage_dir: PathBuf) {
+    fn cleanup(mut proxy: Child, storage_dir: PathBuf, socket_path: PathBuf) {
         let _ = proxy.kill();
         let _ = proxy.wait();
+        let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_dir_all(storage_dir);
     }
 
@@ -340,5 +346,21 @@ mod unix {
                 .as_millis()
         ));
         dir
+    }
+
+    fn short_socket_path() -> PathBuf {
+        let pid = std::process::id();
+        let seq = SOCKET_SEQ.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = PathBuf::from("/tmp");
+        let filename = format!("bm_proxy_{pid}_{nonce}_{seq}.sock");
+        if base.is_dir() {
+            base.join(filename)
+        } else {
+            std::env::temp_dir().join(filename)
+        }
     }
 }

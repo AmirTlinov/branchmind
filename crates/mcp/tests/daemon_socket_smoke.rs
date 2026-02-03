@@ -7,15 +7,19 @@ mod unix {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    static SOCKET_SEQ: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn daemon_socket_smoke() {
         let storage_dir = temp_dir("daemon_socket_smoke");
         std::fs::create_dir_all(&storage_dir).expect("create storage dir");
-        let socket_path = storage_dir.join("branchmind_test.sock");
+        let socket_path = short_socket_path();
 
         // Some sandboxed environments disallow unix domain sockets (EPERM). In that case, skip.
+        let _ = std::fs::remove_file(&socket_path);
         match UnixListener::bind(&socket_path) {
             Ok(listener) => {
                 drop(listener);
@@ -44,10 +48,10 @@ mod unix {
             .expect("spawn daemon");
 
         let stream = wait_for_socket(&socket_path);
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut reader = BufReader::new(stream);
 
         send_frame(
-            &stream,
+            reader.get_mut(),
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -58,7 +62,7 @@ mod unix {
         let _ = recv_frame(&mut reader);
 
         send_frame(
-            &stream,
+            reader.get_mut(),
             json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized",
@@ -67,7 +71,7 @@ mod unix {
         );
 
         send_frame(
-            &stream,
+            reader.get_mut(),
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
@@ -78,16 +82,17 @@ mod unix {
         let resp = recv_frame(&mut reader);
         assert_eq!(resp.get("id").and_then(|v| v.as_i64()), Some(2));
 
-        cleanup(child, storage_dir);
+        cleanup(child, storage_dir, socket_path);
     }
 
     #[test]
     fn daemon_exits_when_socket_is_unlinked() {
         let storage_dir = temp_dir("daemon_socket_unlink_exits");
         std::fs::create_dir_all(&storage_dir).expect("create storage dir");
-        let socket_path = storage_dir.join("branchmind_test.sock");
+        let socket_path = short_socket_path();
 
         // Some sandboxed environments disallow unix domain sockets (EPERM). In that case, skip.
+        let _ = std::fs::remove_file(&socket_path);
         match UnixListener::bind(&socket_path) {
             Ok(listener) => {
                 drop(listener);
@@ -122,6 +127,7 @@ mod unix {
         for _ in 0..80 {
             if let Some(status) = child.try_wait().expect("try_wait") {
                 assert!(status.success(), "daemon exited with error: {status}");
+                let _ = std::fs::remove_file(&socket_path);
                 let _ = std::fs::remove_dir_all(storage_dir);
                 return;
             }
@@ -130,15 +136,15 @@ mod unix {
 
         let _ = child.kill();
         let _ = child.wait();
+        let _ = std::fs::remove_file(&socket_path);
         panic!("daemon did not exit after socket unlink");
     }
 
-    fn send_frame(stream: &UnixStream, value: serde_json::Value) {
+    fn send_frame(stream: &mut UnixStream, value: serde_json::Value) {
         let body = serde_json::to_vec(&value).expect("serialize request");
-        let mut writer = stream;
-        write!(writer, "Content-Length: {}\r\n\r\n", body.len()).expect("write header");
-        writer.write_all(&body).expect("write body");
-        writer.flush().expect("flush request");
+        write!(stream, "Content-Length: {}\r\n\r\n", body.len()).expect("write header");
+        stream.write_all(&body).expect("write body");
+        stream.flush().expect("flush request");
     }
 
     fn recv_frame(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
@@ -174,9 +180,10 @@ mod unix {
         panic!("socket did not become ready");
     }
 
-    fn cleanup(mut child: Child, storage_dir: PathBuf) {
+    fn cleanup(mut child: Child, storage_dir: PathBuf, socket_path: PathBuf) {
         let _ = child.kill();
         let _ = child.wait();
+        let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_dir_all(storage_dir);
     }
 
@@ -190,5 +197,21 @@ mod unix {
         let dir = base.join(format!("bm_mcp_{test_name}_{pid}_{nonce}"));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    fn short_socket_path() -> PathBuf {
+        let pid = std::process::id();
+        let seq = SOCKET_SEQ.fetch_add(1, Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let base = PathBuf::from("/tmp");
+        let filename = format!("bm_{pid}_{nonce}_{seq}.sock");
+        if base.is_dir() {
+            base.join(filename)
+        } else {
+            std::env::temp_dir().join(filename)
+        }
     }
 }
