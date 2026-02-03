@@ -110,7 +110,8 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                         ]
                     },
                     "artifact_ref": { "type": "string" },
-                    "max_refs": { "type": "integer" }
+                    "max_refs": { "type": "integer" },
+                    "max_file_bytes": { "type": "integer", "description": "Max bytes to hash per local file when emitting sha256 (bounded, best-effort)." }
                 },
                 "required": ["workspace", "job"]
             }

@@ -34,6 +34,7 @@ If “0 deps strict” is required, replace these with in-house minimal implemen
 
 - `serde`: typed request parsing for MCP JSON-RPC envelopes.
 - `serde_json`: JSON values + construction for tool inputs/outputs.
+- `sha2`: deterministic in-process SHA-256 for local artifacts (proof receipts) without calling external programs (keeps `bm_mcp` “no arbitrary exec”).
 - `time`: RFC3339 timestamps in agent-facing payloads.
 - `nix` (unix-only): poll/select wrappers used to poll stdin with a timeout so hot reload can
   trigger even when the MCP client is idle (no manual restarts). Also used for POSIX signals

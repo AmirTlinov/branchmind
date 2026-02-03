@@ -23,7 +23,7 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let note = match optional_string(args_obj, "note") {
+        let mut note = match optional_string(args_obj, "note") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -44,6 +44,17 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+
+        if !self.ux_proof_v2_enabled
+            && (proof_input.is_some() || proof_parse_policy.is_some() || proof_from_job.is_some())
+        {
+            return ai_error_with(
+                "FEATURE_DISABLED",
+                "ux_proof_v2 is disabled",
+                Some("Enable via --ux-proof-v2 (or env BRANCHMIND_UX_PROOF_V2=1)."),
+                Vec::new(),
+            );
+        }
 
         let mut warnings = Vec::new();
         let mut note_event: Option<Value> = None;
@@ -301,29 +312,73 @@ impl McpServer {
                     },
                 };
                 let parsed = parse_proof_input_lines(&raw_lines);
-                if !parsed.ambiguous.is_empty() {
+                if !parsed.notes.is_empty() {
                     if policy == ProofParsePolicy::Strict {
                         return ai_error_with(
                             "PROOF_PARSE_AMBIGUOUS",
-                            "proof_input contains ambiguous lines",
-                            Some("Tag ambiguous lines as CMD:/LINK: or provide explicit proof."),
+                            "proof_input contains NOTE lines",
+                            Some(
+                                "Tag lines as CMD:/LINK: (or provide explicit proof) when they are meant to satisfy proof.",
+                            ),
                             Vec::new(),
                         );
                     }
                     warnings.push(warning(
                         "PROOF_PARSE_AMBIGUOUS",
-                        "proof_input contains ambiguous lines",
-                        "Tag ambiguous lines as CMD:/LINK: to avoid misclassification.",
+                        "proof_input contains NOTE lines",
+                        "NOTE lines are stored as a step note and do not count as proof; tag CMD:/LINK: (or provide explicit proof) for proof receipts.",
                     ));
                 }
-                if !parsed.checks.is_empty() {
-                    proof = Some(Value::Array(
-                        parsed
-                            .checks
-                            .into_iter()
-                            .map(Value::String)
-                            .collect::<Vec<_>>(),
-                    ));
+
+                if !parsed.notes.is_empty() {
+                    let notes_text = parsed.notes.join("\n");
+                    if let Some(existing) = note.as_mut() {
+                        if !existing.trim().is_empty() {
+                            existing.push('\n');
+                        }
+                        existing.push_str(&notes_text);
+                    } else {
+                        note = Some(notes_text);
+                    }
+                }
+
+                if !parsed.checks.is_empty() || !parsed.attachments.is_empty() {
+                    if parsed.attachments.is_empty() {
+                        proof = Some(Value::Array(
+                            parsed
+                                .checks
+                                .into_iter()
+                                .map(Value::String)
+                                .collect::<Vec<_>>(),
+                        ));
+                    } else {
+                        let mut obj = serde_json::Map::new();
+                        if !parsed.checks.is_empty() {
+                            obj.insert(
+                                "checks".to_string(),
+                                Value::Array(
+                                    parsed
+                                        .checks
+                                        .into_iter()
+                                        .map(Value::String)
+                                        .collect::<Vec<_>>(),
+                                ),
+                            );
+                        }
+                        if !parsed.attachments.is_empty() {
+                            obj.insert(
+                                "attachments".to_string(),
+                                Value::Array(
+                                    parsed
+                                        .attachments
+                                        .into_iter()
+                                        .map(Value::String)
+                                        .collect::<Vec<_>>(),
+                                ),
+                            );
+                        }
+                        proof = Some(Value::Object(obj));
+                    }
                 }
             }
         }

@@ -115,9 +115,10 @@ Open a job record (legacy `tasks_jobs_open`).
 Attach proof receipts from a job to a task/step (legacy `tasks_jobs_proof_attach`).
 
 Notes:
-- Input includes `{ job, task?, step_id?|path?, checkpoint?, artifact_ref? }`.
+- Input includes `{ job, task?, step_id?|path?, checkpoint?, artifact_ref?, max_file_bytes? }`.
 - The server resolves stable refs from the job (summary/refs + `artifact_ref`) and records evidence.
 - Attachments are emitted as `LINK: file://...` (with `sha256` when available) when possible.
+- `max_file_bytes` bounds sha256 hashing (default: 64 MiB per file, best-effort).
 
 ## jobs.cancel
 

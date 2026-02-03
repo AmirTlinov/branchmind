@@ -519,6 +519,9 @@ pub(crate) struct SocketTagConfig<'a> {
     pub(crate) toolset: Toolset,
     pub(crate) response_verbosity: ResponseVerbosity,
     pub(crate) dx_mode: bool,
+    pub(crate) ux_proof_v2_enabled: bool,
+    pub(crate) knowledge_autolint_enabled: bool,
+    pub(crate) note_promote_enabled: bool,
     pub(crate) default_workspace: Option<&'a str>,
     pub(crate) workspace_explicit: bool,
     pub(crate) workspace_lock: bool,
@@ -539,6 +542,25 @@ pub(crate) fn socket_tag_for_config(cfg: SocketTagConfig<'_>) -> String {
     hash = fnv1a_kv(hash, "toolset", cfg.toolset.as_str());
     hash = fnv1a_kv(hash, "verbosity", cfg.response_verbosity.as_str());
     hash = fnv1a_kv(hash, "dx", if cfg.dx_mode { "1" } else { "0" });
+    hash = fnv1a_kv(
+        hash,
+        "ux_proof_v2",
+        if cfg.ux_proof_v2_enabled { "1" } else { "0" },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "knowledge_autolint",
+        if cfg.knowledge_autolint_enabled {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "note_promote",
+        if cfg.note_promote_enabled { "1" } else { "0" },
+    );
     hash = fnv1a_kv(hash, "workspace", cfg.default_workspace.unwrap_or(""));
     hash = fnv1a_kv(
         hash,
@@ -662,6 +684,56 @@ fn parse_viewer_enabled_with_default(default_enabled: bool, env_key: &str) -> bo
     }
 }
 
+pub(crate) fn parse_ux_proof_v2_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_UX_PROOF_V2",
+        "--ux-proof-v2",
+        "--no-ux-proof-v2",
+    )
+}
+
+pub(crate) fn parse_knowledge_autolint_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_KNOWLEDGE_AUTOLINT",
+        "--knowledge-autolint",
+        "--no-knowledge-autolint",
+    )
+}
+
+pub(crate) fn parse_note_promote_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_NOTE_PROMOTE",
+        "--note-promote",
+        "--no-note-promote",
+    )
+}
+
+fn parse_feature_enabled_with_default(
+    default_enabled: bool,
+    env_key: &str,
+    cli_on: &str,
+    cli_off: &str,
+) -> bool {
+    for arg in std::env::args().skip(1) {
+        if arg.as_str() == cli_off {
+            return false;
+        }
+        if arg.as_str() == cli_on {
+            return true;
+        }
+    }
+    match std::env::var(env_key) {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default_enabled,
+    }
+}
+
 pub(crate) fn parse_viewer_port() -> u16 {
     const DEFAULT_VIEWER_PORT: u16 = 7331;
     let mut cli: Option<String> = None;
@@ -772,6 +844,9 @@ mod tests {
             toolset: Toolset::Daily,
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: false,
+            ux_proof_v2_enabled: true,
+            knowledge_autolint_enabled: true,
+            note_promote_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,
@@ -784,6 +859,9 @@ mod tests {
             toolset: Toolset::Daily,
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: false,
+            ux_proof_v2_enabled: true,
+            knowledge_autolint_enabled: true,
+            note_promote_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,
@@ -802,6 +880,9 @@ mod tests {
             toolset: Toolset::Daily,
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: false,
+            ux_proof_v2_enabled: true,
+            knowledge_autolint_enabled: true,
+            note_promote_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,
@@ -814,6 +895,9 @@ mod tests {
             toolset: Toolset::Full,
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: true,
+            ux_proof_v2_enabled: true,
+            knowledge_autolint_enabled: true,
+            note_promote_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,

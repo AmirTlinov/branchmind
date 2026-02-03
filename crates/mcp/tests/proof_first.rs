@@ -312,6 +312,53 @@ fn proof_input_parses_and_supports_strict_policy() {
 }
 
 #[test]
+fn proof_input_note_does_not_satisfy_proof_gate() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_input_note_does_not_satisfy_proof_gate",
+        &["--toolset", "daily", "--workspace", "ws_proof_input_note"],
+    );
+
+    let started = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Input Note", "template": "principal-task", "reasoning_mode": "normal" } } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    // A NOTE-only proof_input must NOT satisfy proof-required gates.
+    let closed = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
+            "proof_input": "ran tests"
+        } } }
+    }));
+    let text = extract_tool_text_str(&closed);
+    assert_tag_light(&text);
+    assert!(
+        text.lines()
+            .next()
+            .is_some_and(|l| l.starts_with("ERROR: PROOF_REQUIRED")),
+        "NOTE-only proof_input must not close proof-required steps: {text}"
+    );
+}
+
+#[test]
 fn proof_url_attachment_satisfies_soft_link_receipt_lint() {
     let mut server = Server::start_initialized_with_args(
         "proof_url_attachment_satisfies_soft_link_receipt_lint",

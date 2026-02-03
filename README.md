@@ -81,6 +81,9 @@ Runtime flags:
 - `--hot-reload-poll-ms <ms>` — override the hot reload polling interval (default: `1000`).
 - `--runner-autostart` — allow `bm_mcp` to auto-start `bm_runner` when jobs are queued (default in `daily|core`).
 - `--no-runner-autostart` — disable runner autostart (default in `full`).
+- `--no-ux-proof-v2` — disable proof UX v2 shortcuts (`proof_input`, `proof_from_job`) while keeping explicit `proof` support.
+- `--no-knowledge-autolint` — disable `lint_mode=auto` warnings (manual `think.knowledge.lint` still works).
+- `--no-note-promote` — disable note → knowledge promotion (`promote_to_knowledge`, `think.note.promote`).
 
 Hot reload defaults:
 
@@ -101,6 +104,9 @@ Environment overrides:
 - `BRANCHMIND_VIEWER=0` — same as `--no-viewer`.
 - `BRANCHMIND_VIEWER_PORT=<port>` — same as `--viewer-port`.
 - `BRANCHMIND_RUNNER_AUTOSTART=1|0` — same as `--runner-autostart` / `--no-runner-autostart`.
+- `BRANCHMIND_UX_PROOF_V2=1|0` — enable/disable proof UX v2.
+- `BRANCHMIND_KNOWLEDGE_AUTOLINT=1|0` — enable/disable knowledge auto-lint.
+- `BRANCHMIND_NOTE_PROMOTE=1|0` — enable/disable note promotion.
 
 `tools/list` also supports optional params `{ "toolset": "full|daily|core" }` to override the default for a single call.
 

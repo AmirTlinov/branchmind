@@ -1055,6 +1055,39 @@ impl McpServer {
 
         if verbosity == ResponseVerbosity::Compact {
             result = compact_open_result(&id, &result);
+            if let Some(limit) = max_chars {
+                let (limit, clamped) = clamp_budget_max(limit);
+                let mut truncated = false;
+                let mut minimal = false;
+
+                let _used =
+                    ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |v| {
+                        let mut changed = false;
+                        // Compact open results should keep navigation handles; drop payload-heavy
+                        // fields first.
+                        if json_len_chars(v) > limit {
+                            changed |= drop_fields_at(v, &[], &["content"]);
+                        }
+                        if json_len_chars(v) > limit {
+                            changed |= drop_fields_at(v, &[], &["next_action"]);
+                        }
+                        if json_len_chars(v) > limit {
+                            changed |= drop_fields_at(v, &[], &["reasoning_ref"]);
+                        }
+                        if json_len_chars(v) > limit {
+                            changed |= drop_fields_at(v, &[], &["focus"]);
+                        }
+                        changed
+                    });
+
+                warnings.extend(budget_warnings(truncated, minimal, clamped));
+            } else if result.get("budget").is_none() {
+                // Some open kinds don't go through the budget-aware super-resume machinery.
+                // Ensure budget is visible even in compact output (UX invariant).
+                let used = json_len_chars(&result);
+                let (limit, _clamped) = clamp_budget_max(used);
+                let _used = attach_budget(&mut result, limit, false);
+            }
         } else if let Some(limit) = max_chars {
             let (limit, clamped) = clamp_budget_max(limit);
             let mut truncated = false;
@@ -1151,6 +1184,12 @@ impl McpServer {
                 });
 
             warnings.extend(budget_warnings(truncated, minimal, clamped));
+        } else if result.get("budget").is_none() {
+            // For open calls without explicit budgets, keep the payload stable but still report the
+            // effective size to the caller (cheap drift guard + UX).
+            let used = json_len_chars(&result);
+            let (limit, _clamped) = clamp_budget_max(used);
+            let _used = attach_budget(&mut result, limit, false);
         }
 
         if warnings.is_empty() {

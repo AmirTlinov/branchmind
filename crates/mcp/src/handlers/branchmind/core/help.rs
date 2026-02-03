@@ -58,7 +58,7 @@ fn render_help_text(max_chars: Option<usize>) -> String {
         &[
             "Preferred receipts: CMD: ... (what you ran) + LINK: ... (CI/artifact/log).",
             "Proof shortcut: pass proof as string/array/object to tasks_macro_close_step.",
-            "Auto-normalization: URL lines become LINK; other lines become CMD.",
+            "Auto-normalization (proof_input/proof): URL lines become LINK; strong shell command lines become CMD; path-like lines become FILE; everything else becomes NOTE (does not count as proof).",
             "Markdown bullets are accepted in proof lines (e.g. '- LINK: ...').",
             "URL-like attachments count as LINK for the soft PROOF_WEAK lint.",
             "Soft lint: missing CMD or LINK emits WARNING: PROOF_WEAK (does not block).",

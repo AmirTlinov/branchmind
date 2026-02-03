@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
 use crate::ops::{
-    BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError, OpResponse, Safety,
-    SchemaSource, Stability, Tier, ToolName, name_to_cmd_segments,
+    Action, ActionPriority, BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError,
+    OpResponse, Safety, SchemaSource, Stability, Tier, ToolName, name_to_cmd_segments,
 };
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 
 const KB_BRANCH: &str = "kb/main";
 const KB_GRAPH_DOC: &str = "kb-graph";
@@ -555,23 +556,58 @@ fn handle_knowledge_upsert(server: &mut crate::McpServer, env: &Envelope) -> OpR
             Ok(v) => v,
             Err(e) => return OpResponse::error(env.cmd.clone(), e),
         };
-        let key_tag = {
-            let candidate = if key.trim().starts_with(crate::KEY_TAG_PREFIX) {
-                key.trim().to_string()
-            } else {
-                format!("{}{}", crate::KEY_TAG_PREFIX, key.trim())
-            };
-            crate::normalize_key_id_tag(&candidate).ok_or_else(|| OpError {
-                code: "INVALID_INPUT".to_string(),
-                message: "key must be a valid slug (k:<slug>)".to_string(),
-                recovery: Some(
-                    "Use key like: determinism | k:determinism | storage-locking".to_string(),
-                ),
-            })
+        let candidate = if key.trim().starts_with(crate::KEY_TAG_PREFIX) {
+            key.trim().to_string()
+        } else {
+            format!("{}{}", crate::KEY_TAG_PREFIX, key.trim())
         };
-        let key_tag = match key_tag {
-            Ok(v) => v,
-            Err(e) => return OpResponse::error(env.cmd.clone(), e),
+        let key_tag = match crate::normalize_key_id_tag(&candidate) {
+            Some(v) => v,
+            None => {
+                let suggested_key = crate::slugify_key(key).unwrap_or_else(|| "example-key".into());
+                let mut recovery = String::new();
+                let _ = write!(
+                    &mut recovery,
+                    "Use key like: determinism | k:determinism | storage-locking. Suggested key: {suggested_key}"
+                );
+
+                let mut resp = OpResponse::error(
+                    env.cmd.clone(),
+                    OpError {
+                        code: "INVALID_INPUT".to_string(),
+                        message: "key must be a valid slug (k:<slug>)".to_string(),
+                        recovery: Some(recovery),
+                    },
+                );
+
+                // Make the "right thing" copy/pasteable (only on error, to avoid noise).
+                let title = parsed
+                    .title
+                    .as_deref()
+                    .or(parsed.text.as_deref())
+                    .unwrap_or("Knowledge card")
+                    .to_string();
+                resp.actions.push(Action {
+                    action_id: format!("recover.key.suggest::{anchor}"),
+                    priority: ActionPriority::High,
+                    tool: ToolName::ThinkOps.as_str().to_string(),
+                    args: json!({
+                        "workspace": env.workspace,
+                        "op": "call",
+                        "cmd": "think.knowledge.key.suggest",
+                        "args": {
+                            "anchor": anchor,
+                            "title": title
+                        },
+                        "budget_profile": "portal",
+                        "view": "compact"
+                    }),
+                    why: "Получить детерминированный suggested_key (anchor-first) вместо ручного подбора.".to_string(),
+                    risk: "Низкий".to_string(),
+                });
+
+                return resp;
+            }
         };
 
         resolved_anchor_tag = Some(anchor_tag.clone());
@@ -661,7 +697,13 @@ fn handle_knowledge_upsert(server: &mut crate::McpServer, env: &Envelope) -> OpR
     let mut response =
         crate::ops::handler_to_op_response(&env.cmd, Some(workspace.as_str()), handler_resp);
 
-    if lint_mode == "auto"
+    if lint_mode == "auto" && !server.knowledge_autolint_enabled {
+        response.warnings.push(crate::warning(
+            "FEATURE_DISABLED",
+            "knowledge_autolint is disabled",
+            "Run think.knowledge.lint manually or enable the feature flag (--knowledge-autolint).",
+        ));
+    } else if lint_mode == "auto"
         && let Some(key_tag) = resolved_key_tag.as_deref()
     {
         let key_slug = key_tag
@@ -941,6 +983,19 @@ fn handle_note_promote(server: &mut crate::McpServer, env: &Envelope) -> OpRespo
             );
         }
     };
+
+    if !server.note_promote_enabled {
+        return OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "FEATURE_DISABLED".to_string(),
+                message: "note promotion is disabled".to_string(),
+                recovery: Some(
+                    "Enable via --note-promote (or env BRANCHMIND_NOTE_PROMOTE=1).".to_string(),
+                ),
+            },
+        );
+    }
 
     let Some(args_obj) = env.args.as_object() else {
         return OpResponse::error(

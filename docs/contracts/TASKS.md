@@ -998,8 +998,12 @@ Semantics:
   - Input DX: `checks[]` lines may be pasted as markdown (bullets like `- ...`, `* ...`, `1. ...`); list prefixes are ignored.
 - If `proof` is **not** provided, `proof_input` can be used as a copy/paste‑minimal alternative:
   - `proof_input` accepts string or array of strings.
-  - Lines are auto‑normalized to receipts (same rules as `proof`), but ambiguous lines (non‑tagged, non‑URL, non‑command) are flagged.
-  - `proof_parse_policy` controls ambiguous handling: `warn` (default) emits `WARNING: PROOF_PARSE_AMBIGUOUS`, `strict` fails fast with a typed error.
+  - Lines are deterministically classified:
+    - URL / `file://...` → `LINK: ...` (proof check),
+    - strong shell command lines → `CMD: ...` (proof check),
+    - path‑like lines (`/abs`, `./rel`, `../rel`, `~/rel`) → `FILE: ...` (proof attachment),
+    - everything else → `NOTE: ...` (stored as a step note; does **not** count as proof).
+  - `proof_parse_policy` controls NOTE handling: `warn` (default) emits `WARNING: PROOF_PARSE_AMBIGUOUS`, `strict` fails fast with a typed error.
 - `proof_from_job` optionally attaches proof from a delegated job without manual copy/paste.
   - Shape: `{ job_id, artifact_ref?, checkpoint? }`
   - The server resolves the job, emits proof attachments (e.g. `LINK: file://...` with `sha256`) and records evidence for the step.

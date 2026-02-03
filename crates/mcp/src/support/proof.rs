@@ -37,7 +37,8 @@ impl ProofParsePolicy {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ProofParseOutcome {
     pub(crate) checks: Vec<String>,
-    pub(crate) ambiguous: Vec<String>,
+    pub(crate) attachments: Vec<String>,
+    pub(crate) notes: Vec<String>,
 }
 
 pub(crate) fn proof_checks_placeholder_json() -> Value {
@@ -253,6 +254,15 @@ pub(crate) fn coerce_proof_input_line(raw: &str) -> Option<(String, bool)> {
         return None;
     }
 
+    // Agents commonly paste shell prompts. Keep the UX forgiving without accepting random prose.
+    let trimmed = if let Some(rest) = trimmed.strip_prefix("$ ") {
+        rest.trim()
+    } else if let Some(rest) = trimmed.strip_prefix("> ") {
+        rest.trim()
+    } else {
+        trimmed
+    };
+
     let cmd_tagged = trimmed
         .get(..4)
         .is_some_and(|p| p.eq_ignore_ascii_case("CMD:"))
@@ -314,7 +324,13 @@ pub(crate) fn coerce_proof_input_line(raw: &str) -> Option<(String, bool)> {
         return Some((format!("CMD: {trimmed}"), false));
     }
 
-    Some((format!("CMD: {trimmed}"), true))
+    if looks_like_path_line(trimmed) {
+        let candidate = strip_wrapping_angle_brackets(trimmed).trim();
+        return Some((format!("FILE: {candidate}"), false));
+    }
+
+    let note = strip_wrapping_angle_brackets(trimmed).trim();
+    Some((format!("NOTE: {note}"), true))
 }
 
 pub(crate) fn parse_proof_input_lines(raw: &[String]) -> ProofParseOutcome {
@@ -323,9 +339,14 @@ pub(crate) fn parse_proof_input_lines(raw: &[String]) -> ProofParseOutcome {
         for line in item.lines() {
             if let Some((coerced, ambiguous)) = coerce_proof_input_line(line) {
                 if ambiguous {
-                    outcome.ambiguous.push(line.trim().to_string());
+                    outcome.notes.push(coerced);
+                    continue;
                 }
-                outcome.checks.push(coerced);
+                if coerced.starts_with("FILE:") {
+                    outcome.attachments.push(coerced);
+                } else {
+                    outcome.checks.push(coerced);
+                }
             }
         }
     }
@@ -468,6 +489,24 @@ fn looks_like_shell_command_line(trimmed: &str) -> bool {
     strong_prefixes
         .into_iter()
         .any(|p| lower == p.trim_end() || lower.starts_with(p))
+}
+
+fn looks_like_path_line(trimmed: &str) -> bool {
+    // Deterministic, conservative path heuristic (unix-first):
+    // - absolute paths: /tmp/foo
+    // - relative paths: ./foo, ../foo
+    // - home paths: ~/foo
+    //
+    // We intentionally do NOT treat "file://..." as a path here; that is a URL and handled
+    // earlier as a LINK receipt.
+    let s = strip_wrapping_angle_brackets(trimmed).trim();
+    if s.is_empty() {
+        return false;
+    }
+    if looks_like_bare_url(s) {
+        return false;
+    }
+    s.starts_with('/') || s.starts_with("./") || s.starts_with("../") || s.starts_with("~/")
 }
 
 fn push_unique_bounded(

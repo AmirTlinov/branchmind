@@ -2,6 +2,33 @@
 
 use crate::*;
 use serde_json::{Value, json};
+use sha2::Digest as _;
+use std::fmt::Write as _;
+use std::io::Read as _;
+
+const DEFAULT_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
+
+fn sha256_file_hex(path: &std::path::Path) -> Result<String, std::io::Error> {
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = sha2::Sha256::new();
+
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    Ok(out)
+}
 
 impl McpServer {
     pub(crate) fn tool_tasks_jobs_proof_attach(&mut self, args: Value) -> Value {
@@ -34,6 +61,12 @@ impl McpServer {
         };
         let max_refs = match optional_usize(args_obj, "max_refs") {
             Ok(v) => v.unwrap_or(32).clamp(1, 64),
+            Err(resp) => return resp,
+        };
+        let max_file_bytes = match optional_usize(args_obj, "max_file_bytes") {
+            Ok(v) => v
+                .unwrap_or(DEFAULT_MAX_FILE_BYTES as usize)
+                .clamp(1, (512 * 1024 * 1024) as usize) as u64,
             Err(resp) => return resp,
         };
 
@@ -80,6 +113,7 @@ impl McpServer {
         let refs = crate::salvage_job_completion_refs(summary_text, &job_id, &refs);
         let mut checks = Vec::<String>::new();
         let mut attachments = Vec::<String>::new();
+        let mut files = Vec::<Value>::new();
 
         for r in refs.into_iter().take(max_refs) {
             let trimmed = r.trim();
@@ -101,8 +135,30 @@ impl McpServer {
             if trimmed.starts_with('/')
                 && let Ok(path) = std::fs::canonicalize(trimmed)
             {
-                let link = format!("LINK: file://{}", path.to_string_lossy());
-                checks.push(link);
+                let uri = format!("file://{}", path.to_string_lossy());
+                let link = format!("LINK: {uri}");
+                checks.push(link.clone());
+
+                // Best-effort sha256: bounded and deterministic.
+                let entry = match std::fs::metadata(&path) {
+                    Ok(meta) => {
+                        let bytes = meta.len();
+                        if bytes <= max_file_bytes {
+                            match sha256_file_hex(&path) {
+                                Ok(sha256) => {
+                                    json!({ "uri": uri, "sha256": sha256, "bytes": bytes })
+                                }
+                                Err(_) => {
+                                    json!({ "uri": uri, "sha256": Value::Null, "bytes": bytes, "skipped": "read_error" })
+                                }
+                            }
+                        } else {
+                            json!({ "uri": uri, "sha256": Value::Null, "bytes": bytes, "skipped": "too_large" })
+                        }
+                    }
+                    Err(_) => json!({ "uri": uri, "sha256": Value::Null, "skipped": "missing" }),
+                };
+                files.push(entry);
                 continue;
             }
             attachments.push(trimmed.to_string());
@@ -144,7 +200,7 @@ impl McpServer {
         }
         if !checks.is_empty() {
             evidence_args.insert(
-                "attachments".to_string(),
+                "checks".to_string(),
                 Value::Array(checks.iter().map(|v| Value::String(v.clone())).collect()),
             );
         }
@@ -178,6 +234,9 @@ impl McpServer {
             "attached": true
         });
         if let Some(obj) = result.as_object_mut() {
+            if !files.is_empty() {
+                obj.insert("files".to_string(), Value::Array(files));
+            }
             if let Some(event) = evidence_resp.get("result").and_then(|v| v.get("event")) {
                 obj.insert("event".to_string(), event.clone());
             }

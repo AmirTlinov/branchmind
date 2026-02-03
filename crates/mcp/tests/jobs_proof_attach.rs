@@ -12,6 +12,19 @@ fn jobs_proof_attach_creates_evidence_from_job_refs() {
         &["--toolset", "full", "--workspace", "ws_jobs_proof_attach"],
     );
 
+    // Prepare a local artifact to verify sha256 hashing.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let artifact_path = std::env::temp_dir().join(format!(
+        "bm_mcp_jobs_proof_attach_artifact_{}_{}.txt",
+        std::process::id(),
+        nonce
+    ));
+    std::fs::write(&artifact_path, b"hello").expect("write artifact");
+    let expected_sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
     // Create a task to set focus for evidence capture.
     let _started = server.request(json!({
         "jsonrpc": "2.0",
@@ -103,7 +116,8 @@ fn jobs_proof_attach_creates_evidence_from_job_refs() {
         "method": "tools/call",
         "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.proof.attach", "args": {
             "workspace": "ws_jobs_proof_attach",
-            "job": job_id
+            "job": job_id,
+            "artifact_ref": artifact_path.to_string_lossy()
         } } }
     }));
     let attached_out = extract_tool_text(&attached);
@@ -121,4 +135,21 @@ fn jobs_proof_attach_creates_evidence_from_job_refs() {
             .is_some(),
         "jobs.proof.attach should return an evidence event"
     );
+
+    let files = attached_out
+        .get("result")
+        .and_then(|v| v.get("files"))
+        .and_then(|v| v.as_array())
+        .expect("jobs.proof.attach should return files when artifact_ref points to a local file");
+    assert!(
+        files.iter().any(|f| {
+            f.get("sha256").and_then(|v| v.as_str()) == Some(expected_sha256)
+                && f.get("uri")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|u| u.starts_with("file://"))
+        }),
+        "expected a file hash entry (sha256 + file:// uri): {files:?}"
+    );
+
+    let _ = std::fs::remove_file(&artifact_path);
 }

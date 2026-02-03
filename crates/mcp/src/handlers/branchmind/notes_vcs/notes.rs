@@ -106,6 +106,14 @@ impl McpServer {
             Ok(v) => v.unwrap_or(false),
             Err(resp) => return resp,
         };
+        if promote_to_knowledge && !self.note_promote_enabled {
+            return ai_error_with(
+                "FEATURE_DISABLED",
+                "note promotion is disabled",
+                Some("Enable via --note-promote (or env BRANCHMIND_NOTE_PROMOTE=1)."),
+                Vec::new(),
+            );
+        }
         let knowledge_anchor = match optional_string(args_obj, "knowledge_anchor") {
             Ok(v) => v,
             Err(resp) => return resp,

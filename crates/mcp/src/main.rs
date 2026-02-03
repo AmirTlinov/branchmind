@@ -95,6 +95,9 @@ pub(crate) struct McpServer {
     toolset: Toolset,
     response_verbosity: ResponseVerbosity,
     dx_mode: bool,
+    ux_proof_v2_enabled: bool,
+    knowledge_autolint_enabled: bool,
+    note_promote_enabled: bool,
     default_workspace: Option<String>,
     workspace_explicit: bool,
     workspace_override: Option<String>,
@@ -123,6 +126,9 @@ pub(crate) struct McpServerConfig {
     toolset: Toolset,
     response_verbosity: ResponseVerbosity,
     dx_mode: bool,
+    ux_proof_v2_enabled: bool,
+    knowledge_autolint_enabled: bool,
+    note_promote_enabled: bool,
     default_workspace: Option<String>,
     workspace_explicit: bool,
     workspace_allowlist: Option<Vec<String>>,
@@ -210,12 +216,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project_guard = parse_project_guard(&storage_dir);
     let project_guard_rebind_enabled = parse_project_guard_rebind_enabled(&storage_dir);
     let default_agent_id_config = parse_default_agent_id_config();
+    let ux_proof_v2_enabled = parse_ux_proof_v2_enabled();
+    let knowledge_autolint_enabled = parse_knowledge_autolint_enabled();
+    let note_promote_enabled = parse_note_promote_enabled();
     let compat_fingerprint = crate::build_compat_fingerprint();
     let socket_tag = socket_tag_for_config(SocketTagConfig {
         compat_fingerprint: &compat_fingerprint,
         toolset,
         response_verbosity,
         dx_mode,
+        ux_proof_v2_enabled,
+        knowledge_autolint_enabled,
+        note_promote_enabled,
         default_workspace: default_workspace.as_deref(),
         workspace_explicit: workspace_explicit.is_some(),
         workspace_lock,
@@ -272,6 +284,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 toolset,
                 response_verbosity,
                 dx_mode,
+                ux_proof_v2_enabled,
+                knowledge_autolint_enabled,
+                note_promote_enabled,
                 default_workspace,
                 workspace_explicit: workspace_explicit.is_some(),
                 workspace_allowlist: workspace_allowlist.clone(),
@@ -313,6 +328,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 toolset,
                 response_verbosity,
                 dx_mode,
+                ux_proof_v2_enabled,
+                knowledge_autolint_enabled,
+                note_promote_enabled,
                 default_workspace,
                 workspace_explicit: workspace_explicit.is_some(),
                 workspace_allowlist: workspace_allowlist.clone(),
@@ -358,6 +376,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             toolset,
             response_verbosity,
             dx_mode,
+            ux_proof_v2_enabled,
+            knowledge_autolint_enabled,
+            note_promote_enabled,
             default_workspace,
             workspace_explicit: workspace_explicit.is_some(),
             workspace_allowlist: workspace_allowlist.clone(),
