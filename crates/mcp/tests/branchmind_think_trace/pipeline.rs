@@ -12,7 +12,7 @@ fn branchmind_think_pipeline_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_think_pipe", "kind": "plan", "title": "Plan Pipe" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_think_pipe", "kind": "plan", "title": "Plan Pipe" } } }
     }));
     let plan_id = extract_tool_text(&created_plan)
         .get("result")
@@ -25,7 +25,7 @@ fn branchmind_think_pipeline_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_think_pipe", "kind": "task", "parent": plan_id, "title": "Task Pipe" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_think_pipe", "kind": "task", "parent": plan_id, "title": "Task Pipe" } } }
     }));
     let task_id = extract_tool_text(&created_task)
         .get("result")
@@ -38,9 +38,7 @@ fn branchmind_think_pipeline_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "think_pipeline",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.reasoning.pipeline", "args": {
                 "workspace": "ws_think_pipe",
                 "target": task_id,
                 "frame": "Frame",
@@ -48,8 +46,7 @@ fn branchmind_think_pipeline_smoke() {
                 "test": "Test",
                 "evidence": "Evidence",
                 "decision": "Decision"
-            }
-        }
+            } } }
     }));
     let pipeline_text = extract_tool_text(&pipeline);
     let cards = pipeline_text

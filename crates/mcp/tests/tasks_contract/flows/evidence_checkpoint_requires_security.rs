@@ -13,7 +13,7 @@ fn tasks_evidence_checkpoint_requires_security_for_first_open_step() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_chk", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_chk", "kind": "plan", "title": "Plan A" } } }
     }));
     let plan_id = extract_tool_text(&created_plan)
         .get("result")
@@ -26,7 +26,7 @@ fn tasks_evidence_checkpoint_requires_security_for_first_open_step() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_chk", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_chk", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let task_id = extract_tool_text(&created_task)
         .get("result")
@@ -39,7 +39,7 @@ fn tasks_evidence_checkpoint_requires_security_for_first_open_step() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_chk", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": { "workspace": "ws_chk", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } } }
     }));
     let step_id = extract_tool_text(&decompose)
         .get("result")
@@ -55,23 +55,20 @@ fn tasks_evidence_checkpoint_requires_security_for_first_open_step() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_evidence_capture",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.evidence.capture", "args": {
                 "workspace": "ws_chk",
                 "task": task_id.clone(),
                 "step_id": step_id,
                 "checkpoint": "security",
                 "checks": ["ci:security-scan passed"]
-            }
-        }
+            } } }
     }));
 
     let resume = server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_resume_super", "arguments": { "workspace": "ws_chk", "task": task_id, "max_chars": 4000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": { "workspace": "ws_chk", "task": task_id, "max_chars": 4000 } } }
     }));
     let resume_text = extract_tool_text(&resume);
 

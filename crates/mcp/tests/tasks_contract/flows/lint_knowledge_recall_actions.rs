@@ -13,17 +13,14 @@ fn tasks_lint_suggests_recall_and_seed_when_anchored_task_has_no_knowledge() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Knowledge Lint",
                 "task_title": "Task Knowledge Lint",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -37,7 +34,7 @@ fn tasks_lint_suggests_recall_and_seed_when_anchored_task_has_no_knowledge() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "macro_anchor_note", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.macro.anchor.note", "args": {
             "workspace": "ws1",
             "target": task_id,
             "anchor": "a:core",
@@ -46,14 +43,14 @@ fn tasks_lint_suggests_recall_and_seed_when_anchored_task_has_no_knowledge() {
             "content": "Bind task to anchor a:core",
             "card_type": "note",
             "visibility": "canon"
-        } }
+        } } }
     }));
 
     let lint = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_text = extract_tool_text(&lint);
 
@@ -125,7 +122,7 @@ fn tasks_lint_suggests_recall_and_seed_when_anchored_task_has_no_knowledge() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_lint", "arguments": { "workspace": "ws1", "task": task_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.lint", "args": { "workspace": "ws1", "task": task_id } } }
     }));
     let lint_2_text = extract_tool_text(&lint_2);
 

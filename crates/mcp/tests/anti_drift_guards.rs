@@ -45,8 +45,6 @@ impl RawServer {
     }
 
     fn request(&mut self, req: serde_json::Value) -> serde_json::Value {
-        let mut req = req;
-        support::rewrite_tool_call(&mut req);
         self.send(req);
         self.recv()
     }
@@ -107,7 +105,7 @@ fn workspace_lock_rejects_explicit_workspace_mismatch() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_other", "kind": "plan", "title": "Plan" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_other", "kind": "plan", "title": "Plan" } } }
     }));
     let text = extract_tool_text(&resp);
 
@@ -148,7 +146,7 @@ fn workspace_allowlist_rejects_unknown_workspace() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "alpha", "kind": "plan", "title": "Plan Alpha" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "alpha", "kind": "plan", "title": "Plan Alpha" } } }
     }));
     assert_eq!(
         ok.get("result")
@@ -161,7 +159,7 @@ fn workspace_allowlist_rejects_unknown_workspace() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "gamma", "kind": "plan", "title": "Plan Gamma" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "gamma", "kind": "plan", "title": "Plan Gamma" } } }
     }));
     let text = extract_tool_text(&resp);
     assert_eq!(
@@ -199,7 +197,7 @@ fn workspace_use_overrides_default_for_session() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "workspace_use", "arguments": { "workspace": "ws_alt" } }
+        "params": { "name": "workspace", "arguments": { "op": "call", "cmd": "workspace.use", "args": { "workspace": "ws_alt" } } }
     }));
     assert_eq!(
         switch
@@ -213,7 +211,7 @@ fn workspace_use_overrides_default_for_session() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": {} }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": {} } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -250,7 +248,7 @@ fn project_guard_mismatch_is_typed_error() {
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan A" } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan A" } } }
         }));
     }
 
@@ -261,7 +259,7 @@ fn project_guard_mismatch_is_typed_error() {
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan B" } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan B" } } }
         }));
 
         let text = extract_tool_text(&resp);
@@ -301,7 +299,7 @@ fn project_guard_defaults_when_not_explicit() {
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan A" } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan A" } } }
         }));
     }
 
@@ -312,7 +310,7 @@ fn project_guard_defaults_when_not_explicit() {
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan B" } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_guarded", "kind": "plan", "title": "Plan B" } } }
         }));
 
         let text = extract_tool_text(&resp);

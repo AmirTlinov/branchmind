@@ -71,7 +71,7 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "DX DoD Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "DX DoD Task" } } }
     }));
     let start_text = extract_tool_text_str(&started);
     assert_tag_light(&start_text);
@@ -121,7 +121,7 @@ fn dx_dod_daily_task_flow_is_state_plus_command() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {} } }
     }));
     let snap_text = extract_tool_text_str(&snapshot);
     assert_tag_light(&snap_text);
@@ -179,10 +179,7 @@ fn dx_dod_no_focus_recovery_is_typed_and_portal_first() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": { "workspace": "ws_dx_dod_no_focus", "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_dx_dod_no_focus", "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&close);
     assert_tag_light(&text);
@@ -216,10 +213,7 @@ fn dx_dod_progressive_disclosure_is_two_commands_only() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "workspace": "ws_dx_dod_disclosure", "kind": "plan", "title": "Plan" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_dx_dod_disclosure", "kind": "plan", "title": "Plan" } } }
     }));
     let plan_json = extract_tool_text(&created_plan);
     let plan_id = plan_json
@@ -232,10 +226,7 @@ fn dx_dod_progressive_disclosure_is_two_commands_only() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "workspace": "ws_dx_dod_disclosure", "kind": "task", "parent": plan_id, "title": "No Steps" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_dx_dod_disclosure", "kind": "task", "parent": plan_id, "title": "No Steps" } } }
     }));
     let task_json = extract_tool_text(&created_task);
     let task_id = task_json
@@ -248,7 +239,7 @@ fn dx_dod_progressive_disclosure_is_two_commands_only() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "task": task_id, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "task": task_id, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
     assert_tag_light(&text);
@@ -286,14 +277,14 @@ fn dx_dod_budget_warnings_remain_warnings_and_stay_small() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Budget Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Budget Task" } } }
     }));
 
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 50, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "max_chars": 50, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
     assert_tag_light(&text);
@@ -328,7 +319,7 @@ fn dx_dod_prep_action_survives_budget_truncation_in_portal_lines() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Budget Prep Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Budget Prep Task" } } }
     }));
 
     // Make the meaning-map resolvable so the portal can focus on prep (not anchor attach).
@@ -336,7 +327,7 @@ fn dx_dod_prep_action_survives_budget_truncation_in_portal_lines() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_dx_dod_prep_budget",
             "step": "focus",
             "card": {
@@ -346,7 +337,7 @@ fn dx_dod_prep_action_survives_budget_truncation_in_portal_lines() {
                 "text": "Anchor attach note.",
                 "tags": ["a:storage", "v:canon"]
             }
-        } }
+        } } }
     }));
 
     // Add a large note to force truncation while still keeping the capsule commands visible.
@@ -354,21 +345,18 @@ fn dx_dod_prep_action_survives_budget_truncation_in_portal_lines() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "workspace": "ws_dx_dod_prep_budget",
                 "path": "s:0",
                 "note": "x".repeat(6000)
-            }
-        }
+            } } }
     }));
 
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "max_chars": 2000, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
     assert_tag_light(&text);
@@ -407,7 +395,7 @@ fn dx_dod_more_is_copy_paste_ready_when_no_action() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "DX More Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "DX More Task" } } }
     }));
 
     // Create enough notes to force paging (notes_limit defaults to 10).
@@ -416,14 +404,11 @@ fn dx_dod_more_is_copy_paste_ready_when_no_action() {
             "jsonrpc": "2.0",
             "id": 10 + i,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_note",
-                "arguments": {
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                     "workspace": "ws_dx_dod_more",
                     "path": "s:0",
                     "note": format!("note {i}")
-                }
-            }
+                } } }
         }));
     }
 
@@ -433,7 +418,7 @@ fn dx_dod_more_is_copy_paste_ready_when_no_action() {
             "jsonrpc": "2.0",
             "id": 40 + i,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
     }
 
@@ -441,7 +426,7 @@ fn dx_dod_more_is_copy_paste_ready_when_no_action() {
         "jsonrpc": "2.0",
         "id": 100,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {} } }
     }));
     let text = extract_tool_text_str(&snapshot);
     assert_tag_light(&text);
@@ -483,7 +468,7 @@ fn dx_dod_done_state_does_not_emit_already_done_warning() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "DX Done Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "DX Done Task" } } }
     }));
 
     // Finish the basic-task template (3 steps + finish).
@@ -492,7 +477,7 @@ fn dx_dod_done_state_does_not_emit_already_done_warning() {
             "jsonrpc": "2.0",
             "id": 10 + i,
             "method": "tools/call",
-            "params": { "name": "tasks_macro_close_step", "arguments": {} }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
         }));
     }
 
@@ -501,7 +486,7 @@ fn dx_dod_done_state_does_not_emit_already_done_warning() {
         "jsonrpc": "2.0",
         "id": 99,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_close_step", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
     }));
     let text = extract_tool_text_str(&close_again);
     assert_tag_light(&text);

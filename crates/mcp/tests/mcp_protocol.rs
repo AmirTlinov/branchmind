@@ -947,7 +947,7 @@ fn tasks_macro_start_uses_focused_plan_when_plan_is_omitted() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_focus_plan", "kind": "plan", "title": "Plan Focus" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_focus_plan", "kind": "plan", "title": "Plan Focus" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -962,7 +962,7 @@ fn tasks_macro_start_uses_focused_plan_when_plan_is_omitted() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws_focus_plan", "plan": plan_id_for_focus } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.set", "args": { "workspace": "ws_focus_plan", "plan": plan_id_for_focus } } }
     }));
     let focus_set_text = extract_tool_text(&focus_set);
     assert_eq!(
@@ -974,15 +974,12 @@ fn tasks_macro_start_uses_focused_plan_when_plan_is_omitted() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_focus_plan",
                 "task_title": "Task under focused plan",
                 "template": "basic-task",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&started).starts_with("ERROR:"),
@@ -993,7 +990,7 @@ fn tasks_macro_start_uses_focused_plan_when_plan_is_omitted() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws_focus_plan" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws_focus_plan" } } }
     }));
     let focus_text = extract_tool_text(&focus);
     let task_id = focus_text
@@ -1007,7 +1004,7 @@ fn tasks_macro_start_uses_focused_plan_when_plan_is_omitted() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_context", "arguments": { "workspace": "ws_focus_plan" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.context", "args": { "workspace": "ws_focus_plan" } } }
     }));
     let context_text = extract_tool_text(&context);
     let used_plan_id = context_text
@@ -1037,7 +1034,7 @@ fn tasks_macro_start_accepts_template_without_steps() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "workspace": "ws_tpl", "plan_title": "Plan Tpl", "task_title": "Task from template", "template": "basic-task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "workspace": "ws_tpl", "plan_title": "Plan Tpl", "task_title": "Task from template", "template": "basic-task" } } }
     }));
     assert!(
         !extract_tool_text_str(&started).starts_with("ERROR:"),
@@ -1048,7 +1045,7 @@ fn tasks_macro_start_accepts_template_without_steps() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws_tpl" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws_tpl" } } }
     }));
     let focus_text = extract_tool_text(&focus);
     let task_id = focus_text
@@ -1062,7 +1059,7 @@ fn tasks_macro_start_accepts_template_without_steps() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_context", "arguments": { "workspace": "ws_tpl" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.context", "args": { "workspace": "ws_tpl" } } }
     }));
     let context_text = extract_tool_text(&context);
     let steps_count = context_text
@@ -1089,7 +1086,7 @@ fn tasks_macro_start_accepts_plan_id_with_matching_plan_title() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_match", "kind": "plan", "title": "Plan Match" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_match", "kind": "plan", "title": "Plan Match" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -1103,17 +1100,14 @@ fn tasks_macro_start_accepts_plan_id_with_matching_plan_title() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_match",
                 "plan": plan_id,
                 "plan_title": "Plan Match",
                 "task_title": "Task under plan",
                 "template": "basic-task",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     assert!(
         !extract_tool_text_str(&started).starts_with("ERROR:"),
@@ -1131,16 +1125,13 @@ fn tasks_macro_start_accepts_plan_title_in_plan_field_when_not_plan_id() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_plan_alias",
                 "plan": "Inbox",
                 "task_title": "Task under Inbox",
                 "template": "basic-task",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&started);
     assert!(
@@ -1162,7 +1153,7 @@ fn tasks_macro_start_rejects_plan_id_with_mismatching_plan_title() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_mismatch", "kind": "plan", "title": "Plan Actual" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_mismatch", "kind": "plan", "title": "Plan Actual" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -1176,17 +1167,14 @@ fn tasks_macro_start_rejects_plan_id_with_mismatching_plan_title() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_mismatch",
                 "plan": plan_id,
                 "plan_title": "Plan Different",
                 "task_title": "Task under plan",
                 "template": "basic-task",
                 "resume_max_chars": 4000
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&started);
     assert!(

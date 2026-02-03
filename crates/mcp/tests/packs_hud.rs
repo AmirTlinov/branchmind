@@ -13,34 +13,34 @@ fn think_pack_includes_capsule_and_engine() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_pack_hud" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_pack_hud" } } }
     }));
 
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_pack_hud",
             "card": { "id": "H1", "type": "hypothesis", "title": "Hypothesis", "text": "needs a test" }
-        } }
+        } } }
     }));
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_pack_hud",
             "card": { "id": "T1", "type": "test", "title": "Runnable test", "text": "CMD: echo hi", "meta": { "run": { "cmd": "echo hi" } } },
             "supports": ["H1"]
-        } }
+        } } }
     }));
 
     let pack = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_pack", "arguments": { "workspace": "ws_pack_hud", "limit_candidates": 15, "limit_tests": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pack", "args": { "workspace": "ws_pack_hud", "limit_candidates": 15, "limit_tests": 10 } } }
     }));
     let pack_text = extract_tool_text(&pack);
 
@@ -102,17 +102,14 @@ fn context_pack_includes_capsule_engine_and_sequential_trace() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_pack_ctx",
                 "plan_title": "Plan",
                 "task_title": "Task",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -127,9 +124,7 @@ fn context_pack_includes_capsule_engine_and_sequential_trace() {
         "jsonrpc": "2.0",
         "id": 25,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_pack_ctx",
                 "target": task_id.clone(),
                 "card": {
@@ -139,33 +134,27 @@ fn context_pack_includes_capsule_engine_and_sequential_trace() {
                     "text": "CMD: echo hi",
                     "meta": { "run": { "cmd": "echo hi" } }
                 }
-            }
-        }
+            } } }
     }));
 
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "trace_sequential_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.sequential.step", "args": {
                 "workspace": "ws_pack_ctx",
                 "target": task_id.clone(),
                 "thought": "Thought 1",
                 "thoughtNumber": 1,
                 "totalThoughts": 2,
                 "nextThoughtNeeded": true
-            }
-        }
+            } } }
     }));
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "trace_sequential_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.sequential.step", "args": {
                 "workspace": "ws_pack_ctx",
                 "target": task_id.clone(),
                 "thought": "Thought 2 (branch)",
@@ -174,15 +163,14 @@ fn context_pack_includes_capsule_engine_and_sequential_trace() {
                 "nextThoughtNeeded": false,
                 "branchFromThought": 1,
                 "branchId": "alt-1"
-            }
-        }
+            } } }
     }));
 
     let pack = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "context_pack", "arguments": { "workspace": "ws_pack_ctx", "target": task_id, "trace_limit": 20, "limit_cards": 20, "max_chars": 8000 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context.pack", "args": { "workspace": "ws_pack_ctx", "target": task_id, "trace_limit": 20, "limit_cards": 20, "max_chars": 8000 } } }
     }));
     let pack_text = extract_tool_text(&pack);
 
@@ -230,17 +218,14 @@ fn context_pack_step_focus_filters_graph_cards_to_step_scope() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_pack_step",
                 "plan_title": "Plan",
                 "task_title": "Task",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -255,29 +240,29 @@ fn context_pack_step_focus_filters_graph_cards_to_step_scope() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_pack_step",
             "target": task_id.clone(),
             "card": { "id": "GLOBAL", "type": "hypothesis", "title": "Global", "text": "not step scoped" }
-        } }
+        } } }
     }));
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_pack_step",
             "target": task_id.clone(),
             "step": "focus",
             "card": { "id": "STEP", "type": "hypothesis", "title": "Step", "text": "step scoped" }
-        } }
+        } } }
     }));
 
     let pack = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "context_pack", "arguments": { "workspace": "ws_pack_step", "target": task_id, "step": "focus", "limit_cards": 50, "trace_limit": 0, "notes_limit": 0, "max_chars": 8000 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context.pack", "args": { "workspace": "ws_pack_step", "target": task_id, "step": "focus", "limit_cards": 50, "trace_limit": 0, "notes_limit": 0, "max_chars": 8000 } } }
     }));
     let pack_text = extract_tool_text(&pack);
 
@@ -309,9 +294,7 @@ fn context_pack_step_focus_filters_notes_and_trace_to_step_scope() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_pack_step_docs",
                 "plan_title": "Plan",
                 "task_title": "Task",
@@ -319,8 +302,7 @@ fn context_pack_step_focus_filters_notes_and_trace_to_step_scope() {
                     { "title": "S0", "success_criteria": ["c0"], "tests": ["t0"] },
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -336,15 +318,12 @@ fn context_pack_step_focus_filters_notes_and_trace_to_step_scope() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "think_pipeline",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.reasoning.pipeline", "args": {
                 "workspace": "ws_pack_step_docs",
                 "target": task_id.clone(),
                 "step": "focus",
                 "decision": "Focus decision"
-            }
-        }
+            } } }
     }));
 
     // Create a non-focus step decision note (newer, must be filtered out under step focus).
@@ -352,24 +331,19 @@ fn context_pack_step_focus_filters_notes_and_trace_to_step_scope() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "think_pipeline",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.reasoning.pipeline", "args": {
                 "workspace": "ws_pack_step_docs",
                 "target": task_id.clone(),
                 "step": "s:1",
                 "decision": "Other decision"
-            }
-        }
+            } } }
     }));
 
     let pack = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "context_pack",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context.pack", "args": {
                 "workspace": "ws_pack_step_docs",
                 "target": task_id.clone(),
                 "step": "focus",
@@ -377,8 +351,7 @@ fn context_pack_step_focus_filters_notes_and_trace_to_step_scope() {
                 "trace_limit": 50,
                 "limit_cards": 0,
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let pack_text = extract_tool_text(&pack);
 

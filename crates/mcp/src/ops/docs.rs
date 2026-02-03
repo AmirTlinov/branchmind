@@ -2,59 +2,59 @@
 
 use crate::ops::{
     Action, ActionPriority, BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Envelope, OpResponse,
-    Safety, SchemaSource, Stability, Tier, ToolName, legacy_to_cmd_segments,
+    Safety, SchemaSource, Stability, Tier, ToolName, name_to_cmd_segments,
 };
 use serde_json::{Value, json};
 
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
     // Curated v1 docs portal ops (golden aliases in tools/list):
     // - list/show/diff/merge
-    register_legacy(specs, "docs.list", "docs_list", Some("list"));
-    register_legacy(specs, "docs.show", "show", Some("show"));
-    register_legacy(specs, "docs.diff", "diff", Some("diff"));
-    register_legacy(specs, "docs.merge", "merge", Some("merge"));
+    register_handler(specs, "docs.list", "docs_list", Some("list"));
+    register_handler(specs, "docs.show", "show", Some("show"));
+    register_handler(specs, "docs.diff", "diff", Some("diff"));
+    register_handler(specs, "docs.merge", "merge", Some("merge"));
 
     // Long-tail docs-ish tools (call-only).
-    for legacy in [
+    for handler_name in [
         "transcripts_search",
         "transcripts_open",
         "transcripts_digest",
         "export",
     ] {
-        let cmd = format!("docs.{}", legacy_to_cmd_segments(legacy));
-        match legacy {
-            "transcripts_open" => register_legacy_with_handler(
+        let cmd = format!("docs.{}", name_to_cmd_segments(handler_name));
+        match handler_name {
+            "transcripts_open" => register_handler_with_hook(
                 specs,
                 &cmd,
-                legacy,
+                handler_name,
                 None,
                 Some(handle_transcripts_open),
             ),
-            "transcripts_digest" => register_legacy_with_handler(
+            "transcripts_digest" => register_handler_with_hook(
                 specs,
                 &cmd,
-                legacy,
+                handler_name,
                 None,
                 Some(handle_transcripts_digest),
             ),
-            _ => register_legacy(specs, &cmd, legacy, None),
+            _ => register_handler(specs, &cmd, handler_name, None),
         }
     }
 }
 
-fn register_legacy(
+fn register_handler(
     specs: &mut Vec<CommandSpec>,
     cmd: &str,
-    legacy_tool: &str,
+    handler_name: &str,
     op_alias: Option<&str>,
 ) {
-    register_legacy_with_handler(specs, cmd, legacy_tool, op_alias, None);
+    register_handler_with_hook(specs, cmd, handler_name, op_alias, None);
 }
 
-fn register_legacy_with_handler(
+fn register_handler_with_hook(
     specs: &mut Vec<CommandSpec>,
     cmd: &str,
-    legacy_tool: &str,
+    handler_name: &str,
     op_alias: Option<&str>,
     handler: Option<fn(&mut crate::McpServer, &Envelope) -> OpResponse>,
 ) {
@@ -73,26 +73,30 @@ fn register_legacy_with_handler(
             anchor: format!("#{cmd}"),
         },
         safety: Safety {
-            destructive: legacy_tool == "merge",
-            confirm_level: if legacy_tool == "merge" {
+            destructive: handler_name == "merge",
+            confirm_level: if handler_name == "merge" {
                 ConfirmLevel::Soft
             } else {
                 ConfirmLevel::None
             },
-            idempotent: legacy_tool != "merge",
+            idempotent: handler_name != "merge",
         },
         budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Legacy,
+        schema: SchemaSource::Handler,
         op_aliases,
-        legacy_tool: Some(legacy_tool.to_string()),
+        handler_name: Some(handler_name.to_string()),
         handler,
     });
 }
 
 fn handle_transcripts_digest(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
-    let legacy = crate::tools::dispatch_tool(server, "transcripts_digest", env.args.clone())
-        .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "transcripts_digest dispatch failed"));
-    let mut resp = crate::ops::legacy_to_op_response(&env.cmd, env.workspace.as_deref(), legacy);
+    let handler_resp =
+        crate::handlers::dispatch_handler(server, "transcripts_digest", env.args.clone())
+            .unwrap_or_else(|| {
+                crate::ai_error("INTERNAL_ERROR", "transcripts_digest dispatch failed")
+            });
+    let mut resp =
+        crate::ops::handler_to_op_response(&env.cmd, env.workspace.as_deref(), handler_resp);
 
     if resp.error.is_none() {
         let warning_codes = resp
@@ -200,9 +204,13 @@ fn handle_transcripts_digest(server: &mut crate::McpServer, env: &Envelope) -> O
 }
 
 fn handle_transcripts_open(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
-    let legacy = crate::tools::dispatch_tool(server, "transcripts_open", env.args.clone())
-        .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "transcripts_open dispatch failed"));
-    let mut resp = crate::ops::legacy_to_op_response(&env.cmd, env.workspace.as_deref(), legacy);
+    let handler_resp =
+        crate::handlers::dispatch_handler(server, "transcripts_open", env.args.clone())
+            .unwrap_or_else(|| {
+                crate::ai_error("INTERNAL_ERROR", "transcripts_open dispatch failed")
+            });
+    let mut resp =
+        crate::ops::handler_to_op_response(&env.cmd, env.workspace.as_deref(), handler_resp);
 
     if resp.error.is_none()
         && !resp.actions.iter().any(|a| {

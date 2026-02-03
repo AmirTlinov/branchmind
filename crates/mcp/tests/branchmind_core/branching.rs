@@ -12,7 +12,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,7 +40,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws1", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws1", "task": task_id.clone() } } }
     }));
     let radar_text = extract_tool_text(&radar);
     let canonical_branch = radar_text
@@ -62,7 +62,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "checkout", "arguments": { "workspace": "ws1", "ref": canonical_branch.clone() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.checkout", "args": { "workspace": "ws1", "ref": canonical_branch.clone() } } }
     }));
     let checkout_text = extract_tool_text(&checkout);
     assert_eq!(
@@ -82,7 +82,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws1", "target": task_id.clone(), "content": base_note_content } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws1", "target": task_id.clone(), "content": base_note_content } } }
     }));
     let base_note_commit_text = extract_tool_text(&base_note_commit);
     assert_eq!(
@@ -97,7 +97,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws1", "name": derived_branch.clone() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws1", "name": derived_branch.clone() } } }
     }));
     let branch_create_text = extract_tool_text(&branch_create);
     assert_eq!(
@@ -118,7 +118,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws1", "branch": derived_branch.clone(), "doc": notes_doc.clone(), "content": derived_note_content } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws1", "branch": derived_branch.clone(), "doc": notes_doc.clone(), "content": derived_note_content } } }
     }));
     let derived_note_commit_text = extract_tool_text(&derived_note_commit);
     assert_eq!(
@@ -132,7 +132,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws1", "branch": derived_branch.clone(), "doc": notes_doc.clone(), "limit": 50 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws1", "branch": derived_branch.clone(), "doc": notes_doc.clone(), "limit": 50 } } }
     }));
     let derived_text = extract_tool_text(&show_derived);
     let derived_entries = derived_text
@@ -157,7 +157,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws1", "branch": canonical_branch.clone(), "doc": notes_doc.clone(), "limit": 50 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws1", "branch": canonical_branch.clone(), "doc": notes_doc.clone(), "limit": 50 } } }
     }));
     let base_text = extract_tool_text(&show_base);
     let base_entries = base_text
@@ -182,7 +182,7 @@ fn branchmind_branching_inherits_base_snapshot() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "branch_list", "arguments": { "workspace": "ws1", "limit": 200 } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.list", "args": { "workspace": "ws1", "limit": 200 } } }
     }));
     let branch_list_text = extract_tool_text(&branch_list);
     let branches = branch_list_text

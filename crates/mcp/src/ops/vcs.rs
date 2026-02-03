@@ -6,11 +6,11 @@ use crate::ops::{
 };
 
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
-    for def in crate::tools::tool_definitions(crate::Toolset::Full) {
+    for def in crate::handlers::handler_definitions() {
         let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
-        let (cmd, op_aliases) = match vcs_cmd_for_legacy_tool(name) {
+        let (cmd, op_aliases) = match vcs_cmd_for_handler_name(name) {
             Some(v) => v,
             None => continue,
         };
@@ -34,15 +34,15 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 idempotent: matches!(name, "branch_list" | "log" | "reflog" | "show" | "diff"),
             },
             budget: BudgetPolicy::standard(),
-            schema: SchemaSource::Legacy,
+            schema: SchemaSource::Handler,
             op_aliases,
-            legacy_tool: Some(name.to_string()),
+            handler_name: Some(name.to_string()),
             handler: None,
         });
     }
 }
 
-fn vcs_cmd_for_legacy_tool(name: &str) -> Option<(String, Vec<String>)> {
+fn vcs_cmd_for_handler_name(name: &str) -> Option<(String, Vec<String>)> {
     let mut op_aliases = Vec::<String>::new();
     let cmd = match name {
         "branch_create" => {

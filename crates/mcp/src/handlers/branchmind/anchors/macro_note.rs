@@ -268,7 +268,7 @@ impl McpServer {
         let mut commit_target: Option<String> = target_raw.clone();
 
         if let Some(step_raw) = step_raw.as_deref() {
-            match crate::tools::branchmind::think::resolve_step_context_from_args(
+            match crate::handlers::branchmind::think::resolve_step_context_from_args(
                 self, &workspace, args_obj, step_raw,
             ) {
                 Ok(Some(ctx)) => {

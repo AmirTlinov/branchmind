@@ -12,7 +12,7 @@ fn tasks_steps_gated_done_and_radar() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn tasks_steps_gated_done_and_radar() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,23 +40,20 @@ fn tasks_steps_gated_done_and_radar() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws1", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.set", "args": { "workspace": "ws1", "task": task_id.clone() } } }
     }));
 
     let decomposed = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_decompose",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": {
                 "workspace": "ws1",
                 "task": task_id,
                 "steps": [
                     { "title": "Step 1", "success_criteria": ["ok"] }
                 ]
-            }
-        }
+            } } }
     }));
     let decomposed_text = extract_tool_text(&decomposed);
     let step_id = decomposed_text
@@ -72,7 +69,7 @@ fn tasks_steps_gated_done_and_radar() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws1" } } }
     }));
     let radar_text = extract_tool_text(&radar);
     let focused_task_id = radar_text
@@ -97,7 +94,7 @@ fn tasks_steps_gated_done_and_radar() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_done", "arguments": { "workspace": "ws1", "task": focused_task_id.clone(), "step_id": step_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.done", "args": { "workspace": "ws1", "task": focused_task_id.clone(), "step_id": step_id.clone() } } }
     }));
     assert_eq!(
         done_without_verify
@@ -133,7 +130,7 @@ fn tasks_steps_gated_done_and_radar() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "tasks_verify", "arguments": { "workspace": "ws1", "task": focused_task_id.clone(), "step_id": step_id.clone(), "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } } } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.verify", "args": { "workspace": "ws1", "task": focused_task_id.clone(), "step_id": step_id.clone(), "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } } } } }
     }));
     let verify_step_text = extract_tool_text(&verify_step);
     assert_eq!(
@@ -145,7 +142,7 @@ fn tasks_steps_gated_done_and_radar() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "tasks_done", "arguments": { "workspace": "ws1", "task": focused_task_id, "step_id": step_id } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.done", "args": { "workspace": "ws1", "task": focused_task_id, "step_id": step_id } } }
     }));
     let done_text2 = extract_tool_text(&done);
     assert_eq!(

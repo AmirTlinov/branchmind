@@ -11,7 +11,7 @@ pub(crate) fn normalize_op(raw: &str) -> Result<String, String> {
     normalize_token(raw, false)
 }
 
-pub(crate) fn legacy_to_cmd_segments(raw: &str) -> String {
+pub(crate) fn name_to_cmd_segments(raw: &str) -> String {
     raw.trim().to_ascii_lowercase().replace('_', ".")
 }
 

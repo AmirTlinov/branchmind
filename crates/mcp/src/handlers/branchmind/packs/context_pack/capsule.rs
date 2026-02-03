@@ -3,7 +3,7 @@
 use crate::*;
 use serde_json::{Value, json};
 
-use crate::tools::branchmind::think::ResolvedStepContext;
+use crate::handlers::branchmind::think::ResolvedStepContext;
 
 pub(super) struct ContextPackCapsuleArgs<'a> {
     pub(super) workspace: &'a WorkspaceId,

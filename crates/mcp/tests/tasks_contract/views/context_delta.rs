@@ -12,7 +12,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     assert_eq!(
         created_plan
@@ -33,7 +33,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     assert_eq!(
@@ -51,7 +51,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_edit", "arguments": { "workspace": "ws1", "task": plan_id, "expected_revision": 0, "title": "Plan B" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.edit", "args": { "workspace": "ws1", "task": plan_id, "expected_revision": 0, "title": "Plan B" } } }
     }));
     let edited_text = extract_tool_text(&edited_plan);
     assert_eq!(
@@ -70,7 +70,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_context", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.context", "args": { "workspace": "ws1" } } }
     }));
     let ctx_text = extract_tool_text(&context);
     let plans = ctx_text
@@ -95,7 +95,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 56,
         "method": "tools/call",
-        "params": { "name": "tasks_context_pack", "arguments": { "workspace": "ws1", "task": task_id.clone(), "delta_limit": 50, "max_chars": 400 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.context.pack", "args": { "workspace": "ws1", "task": task_id.clone(), "delta_limit": 50, "max_chars": 400 } } }
     }));
     let context_pack_text = extract_tool_text(&context_pack);
     let pack_budget = context_pack_text
@@ -119,7 +119,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 55,
         "method": "tools/call",
-        "params": { "name": "tasks_context", "arguments": { "workspace": "ws1", "max_chars": 10 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.context", "args": { "workspace": "ws1", "max_chars": 10 } } }
     }));
     let ctx_limited_text = extract_tool_text(&context_limited);
     let limited_budget = ctx_limited_text
@@ -142,7 +142,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_delta", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.delta", "args": { "workspace": "ws1" } } }
     }));
     let delta_text = extract_tool_text(&delta);
     let events = delta_text
@@ -156,7 +156,7 @@ fn tasks_create_context_delta_smoke() {
         "jsonrpc": "2.0",
         "id": 66,
         "method": "tools/call",
-        "params": { "name": "tasks_delta", "arguments": { "workspace": "ws1", "max_chars": 10 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.delta", "args": { "workspace": "ws1", "max_chars": 10 } } }
     }));
     let delta_limited_text = extract_tool_text(&delta_limited);
     let limited_budget = delta_limited_text

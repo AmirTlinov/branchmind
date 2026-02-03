@@ -12,7 +12,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_trace" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_trace" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -24,7 +24,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 20,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_trace", "kind": "plan", "title": "Trace Plan" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_trace", "kind": "plan", "title": "Trace Plan" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -38,7 +38,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 21,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_trace", "kind": "task", "parent": plan_id, "title": "Trace Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_trace", "kind": "task", "parent": plan_id, "title": "Trace Task" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -52,7 +52,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 22,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_trace", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws_trace", "task": task_id.clone() } } }
     }));
     let radar_text = extract_tool_text(&radar);
     let target_branch = radar_text
@@ -74,7 +74,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 23,
         "method": "tools/call",
-        "params": { "name": "trace_step", "arguments": { "workspace": "ws_trace", "target": task_id, "step": "Target step" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.step", "args": { "workspace": "ws_trace", "target": task_id, "step": "Target step" } } }
     }));
     let target_step_text = extract_tool_text(&target_step);
     assert_eq!(
@@ -100,7 +100,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "trace_step", "arguments": { "workspace": "ws_trace", "step": "Step 1", "message": "m1" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.step", "args": { "workspace": "ws_trace", "step": "Step 1", "message": "m1" } } }
     }));
     let step_text = extract_tool_text(&step);
     let seq1 = step_text
@@ -114,16 +114,13 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "trace_sequential_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.sequential.step", "args": {
                 "workspace": "ws_trace",
                 "thought": "Thought 1",
                 "thoughtNumber": 1,
                 "totalThoughts": 2,
                 "nextThoughtNeeded": true
-            }
-        }
+            } } }
     }));
     let seq_text = extract_tool_text(&seq_step);
     let seq2 = seq_text
@@ -138,9 +135,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 41,
         "method": "tools/call",
-        "params": {
-            "name": "trace_sequential_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.sequential.step", "args": {
                 "workspace": "ws_trace",
                 "thought": "Thought 2 (branch)",
                 "thoughtNumber": 2,
@@ -148,8 +143,7 @@ fn branchmind_trace_smoke() {
                 "nextThoughtNeeded": false,
                 "branchFromThought": 1,
                 "branchId": "alt-1"
-            }
-        }
+            } } }
     }));
     let seq2_text = extract_tool_text(&seq_step_2);
     assert_eq!(
@@ -161,7 +155,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "trace_hydrate", "arguments": { "workspace": "ws_trace", "limit_steps": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.hydrate", "args": { "workspace": "ws_trace", "limit_steps": 10 } } }
     }));
     let hydrate_text = extract_tool_text(&hydrate);
     let entries = hydrate_text
@@ -192,7 +186,7 @@ fn branchmind_trace_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "trace_validate", "arguments": { "workspace": "ws_trace" } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.validate", "args": { "workspace": "ws_trace" } } }
     }));
     let validate_text = extract_tool_text(&validate);
     let ok = validate_text
@@ -211,7 +205,7 @@ fn branchmind_trace_step_meta_can_build_sequential_graph() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_trace_meta" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_trace_meta" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -223,14 +217,11 @@ fn branchmind_trace_step_meta_can_build_sequential_graph() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "trace_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.step", "args": {
                 "workspace": "ws_trace_meta",
                 "step": "Thought 1 (via trace_step)",
                 "meta": { "thoughtNumber": 1 }
-            }
-        }
+            } } }
     }));
     let t1_text = extract_tool_text(&t1);
     assert_eq!(t1_text.get("success").and_then(|v| v.as_bool()), Some(true));
@@ -239,14 +230,11 @@ fn branchmind_trace_step_meta_can_build_sequential_graph() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "trace_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.step", "args": {
                 "workspace": "ws_trace_meta",
                 "step": "Thought 2 (branch)",
                 "meta": { "thoughtNumber": 2, "branchFromThought": 1, "branchId": "alt-1" }
-            }
-        }
+            } } }
     }));
     let t2_text = extract_tool_text(&t2);
     assert_eq!(t2_text.get("success").and_then(|v| v.as_bool()), Some(true));
@@ -255,7 +243,7 @@ fn branchmind_trace_step_meta_can_build_sequential_graph() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "trace_hydrate", "arguments": { "workspace": "ws_trace_meta", "limit_steps": 10 } }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.hydrate", "args": { "workspace": "ws_trace_meta", "limit_steps": 10 } } }
     }));
     let hydrate_text = extract_tool_text(&hydrate);
     let sequential = hydrate_text
@@ -284,7 +272,7 @@ fn trace_step_warns_when_sequential_meta_is_incomplete() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_trace_warn" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_trace_warn" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -296,14 +284,11 @@ fn trace_step_warns_when_sequential_meta_is_incomplete() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "trace_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.step", "args": {
                 "workspace": "ws_trace_warn",
                 "step": "Branch without thought number",
                 "meta": { "branchFromThought": 1, "branchId": "alt-1" }
-            }
-        }
+            } } }
     }));
     let step_text = extract_tool_text(&step);
     assert_eq!(
@@ -331,7 +316,7 @@ fn trace_step_sequential_meta_warnings_are_capped_to_stay_low_noise() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_trace_warn_cap" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_trace_warn_cap" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -345,9 +330,7 @@ fn trace_step_sequential_meta_warnings_are_capped_to_stay_low_noise() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "trace_step",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.trace.step", "args": {
                 "workspace": "ws_trace_warn_cap",
                 "step": "Bad sequential meta",
                 "meta": {
@@ -358,8 +341,7 @@ fn trace_step_sequential_meta_warnings_are_capped_to_stay_low_noise() {
                     "totalThoughts": 0,
                     "nextThoughtNeeded": "nope"
                 }
-            }
-        }
+            } } }
     }));
     let step_text = extract_tool_text(&step);
     assert_eq!(

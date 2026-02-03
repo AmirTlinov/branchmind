@@ -12,7 +12,7 @@ fn branchmind_bootstrap_defaults() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_boot" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_boot" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -24,7 +24,7 @@ fn branchmind_bootstrap_defaults() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "branch_list", "arguments": { "workspace": "ws_boot", "limit": 50 } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.list", "args": { "workspace": "ws_boot", "limit": 50 } } }
     }));
     let branch_list_text = extract_tool_text(&branch_list);
     let branches = branch_list_text
@@ -41,7 +41,7 @@ fn branchmind_bootstrap_defaults() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "notes_commit", "arguments": { "workspace": "ws_boot", "content": "hello" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.notes.commit", "args": { "workspace": "ws_boot", "content": "hello" } } }
     }));
     let note_text = extract_tool_text(&note);
     assert_eq!(
@@ -69,7 +69,7 @@ fn branchmind_bootstrap_defaults() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "show", "arguments": { "workspace": "ws_boot", "doc_kind": "notes", "limit": 10 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.show", "args": { "workspace": "ws_boot", "doc_kind": "notes", "limit": 10 } } }
     }));
     let show_text = extract_tool_text(&show);
     assert_eq!(
@@ -96,27 +96,27 @@ fn branchmind_branch_list_sets_truncated_when_limit_hides_items() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_branch_list_trunc" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_branch_list_trunc" } } }
     }));
 
     let _ = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws_branch_list_trunc", "name": "alpha" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws_branch_list_trunc", "name": "alpha" } } }
     }));
     let _ = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws_branch_list_trunc", "name": "beta" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws_branch_list_trunc", "name": "beta" } } }
     }));
 
     let branch_list = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "branch_list", "arguments": { "workspace": "ws_branch_list_trunc", "limit": 1 } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.list", "args": { "workspace": "ws_branch_list_trunc", "limit": 1 } } }
     }));
     let branch_list_text = extract_tool_text(&branch_list);
 

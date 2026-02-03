@@ -17,10 +17,7 @@ fn recovery_ux_daily_replaces_hidden_suggestions_with_portal() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "workspace": "ws_recovery_daily", "kind": "plan", "title": "Plan Recovery Daily" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_recovery_daily", "kind": "plan", "title": "Plan Recovery Daily" } } }
     }));
     let plan_text = extract_tool_text(&plan);
     let plan_id = plan_text
@@ -34,9 +31,7 @@ fn recovery_ux_daily_replaces_hidden_suggestions_with_portal() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": {
                 "workspace": "ws_recovery_daily",
                 "kind": "task",
                 "parent": plan_id,
@@ -44,8 +39,7 @@ fn recovery_ux_daily_replaces_hidden_suggestions_with_portal() {
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let task_text = extract_tool_text(&task);
     let task_id = task_text
@@ -68,14 +62,11 @@ fn recovery_ux_daily_replaces_hidden_suggestions_with_portal() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_done",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.done", "args": {
                 "workspace": "ws_recovery_daily",
                 "task": task_id,
                 "step_id": step_id
-            }
-        }
+            } } }
     }));
     let done_text = extract_tool_text(&done);
 
@@ -133,10 +124,7 @@ fn recovery_ux_core_adds_progressive_disclosure_for_daily_portal_recovery() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "workspace": "ws_recovery_core", "kind": "plan", "title": "Plan Recovery Core" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_recovery_core", "kind": "plan", "title": "Plan Recovery Core" } } }
     }));
     let plan_text = extract_tool_text(&plan);
     let plan_id = plan_text
@@ -150,9 +138,7 @@ fn recovery_ux_core_adds_progressive_disclosure_for_daily_portal_recovery() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": {
                 "workspace": "ws_recovery_core",
                 "kind": "task",
                 "parent": plan_id,
@@ -160,8 +146,7 @@ fn recovery_ux_core_adds_progressive_disclosure_for_daily_portal_recovery() {
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let task_text = extract_tool_text(&task);
     let task_id = task_text
@@ -184,14 +169,11 @@ fn recovery_ux_core_adds_progressive_disclosure_for_daily_portal_recovery() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_done",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.done", "args": {
                 "workspace": "ws_recovery_core",
                 "task": task_id,
                 "step_id": step_id
-            }
-        }
+            } } }
     }));
     let done_text = extract_tool_text(&done);
 

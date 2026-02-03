@@ -34,7 +34,7 @@ fn jobs_radar_is_glanceable_with_multirunner_and_needs_manager() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job1 = job_id_from_create(&created1);
 
@@ -42,7 +42,7 @@ fn jobs_radar_is_glanceable_with_multirunner_and_needs_manager() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job B", "prompt": "do B" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job B", "prompt": "do B" } } }
     }));
     let job2 = job_id_from_create(&created2);
 
@@ -50,7 +50,7 @@ fn jobs_radar_is_glanceable_with_multirunner_and_needs_manager() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_claim", "arguments": { "workspace": "ws1", "job": job1, "runner_id": "r-live", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws1", "job": job1, "runner_id": "r-live", "lease_ttl_ms": 5000 } } }
     }));
     let claim_rev = claim_revision_from_claim(&claimed);
 
@@ -59,7 +59,7 @@ fn jobs_radar_is_glanceable_with_multirunner_and_needs_manager() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": { "workspace": "ws1", "job": job1, "runner_id": "r-live", "claim_revision": claim_rev, "lease_ttl_ms": 5000, "kind": "question", "message": "Need decision", "refs": [job1] } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job1, "runner_id": "r-live", "claim_revision": claim_rev, "lease_ttl_ms": 5000, "kind": "question", "message": "Need decision", "refs": [job1] } } }
     }));
 
     // Two runners: one live on job1, one idle.
@@ -67,13 +67,13 @@ fn jobs_radar_is_glanceable_with_multirunner_and_needs_manager() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-live", "status": "live", "active_job_id": job1, "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-live", "status": "live", "active_job_id": job1, "lease_ttl_ms": 5000 } } }
     }));
     let _hb_idle = server.request(json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r-idle", "status": "idle", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r-idle", "status": "idle", "lease_ttl_ms": 5000 } } }
     }));
 
     // Glanceable inbox: all actionable lines should be readable without opening.
@@ -81,7 +81,7 @@ fn jobs_radar_is_glanceable_with_multirunner_and_needs_manager() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 10, "runners_limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 10, "runners_limit": 10 } } }
     }));
     let text = extract_tool_text_str(&radar);
 
@@ -141,7 +141,7 @@ fn jobs_radar_includes_runner_bootstrap_hint_only_when_offline_and_queued() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Queued job", "prompt": "do it" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Queued job", "prompt": "do it" } } }
     }));
     let job_id = job_id_from_create(&created);
     assert!(job_id.starts_with("JOB-"));
@@ -151,7 +151,7 @@ fn jobs_radar_includes_runner_bootstrap_hint_only_when_offline_and_queued() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5 } } }
     }));
     let text0 = extract_tool_text_str(&radar0);
     assert!(
@@ -164,13 +164,13 @@ fn jobs_radar_includes_runner_bootstrap_hint_only_when_offline_and_queued() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r1", "status": "idle", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r1", "status": "idle", "lease_ttl_ms": 5000 } } }
     }));
     let radar1 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 5 } } }
     }));
     let text1 = extract_tool_text_str(&radar1);
     assert!(
@@ -189,7 +189,7 @@ fn tasks_snapshot_surfaces_inbox_runner_status_and_bootstrap_hint() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "workspace": "ws1", "task_title": "Main task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "workspace": "ws1", "task_title": "Main task" } } }
     }));
     let task_text = extract_tool_text_str(&task_started);
     let task_id = task_text
@@ -204,7 +204,7 @@ fn tasks_snapshot_surfaces_inbox_runner_status_and_bootstrap_hint() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Queued job", "prompt": "do it" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Queued job", "prompt": "do it" } } }
     }));
     let job_id = job_id_from_create(&created);
     assert!(job_id.starts_with("JOB-"));
@@ -214,7 +214,7 @@ fn tasks_snapshot_surfaces_inbox_runner_status_and_bootstrap_hint() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws1", "task": task_id, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "workspace": "ws1", "task": task_id, "fmt": "lines" } } }
     }));
     let text0 = extract_tool_text_str(&snap0);
     let first0 = text0.lines().next().unwrap_or("");
@@ -234,13 +234,13 @@ fn tasks_snapshot_surfaces_inbox_runner_status_and_bootstrap_hint() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r1", "status": "idle", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r1", "status": "idle", "lease_ttl_ms": 5000 } } }
     }));
     let snap1 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "workspace": "ws1", "task": task_id, "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "workspace": "ws1", "task": task_id, "fmt": "lines" } } }
     }));
     let text1 = extract_tool_text_str(&snap1);
     let first1 = text1.lines().next().unwrap_or("");

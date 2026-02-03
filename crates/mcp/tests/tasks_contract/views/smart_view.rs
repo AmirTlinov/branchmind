@@ -12,17 +12,14 @@ fn tasks_resume_super_smart_includes_step_focus_and_prefers_pins() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_smart_view",
                 "plan_title": "Plan Smart",
                 "task_title": "Task Smart",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": ["b1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -37,9 +34,7 @@ fn tasks_resume_super_smart_includes_step_focus_and_prefers_pins() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_smart_view",
                 "target": task_id.clone(),
                 "card": {
@@ -48,39 +43,32 @@ fn tasks_resume_super_smart_includes_step_focus_and_prefers_pins() {
                     "title": "Pinned note",
                     "text": "Keep this visible"
                 }
-            }
-        }
+            } } }
     }));
 
     let _pin = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "think_pin",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.pin", "args": {
                 "workspace": "ws_smart_view",
                 "target": task_id.clone(),
                 "targets": ["CARD-PIN"],
                 "pinned": true
-            }
-        }
+            } } }
     }));
 
     let resume = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_smart_view",
                 "task": task_id,
                 "view": "smart",
                 "cards_limit": 1,
                 "max_chars": 8000
-            }
-        }
+            } } }
     }));
     let resume_text = extract_tool_text(&resume);
     let result = resume_text.get("result").expect("result");
@@ -113,17 +101,14 @@ fn tasks_resume_super_context_budget_defaults_to_smart_view() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_context_budget",
                 "plan_title": "Plan Budget",
                 "task_title": "Task Budget",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -138,10 +123,7 @@ fn tasks_resume_super_context_budget_defaults_to_smart_view() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": { "workspace": "ws_context_budget", "task": task_id, "context_budget": 4000 }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": { "workspace": "ws_context_budget", "task": task_id, "context_budget": 4000 } } }
     }));
     let resume_text = extract_tool_text(&resume);
     let result = resume_text.get("result").expect("result");
@@ -161,17 +143,14 @@ fn tasks_resume_super_tight_budget_degrades_to_capsule_only_instead_of_minimal_s
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws_smart_capsule_budget",
                 "plan_title": "Plan",
                 "task_title": "Task",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": ["b1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     let task_id = bootstrap_text
@@ -186,15 +165,12 @@ fn tasks_resume_super_tight_budget_degrades_to_capsule_only_instead_of_minimal_s
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_smart_capsule_budget",
                 "task": task_id.clone(),
                 "view": "smart",
                 "max_chars": 20000
-            }
-        }
+            } } }
     }));
     let baseline_text = extract_tool_text(&baseline);
     let capsule = baseline_text
@@ -222,15 +198,12 @@ fn tasks_resume_super_tight_budget_degrades_to_capsule_only_instead_of_minimal_s
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_smart_capsule_budget",
                 "task": task_id,
                 "view": "smart",
                 "max_chars": capsule_only_len + 32
-            }
-        }
+            } } }
     }));
     let tight_text = extract_tool_text(&tight);
     let result = tight_text.get("result").expect("result");

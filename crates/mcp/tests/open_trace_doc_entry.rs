@@ -21,30 +21,24 @@ fn open_trace_doc_entry_ref_is_supported_for_task_prefixed_docs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "workspace": "ws_open_trace_doc_entry",
                 "task_title": "Open trace doc entry ref",
                 "steps": [
                     { "title": "S1", "success_criteria": ["ok"], "tests": ["noop"] }
                 ]
-            }
-        }
+            } } }
     }));
 
     let committed = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "think_card",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
                 "workspace": "ws_open_trace_doc_entry",
                 "step": "focus",
                 "card": { "type": "update", "title": "Trace entry", "text": "hello" }
-            }
-        }
+            } } }
     }));
     let committed_out = extract_tool_text(&committed);
     assert!(

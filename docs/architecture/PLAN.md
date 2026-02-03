@@ -36,7 +36,7 @@ The plan below is kept as a *status map* (what exists vs. what remains to harden
 - Graph apply/query/validate/diff
 - Thinking cards/traces (template-driven, low-noise)
 
-## Milestone 5 — Hardening (**in progress**)
+## Milestone 5 — Hardening (**implemented**)
 
 - **Contract hardening:** increase coverage so every tool has a “shape lock” (schemas + required fields + typed errors).
 - **Budget hardening:** ensure every potentially large response is bounded and degrades predictably (`truncated`, minimal signals, pagination).

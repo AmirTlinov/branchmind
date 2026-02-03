@@ -34,7 +34,7 @@ fn jobs_complete_salvages_proof_refs_from_summary_when_refs_missing() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job = job_id_from_create(&created);
 
@@ -42,7 +42,7 @@ fn jobs_complete_salvages_proof_refs_from_summary_when_refs_missing() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_claim", "arguments": { "workspace": "ws1", "job": job, "runner_id": "r1", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws1", "job": job, "runner_id": "r1", "lease_ttl_ms": 5000 } } }
     }));
     let claim_rev = claim_revision_from_claim(&claimed);
 
@@ -50,14 +50,14 @@ fn jobs_complete_salvages_proof_refs_from_summary_when_refs_missing() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_complete", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": {
             "workspace": "ws1",
             "job": job,
             "runner_id": "r1",
             "claim_revision": claim_rev,
             "status": "DONE",
             "summary": "- cargo test -q\n- https://example.com/ci/run/123\nCARD-7\n"
-        } }
+        } } }
     }));
 
     let text = extract_tool_text(&done);
@@ -101,7 +101,7 @@ fn jobs_complete_salvages_proof_refs_even_when_refs_only_includes_job_id() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job = job_id_from_create(&created);
 
@@ -109,7 +109,7 @@ fn jobs_complete_salvages_proof_refs_even_when_refs_only_includes_job_id() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_claim", "arguments": { "workspace": "ws1", "job": job, "runner_id": "r1", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws1", "job": job, "runner_id": "r1", "lease_ttl_ms": 5000 } } }
     }));
     let claim_rev = claim_revision_from_claim(&claimed);
 
@@ -117,7 +117,7 @@ fn jobs_complete_salvages_proof_refs_even_when_refs_only_includes_job_id() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_complete", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": {
             "workspace": "ws1",
             "job": job,
             "runner_id": "r1",
@@ -125,7 +125,7 @@ fn jobs_complete_salvages_proof_refs_even_when_refs_only_includes_job_id() {
             "status": "DONE",
             "refs": [job],
             "summary": "- cargo test -q\n- https://example.com/ci/run/123\nCARD-7\n"
-        } }
+        } } }
     }));
 
     let text = extract_tool_text(&done);
@@ -164,7 +164,7 @@ fn jobs_message_salvages_proof_refs_from_text_when_refs_missing() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job = job_id_from_create(&created);
 
@@ -172,11 +172,11 @@ fn jobs_message_salvages_proof_refs_from_text_when_refs_missing() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_message", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": {
             "workspace": "ws1",
             "job": job,
             "message": "- cargo test -q\n- https://example.com/ci/run/123\nCARD-7\n"
-        } }
+        } } }
     }));
 
     let text = extract_tool_text(&msg);
@@ -220,7 +220,7 @@ fn jobs_message_salvages_proof_refs_even_when_refs_only_includes_job_id() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job = job_id_from_create(&created);
 
@@ -228,12 +228,12 @@ fn jobs_message_salvages_proof_refs_even_when_refs_only_includes_job_id() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_message", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": {
             "workspace": "ws1",
             "job": job,
             "refs": [job],
             "message": "- cargo test -q\n- https://example.com/ci/run/123\nCARD-7\n"
-        } }
+        } } }
     }));
 
     let text = extract_tool_text(&msg);
@@ -273,7 +273,7 @@ fn jobs_radar_reply_salvages_proof_refs_even_when_refs_only_includes_job_id() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job = job_id_from_create(&created);
 
@@ -282,12 +282,12 @@ fn jobs_radar_reply_salvages_proof_refs_even_when_refs_only_includes_job_id() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": {
             "workspace": "ws1",
             "reply_job": job,
             "reply_message": "- cargo test -q\n- https://example.com/ci/run/123\nCARD-7\n",
             "reply_refs": [job]
-        } }
+        } } }
     }));
 
     let text = extract_tool_text(&replied);
@@ -327,7 +327,7 @@ fn jobs_radar_marks_proof_gate_as_needs_proof_without_reply() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job = job_id_from_create(&created);
 
@@ -335,7 +335,7 @@ fn jobs_radar_marks_proof_gate_as_needs_proof_without_reply() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_claim", "arguments": { "workspace": "ws1", "job": job, "runner_id": "r-live", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws1", "job": job, "runner_id": "r-live", "lease_ttl_ms": 5000 } } }
     }));
     let claim_rev = claim_revision_from_claim(&claimed);
 
@@ -343,7 +343,7 @@ fn jobs_radar_marks_proof_gate_as_needs_proof_without_reply() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": {
             "workspace": "ws1",
             "job": job,
             "runner_id": "r-live",
@@ -352,14 +352,14 @@ fn jobs_radar_marks_proof_gate_as_needs_proof_without_reply() {
             "kind": "proof_gate",
             "message": "runner: proof gate: add proof refs",
             "refs": [job]
-        } }
+        } } }
     }));
 
     let radar = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "fmt": "lines", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "fmt": "lines", "limit": 10 } } }
     }));
     let text = extract_tool_text_str(&radar);
 
@@ -391,7 +391,7 @@ fn jobs_radar_clears_needs_proof_after_manager_message_with_proof_refs() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_create", "arguments": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": { "workspace": "ws1", "title": "Job A", "prompt": "do A" } } }
     }));
     let job = job_id_from_create(&created);
 
@@ -399,7 +399,7 @@ fn jobs_radar_clears_needs_proof_after_manager_message_with_proof_refs() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_claim", "arguments": { "workspace": "ws1", "job": job, "runner_id": "r-live", "lease_ttl_ms": 5000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.claim", "args": { "workspace": "ws1", "job": job, "runner_id": "r-live", "lease_ttl_ms": 5000 } } }
     }));
     let claim_rev = claim_revision_from_claim(&claimed);
 
@@ -407,7 +407,7 @@ fn jobs_radar_clears_needs_proof_after_manager_message_with_proof_refs() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_report", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": {
             "workspace": "ws1",
             "job": job,
             "runner_id": "r-live",
@@ -416,14 +416,14 @@ fn jobs_radar_clears_needs_proof_after_manager_message_with_proof_refs() {
             "kind": "proof_gate",
             "message": "runner: proof gate: add proof refs",
             "refs": [job]
-        } }
+        } } }
     }));
 
     let radar_before = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10 } } }
     }));
     let before = extract_tool_text(&radar_before);
     let needs_proof_before = before
@@ -448,18 +448,18 @@ fn jobs_radar_clears_needs_proof_after_manager_message_with_proof_refs() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_message", "arguments": {
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.message", "args": {
             "workspace": "ws1",
             "job": job,
             "message": "- cargo test -q\n- https://example.com/ci/run/123\nCARD-7\n"
-        } }
+        } } }
     }));
 
     let radar_after = server.request(json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 10 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 10 } } }
     }));
     let after = extract_tool_text(&radar_after);
     let needs_proof_after = after

@@ -16,7 +16,7 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Storage: map HUD test" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Storage: map HUD test" } } }
     }));
     assert!(
         !extract_tool_text_str(&started).starts_with("ERROR:"),
@@ -27,7 +27,7 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "fmt": "lines" } } }
     }));
     let snap1_text = extract_tool_text_str(&snap1);
     let snap1_state = snap1_text.lines().next().unwrap_or("");
@@ -60,7 +60,7 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "step": "focus",
             "card": {
                 "id": "CARD-ANCHOR-STORAGE",
@@ -69,7 +69,7 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
                 "text": "Anchor attach note for Storage.",
                 "tags": ["a:storage", "v:canon"]
             }
-        } }
+        } } }
     }));
     let attached_payload = extract_tool_text(&attached);
     assert!(
@@ -85,7 +85,7 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "fmt": "lines" } } }
     }));
     let snap2_text = extract_tool_text_str(&snap2);
     let first_line = snap2_text.lines().next().unwrap_or("");
@@ -112,7 +112,7 @@ fn meaning_map_hud_prompts_when_unknown_and_disappears_after_attach() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "fmt": "lines" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "fmt": "lines" } } }
     }));
     let snap3_text = extract_tool_text_str(&snap3);
     let third_line = snap3_text.lines().next().unwrap_or("");

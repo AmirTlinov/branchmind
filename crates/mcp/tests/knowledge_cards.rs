@@ -10,7 +10,7 @@ fn init_workspace(server: &mut Server, workspace: &str) {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": workspace } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": workspace } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -25,7 +25,7 @@ fn list_knowledge(server: &mut Server, args: serde_json::Value) -> Vec<serde_jso
         "jsonrpc": "2.0",
         "id": 100,
         "method": "tools/call",
-        "params": { "name": "knowledge_list", "arguments": args }
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.knowledge.query", "args": args } }
     }));
     let text = extract_tool_text(&resp);
     text.get("result")
@@ -44,14 +44,11 @@ fn think_add_knowledge_defaults_to_draft() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "think_add_knowledge",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.knowledge", "args": {
                 "workspace": "ws_knowledge_default_draft",
                 "anchor": "core",
                 "card": { "title": "Invariant", "text": "Knowledge must be evidence-backed." }
-            }
-        }
+            } } }
     }));
     let created_text = extract_tool_text(&created);
     assert_eq!(
@@ -88,13 +85,10 @@ fn knowledge_list_includes_drafts_by_default() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "think_add_knowledge",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.knowledge", "args": {
                 "workspace": "ws_knowledge_list_defaults",
                 "card": { "title": "Draft", "text": "Unverified", "tags": ["v:draft"] }
-            }
-        }
+            } } }
     }));
     let created_text = extract_tool_text(&created);
     assert_eq!(
@@ -129,29 +123,23 @@ fn knowledge_list_defaults_to_latest_only_unless_include_history() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "think_add_knowledge",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.knowledge", "args": {
                 "workspace": "ws_knowledge_history",
                 "anchor": "core",
                 "key": "determinism",
                 "card": { "title": "Invariant", "text": "v1" }
-            }
-        }
+            } } }
     }));
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "think_add_knowledge",
-            "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.knowledge", "args": {
                 "workspace": "ws_knowledge_history",
                 "anchor": "core",
                 "key": "determinism",
                 "card": { "title": "Invariant", "text": "v2" }
-            }
-        }
+            } } }
     }));
 
     let cards = list_knowledge(

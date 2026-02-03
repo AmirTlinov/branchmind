@@ -26,7 +26,7 @@ fn jobs_radar_surfaces_explicit_runner_status_offline_idle_live() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 5 } } }
     })));
     assert_eq!(runner_status(&radar0), "offline");
 
@@ -35,13 +35,13 @@ fn jobs_radar_surfaces_explicit_runner_status_offline_idle_live() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r1", "status": "idle", "lease_ttl_ms": 2000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r1", "status": "idle", "lease_ttl_ms": 2000 } } }
     }));
     let radar1 = extract_tool_text(&server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 5 } } }
     })));
     assert_eq!(runner_status(&radar1), "idle");
 
@@ -50,13 +50,13 @@ fn jobs_radar_surfaces_explicit_runner_status_offline_idle_live() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_runner_heartbeat", "arguments": { "workspace": "ws1", "runner_id": "r1", "status": "live", "active_job_id": "JOB-001", "lease_ttl_ms": 2000 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.runner.heartbeat", "args": { "workspace": "ws1", "runner_id": "r1", "status": "live", "active_job_id": "JOB-001", "lease_ttl_ms": 2000 } } }
     }));
     let radar2 = extract_tool_text(&server.request(json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 5 } } }
     })));
     assert_eq!(runner_status(&radar2), "live");
 
@@ -66,7 +66,7 @@ fn jobs_radar_surfaces_explicit_runner_status_offline_idle_live() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_jobs_radar", "arguments": { "workspace": "ws1", "limit": 5 } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.radar", "args": { "workspace": "ws1", "limit": 5 } } }
     })));
     assert_eq!(runner_status(&radar3), "offline");
 }

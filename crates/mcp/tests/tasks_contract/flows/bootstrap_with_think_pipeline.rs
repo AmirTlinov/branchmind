@@ -11,9 +11,7 @@ fn tasks_bootstrap_with_think_pipeline() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_bootstrap",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
                 "workspace": "ws1",
                 "plan_title": "Plan Think",
                 "task_title": "Task Think",
@@ -24,8 +22,7 @@ fn tasks_bootstrap_with_think_pipeline() {
                     "frame": "Bootstrap frame",
                     "decision": "Bootstrap decision"
                 }
-            }
-        }
+            } } }
     }));
     let bootstrap_text = extract_tool_text(&bootstrap);
     assert_eq!(

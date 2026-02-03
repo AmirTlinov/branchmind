@@ -2,13 +2,13 @@
 
 use crate::ops::{
     BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError, OpResponse, Safety,
-    SchemaSource, Stability, Tier, ToolName, legacy_to_cmd_segments,
+    SchemaSource, Stability, Tier, ToolName, name_to_cmd_segments,
 };
 use serde_json::json;
 
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
-    // Mirror all legacy tasks_* tools as cmd=tasks.<suffix>.
-    for def in crate::tools::tool_definitions(crate::Toolset::Full) {
+    // Mirror internal task handlers as cmd=tasks.<suffix>.
+    for def in crate::handlers::handler_definitions() {
         let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -22,7 +22,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             "decompose" => "tasks.plan.decompose".to_string(),
             "evidence_capture" => "tasks.evidence.capture".to_string(),
             "close_step" => "tasks.step.close".to_string(),
-            _ => format!("tasks.{}", legacy_to_cmd_segments(suffix)),
+            _ => format!("tasks.{}", name_to_cmd_segments(suffix)),
         };
         let mut op_aliases = Vec::<String>::new();
 
@@ -62,9 +62,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 idempotent: !suffix.contains("create") && !suffix.contains("delete"),
             },
             budget: BudgetPolicy::standard(),
-            schema: SchemaSource::Legacy,
+            schema: SchemaSource::Handler,
             op_aliases,
-            legacy_tool: Some(name.to_string()),
+            handler_name: Some(name.to_string()),
             handler: None,
         });
     }
@@ -94,7 +94,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({}),
         },
         op_aliases: vec!["execute.next".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_execute_next),
     });
 }

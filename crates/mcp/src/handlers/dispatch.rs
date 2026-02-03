@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::{branchmind, tasks};
 
-pub(crate) fn dispatch_tool(server: &mut McpServer, name: &str, args: Value) -> Option<Value> {
+pub(crate) fn dispatch_handler(server: &mut McpServer, name: &str, args: Value) -> Option<Value> {
     if name == "storage" {
         return Some(server.tool_storage(args));
     }
@@ -23,9 +23,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn tool_definitions_and_dispatch_are_in_sync() {
+    fn handler_definitions_and_dispatch_are_in_sync() {
         let mut defined = BTreeSet::<String>::new();
-        for tool in super::super::tool_definitions(crate::Toolset::Full) {
+        for tool in super::super::handler_definitions() {
             let Some(name) = tool.get("name").and_then(|v| v.as_str()) else {
                 continue;
             };

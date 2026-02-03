@@ -55,16 +55,13 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "plan_title": "Portal Defaults Plan",
                 "task_title": "Portal Defaults Task",
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"] }
                 ]
-            }
-        }
+            } } }
     }));
     assert_eq!(
         start
@@ -105,10 +102,7 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": {}
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {} } }
     }));
     assert_eq!(
         snapshot
@@ -150,10 +144,7 @@ fn portal_defaults_in_daily_toolset_are_low_noise() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": { "max_chars": 50 }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "max_chars": 50 } } }
     }));
     assert_eq!(
         snapshot_tiny
@@ -191,10 +182,7 @@ fn portal_recovery_no_focus_prefers_portals_over_full_disclosure() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": { "workspace": "ws_portal_no_focus_empty", "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_portal_no_focus_empty", "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&close_without_focus);
     assert!(
@@ -225,35 +213,26 @@ fn portal_recovery_no_focus_prefers_portals_over_full_disclosure() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": { "workspace": "ws_portal_no_focus_tasks", "task_title": "T1" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "workspace": "ws_portal_no_focus_tasks", "task_title": "T1" } } }
     }));
     let _t2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": { "workspace": "ws_portal_no_focus_tasks", "task_title": "T2" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "workspace": "ws_portal_no_focus_tasks", "task_title": "T2" } } }
     }));
     let _cleared = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_clear", "arguments": { "workspace": "ws_portal_no_focus_tasks" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.clear", "args": { "workspace": "ws_portal_no_focus_tasks" } } }
     }));
 
     let close_missing_focus = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": { "workspace": "ws_portal_no_focus_tasks", "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_portal_no_focus_tasks", "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&close_missing_focus);
     assert!(
@@ -297,10 +276,7 @@ fn portal_disclosure_commands_use_args_hint_for_hidden_actions() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "workspace": "ws_portal_disclosure_hint", "kind": "plan", "title": "Plan" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_portal_disclosure_hint", "kind": "plan", "title": "Plan" } } }
     }));
     assert_eq!(
         created_plan
@@ -321,10 +297,7 @@ fn portal_disclosure_commands_use_args_hint_for_hidden_actions() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "workspace": "ws_portal_disclosure_hint", "kind": "task", "parent": plan_id, "title": "No Steps Yet" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_portal_disclosure_hint", "kind": "task", "parent": plan_id, "title": "No Steps Yet" } } }
     }));
     assert_eq!(
         created
@@ -345,10 +318,7 @@ fn portal_disclosure_commands_use_args_hint_for_hidden_actions() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": { "task": task_id, "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "task": task_id, "fmt": "lines" } } }
     }));
     assert_eq!(
         snapshot
@@ -391,10 +361,7 @@ fn portal_recovery_unknown_id_injects_snapshot_and_start() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": { "task": "TASK-999", "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "task": "TASK-999", "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot_unknown);
     assert!(
@@ -432,10 +399,7 @@ fn hidden_tasks_unknown_id_still_gets_portal_recovery() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_done",
-            "arguments": { "task": "TASK-999", "workspace": "ws_hidden_unknown_id", "step_id": "STEP-00000001", "checkpoints": "gate", "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.done", "args": { "task": "TASK-999", "workspace": "ws_hidden_unknown_id", "step_id": "STEP-00000001", "checkpoints": "gate", "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&done_unknown);
     assert!(
@@ -467,10 +431,7 @@ fn portal_recovery_macro_close_step_plan_target_suggests_macro_start() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "workspace": "ws_portal_close_plan", "kind": "plan", "title": "Plan" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_portal_close_plan", "kind": "plan", "title": "Plan" } } }
     }));
     let created_plan_json = extract_tool_text(&created_plan);
     let plan_id = created_plan_json
@@ -483,10 +444,7 @@ fn portal_recovery_macro_close_step_plan_target_suggests_macro_start() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_close_step",
-            "arguments": { "plan": plan_id, "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "plan": plan_id, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&close_plan);
     assert!(
@@ -525,15 +483,12 @@ fn portal_recovery_unknown_template_maps_to_templates_list() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_macro_start",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
                 "plan_title": "Plan",
                 "task_title": "T",
                 "template": "does-not-exist",
                 "fmt": "lines"
-            }
-        }
+            } } }
     }));
     let text = extract_tool_text_str(&started);
     assert!(
@@ -564,10 +519,7 @@ fn portal_invalid_target_normalization_still_renders_lines() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": { "target": "task_DOES_NOT_EXIST", "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "target": "task_DOES_NOT_EXIST", "fmt": "lines" } } }
     }));
     assert_eq!(
         bad_target

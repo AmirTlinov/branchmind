@@ -13,39 +13,39 @@ fn think_context_view_smart_is_cold_archive_and_explore_is_warm() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_relevance_view_ctx" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_relevance_view_ctx" } } }
     }));
 
     let _h = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_relevance_view_ctx",
             "card": { "id": "H1", "type": "hypothesis", "title": "H1", "text": "open", "status": "open" }
-        } }
+        } } }
     }));
 
     let _u = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_relevance_view_ctx",
             "card": { "id": "U1", "type": "update", "title": "U1", "text": "closed", "status": "closed" }
-        } }
+        } } }
     }));
 
     let smart = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context", "args": {
             "workspace": "ws_relevance_view_ctx",
             "view": "smart",
             "limit_cards": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let smart_text = extract_tool_text(&smart);
     let smart_cards = smart_text
@@ -70,12 +70,12 @@ fn think_context_view_smart_is_cold_archive_and_explore_is_warm() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context", "args": {
             "workspace": "ws_relevance_view_ctx",
             "view": "explore",
             "limit_cards": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let explore_text = extract_tool_text(&explore);
     let explore_cards = explore_text
@@ -99,42 +99,42 @@ fn think_context_view_audit_implies_all_lanes() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_relevance_view_audit" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_relevance_view_audit" } } }
     }));
 
     let _a = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_relevance_view_audit",
             "agent_id": "agent-a",
             "card": { "id": "A1", "type": "hypothesis", "title": "A1", "text": "lane a", "status": "open" }
-        } }
+        } } }
     }));
 
     let _b = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_relevance_view_audit",
             "agent_id": "agent-b",
             "card": { "id": "B1", "type": "hypothesis", "title": "B1", "text": "lane b", "status": "open" }
-        } }
+        } } }
     }));
 
     let audit = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_context", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.context", "args": {
             "workspace": "ws_relevance_view_audit",
             "agent_id": "agent-a",
             "view": "audit",
             "limit_cards": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let audit_text = extract_tool_text(&audit);
     let cards = audit_text
@@ -159,40 +159,40 @@ fn think_next_and_frontier_view_audit_implies_all_lanes() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_relevance_view_nf" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_relevance_view_nf" } } }
     }));
 
     let _a = server.request(json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_relevance_view_nf",
             "agent_id": "agent-a",
             "card": { "id": "A1", "type": "hypothesis", "title": "A1", "text": "lane a", "status": "open" }
-        } }
+        } } }
     }));
     let _b = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "think_card", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
             "workspace": "ws_relevance_view_nf",
             "agent_id": "agent-b",
             "card": { "id": "B1", "type": "hypothesis", "title": "B1", "text": "lane b", "status": "open" }
-        } }
+        } } }
     }));
 
     let next = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "think_next", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.next", "args": {
             "workspace": "ws_relevance_view_nf",
             "agent_id": "agent-a",
             "view": "audit",
             "max_chars": 8000
-        } }
+        } } }
     }));
     let next_text = extract_tool_text(&next);
     let candidate_id = next_text
@@ -210,13 +210,13 @@ fn think_next_and_frontier_view_audit_implies_all_lanes() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "think_frontier", "arguments": {
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.frontier", "args": {
             "workspace": "ws_relevance_view_nf",
             "agent_id": "agent-a",
             "view": "audit",
             "limit_hypotheses": 20,
             "max_chars": 8000
-        } }
+        } } }
     }));
     let frontier_text = extract_tool_text(&frontier);
     let hypotheses = frontier_text

@@ -170,7 +170,7 @@ impl BudgetPolicy {
 
 #[derive(Clone, Debug)]
 pub(crate) enum SchemaSource {
-    Legacy,
+    Handler,
     Custom {
         args_schema: serde_json::Value,
         example_minimal_args: serde_json::Value,
@@ -188,7 +188,7 @@ pub(crate) struct CommandSpec {
     pub(crate) budget: BudgetPolicy,
     pub(crate) schema: SchemaSource,
     pub(crate) op_aliases: Vec<String>,
-    pub(crate) legacy_tool: Option<String>,
+    pub(crate) handler_name: Option<String>,
     pub(crate) handler: Option<CommandHandler>,
 }
 
@@ -250,14 +250,14 @@ impl CommandRegistry {
         self.by_alias.get(&key).and_then(|idx| self.specs.get(*idx))
     }
 
-    pub(crate) fn find_by_legacy_tool(&self, legacy_tool: &str) -> Option<&CommandSpec> {
-        let needle = legacy_tool.trim();
+    pub(crate) fn find_by_handler_name(&self, handler_name: &str) -> Option<&CommandSpec> {
+        let needle = handler_name.trim();
         if needle.is_empty() {
             return None;
         }
         self.specs
             .iter()
-            .find(|spec| spec.legacy_tool.as_deref() == Some(needle))
+            .find(|spec| spec.handler_name.as_deref() == Some(needle))
     }
 
     pub(crate) fn list_cmds(&self) -> Vec<String> {

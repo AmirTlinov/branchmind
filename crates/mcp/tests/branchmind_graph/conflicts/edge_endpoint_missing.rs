@@ -12,7 +12,7 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_edge", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_edge", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_edge", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_edge", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,7 +40,7 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_graph_edge", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": { "workspace": "ws_graph_edge", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } } }
     }));
     let decompose_text = extract_tool_text(&decompose);
     let task_id = decompose_text
@@ -54,7 +54,7 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_edge", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": "seed", "type": "idea", "title": "Seed" } ] } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_edge", "target": task_id.clone(), "ops": [ { "op": "node_upsert", "id": "seed", "type": "idea", "title": "Seed" } ] } } }
     }));
     let apply_initial_text = extract_tool_text(&apply_initial);
     assert_eq!(
@@ -80,11 +80,11 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_edge", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_edge", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [
             { "op": "node_upsert", "id": edge_from, "type": "idea", "title": "Edge From" },
             { "op": "node_upsert", "id": edge_to, "type": "idea", "title": "Edge To" },
             { "op": "edge_upsert", "from": edge_from, "rel": "supports", "to": edge_to }
-        ] } }
+        ] } } }
     }));
     let apply_edge_base_text = extract_tool_text(&apply_edge_base);
     assert_eq!(
@@ -99,7 +99,7 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws_graph_edge", "name": edge_branch.clone(), "from": base_branch.clone() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws_graph_edge", "name": edge_branch.clone(), "from": base_branch.clone() } } }
     }));
     let edge_branch_create_text = extract_tool_text(&edge_branch_create);
     assert_eq!(
@@ -113,25 +113,25 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_edge", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_edge", "branch": base_branch.clone(), "doc": doc.clone(), "ops": [
             { "op": "node_delete", "id": edge_to }
-        ] } }
+        ] } } }
     }));
 
     server.request(json!({
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "graph_apply", "arguments": { "workspace": "ws_graph_edge", "branch": edge_branch.clone(), "doc": doc.clone(), "ops": [
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.apply", "args": { "workspace": "ws_graph_edge", "branch": edge_branch.clone(), "doc": doc.clone(), "ops": [
             { "op": "edge_upsert", "from": edge_from, "rel": "supports", "to": edge_to, "meta": { "source": "derived" } }
-        ] } }
+        ] } } }
     }));
 
     let edge_merge = server.request(json!({
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "graph_merge", "arguments": { "workspace": "ws_graph_edge", "from": edge_branch.clone(), "into": base_branch.clone(), "doc": doc.clone(), "limit": 200 } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.merge", "args": { "workspace": "ws_graph_edge", "from": edge_branch.clone(), "into": base_branch.clone(), "doc": doc.clone(), "limit": 200 } } }
     }));
     let edge_merge_text = extract_tool_text(&edge_merge);
     assert_eq!(
@@ -158,7 +158,7 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "graph_conflict_resolve", "arguments": { "workspace": "ws_graph_edge", "conflict_id": edge_conflict_id, "resolution": "use_from" } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.conflict.resolve", "args": { "workspace": "ws_graph_edge", "conflict_id": edge_conflict_id, "resolution": "use_from" } } }
     }));
     let edge_conflict_resolve_text = extract_tool_text(&edge_conflict_resolve);
     assert_eq!(
@@ -172,7 +172,7 @@ fn branchmind_graph_edge_conflict_can_create_missing_endpoint_validation_error()
         "jsonrpc": "2.0",
         "id": 12,
         "method": "tools/call",
-        "params": { "name": "graph_validate", "arguments": { "workspace": "ws_graph_edge", "branch": base_branch, "doc": doc, "max_errors": 50, "max_chars": 2000 } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.validate", "args": { "workspace": "ws_graph_edge", "branch": base_branch, "doc": doc, "max_errors": 50, "max_chars": 2000 } } }
     }));
     let validate_after_text = extract_tool_text(&validate_after);
     assert_eq!(

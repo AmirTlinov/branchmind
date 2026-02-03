@@ -12,7 +12,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "init", "arguments": { "workspace": "ws_vcs" } }
+        "params": { "name": "system", "arguments": { "op": "call", "cmd": "system.init", "args": { "workspace": "ws_vcs" } } }
     }));
     let init_text = extract_tool_text(&init);
     assert_eq!(
@@ -24,7 +24,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "commit", "arguments": { "workspace": "ws_vcs", "artifact": "artifact-1", "message": "m1" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.commit", "args": { "workspace": "ws_vcs", "artifact": "artifact-1", "message": "m1" } } }
     }));
     let commit1_text = extract_tool_text(&commit1);
     let seq1 = commit1_text
@@ -40,7 +40,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "commit", "arguments": { "workspace": "ws_vcs", "artifact": "artifact-2", "message": "m2" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.commit", "args": { "workspace": "ws_vcs", "artifact": "artifact-2", "message": "m2" } } }
     }));
     let commit2_text = extract_tool_text(&commit2);
     let seq2 = commit2_text
@@ -57,7 +57,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "log", "arguments": { "workspace": "ws_vcs", "limit": 10 } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.log", "args": { "workspace": "ws_vcs", "limit": 10 } } }
     }));
     let log_text = extract_tool_text(&log);
     let commits = log_text
@@ -71,7 +71,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tag_create", "arguments": { "workspace": "ws_vcs", "name": "v1", "from": seq1.to_string() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.tag.create", "args": { "workspace": "ws_vcs", "name": "v1", "from": seq1.to_string() } } }
     }));
     let tag_text = extract_tool_text(&tag);
     assert_eq!(
@@ -83,7 +83,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tag_list", "arguments": { "workspace": "ws_vcs" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.tag.list", "args": { "workspace": "ws_vcs" } } }
     }));
     let tags_text = extract_tool_text(&tags);
     let tags_list = tags_text
@@ -102,7 +102,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "reset", "arguments": { "workspace": "ws_vcs", "ref": seq1.to_string() } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.reset", "args": { "workspace": "ws_vcs", "ref": seq1.to_string() } } }
     }));
     let reset_text = extract_tool_text(&reset);
     assert_eq!(
@@ -114,7 +114,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "log", "arguments": { "workspace": "ws_vcs", "limit": 10 } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.log", "args": { "workspace": "ws_vcs", "limit": 10 } } }
     }));
     let log_after_text = extract_tool_text(&log_after);
     let commits_after = log_after_text
@@ -133,7 +133,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 10,
         "method": "tools/call",
-        "params": { "name": "reflog", "arguments": { "workspace": "ws_vcs", "limit": 10 } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.reflog", "args": { "workspace": "ws_vcs", "limit": 10 } } }
     }));
     let reflog_text = extract_tool_text(&reflog);
     let reflog_entries = reflog_text
@@ -147,7 +147,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "docs_list", "arguments": { "workspace": "ws_vcs" } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.list", "args": { "workspace": "ws_vcs" } } }
     }));
     let docs_text = extract_tool_text(&docs);
     let docs_list = docs_text
@@ -166,7 +166,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 12,
         "method": "tools/call",
-        "params": { "name": "branch_create", "arguments": { "workspace": "ws_vcs", "name": "topic" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.create", "args": { "workspace": "ws_vcs", "name": "topic" } } }
     }));
     let branch_text = extract_tool_text(&branch);
     assert_eq!(
@@ -178,7 +178,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 13,
         "method": "tools/call",
-        "params": { "name": "branch_rename", "arguments": { "workspace": "ws_vcs", "old": "topic", "new": "topic-renamed" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.rename", "args": { "workspace": "ws_vcs", "old": "topic", "new": "topic-renamed" } } }
     }));
     let rename_text = extract_tool_text(&rename);
     assert_eq!(
@@ -190,7 +190,7 @@ fn branchmind_vcs_smoke() {
         "jsonrpc": "2.0",
         "id": 14,
         "method": "tools/call",
-        "params": { "name": "branch_delete", "arguments": { "workspace": "ws_vcs", "name": "topic-renamed" } }
+        "params": { "name": "vcs", "arguments": { "op": "call", "cmd": "vcs.branch.delete", "args": { "workspace": "ws_vcs", "name": "topic-renamed" } } }
     }));
     let delete_text = extract_tool_text(&delete);
     let deleted = delete_text

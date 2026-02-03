@@ -3,12 +3,12 @@
 use serde_json::Value;
 use std::collections::HashSet;
 
-/// Tool names that are advertised by the server for a given toolset.
+/// Tool names that are advertised by the server (v1 portals).
 ///
-/// Used for sanitizing embedded "engine actions" (legacy call-tool style) so they do not
-/// reference hidden/unavailable tools without also disclosing the next tier.
-pub(super) fn advertised_tool_names(toolset: crate::Toolset) -> HashSet<String> {
-    crate::tools::tool_definitions(toolset)
+/// Used for sanitizing embedded "engine actions" so they do not reference hidden/unavailable
+/// tools without also disclosing the next tier.
+pub(super) fn advertised_tool_names(_toolset: crate::Toolset) -> HashSet<String> {
+    crate::tools_v1::tool_definitions()
         .into_iter()
         .filter_map(|tool| {
             tool.get("name")

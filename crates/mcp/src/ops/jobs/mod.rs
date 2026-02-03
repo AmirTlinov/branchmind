@@ -7,7 +7,7 @@ mod wait;
 
 use crate::ops::{
     BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Safety, SchemaSource, Stability, Tier,
-    ToolName, legacy_to_cmd_segments,
+    ToolName, name_to_cmd_segments,
 };
 use serde_json::json;
 
@@ -37,7 +37,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({}),
         },
         op_aliases: vec!["runner.start".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(runner_start::handle_runner_start),
     });
 
@@ -71,7 +71,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({ "job": "<job>" }),
         },
         op_aliases: vec!["cancel".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(cancel::handle_jobs_cancel),
     });
 
@@ -104,11 +104,11 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({ "job": "<job>" }),
         },
         op_aliases: vec!["wait".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(wait::handle_jobs_wait),
     });
 
-    for def in crate::tools::tool_definitions(crate::Toolset::Full) {
+    for def in crate::handlers::handler_definitions() {
         let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -129,9 +129,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                     idempotent: true,
                 },
                 budget: BudgetPolicy::standard(),
-                schema: SchemaSource::Legacy,
+                schema: SchemaSource::Handler,
                 op_aliases: Vec::new(),
-                legacy_tool: Some(name.to_string()),
+                handler_name: Some(name.to_string()),
                 handler: None,
             });
             continue;
@@ -141,7 +141,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             continue;
         }
         let suffix = &name["tasks_jobs_".len()..];
-        let cmd = format!("jobs.{}", legacy_to_cmd_segments(suffix));
+        let cmd = format!("jobs.{}", name_to_cmd_segments(suffix));
 
         let mut op_aliases = Vec::<String>::new();
         if matches!(suffix, "create" | "list" | "radar" | "open") {
@@ -172,9 +172,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 idempotent: matches!(suffix, "list" | "radar" | "open" | "tail"),
             },
             budget: BudgetPolicy::standard(),
-            schema: SchemaSource::Legacy,
+            schema: SchemaSource::Handler,
             op_aliases,
-            legacy_tool: Some(name.to_string()),
+            handler_name: Some(name.to_string()),
             handler: None,
         });
     }

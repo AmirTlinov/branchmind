@@ -11,7 +11,7 @@ fn tasks_note_is_mirrored_into_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -25,7 +25,7 @@ fn tasks_note_is_mirrored_into_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -39,16 +39,13 @@ fn tasks_note_is_mirrored_into_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 31,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_decompose",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": {
                 "workspace": "ws1",
                 "task": task_id.clone(),
                 "steps": [
                     { "title": "S1", "success_criteria": ["c1"] }
                 ]
-            }
-        }
+            } } }
     }));
     let decompose_text = extract_tool_text(&decompose);
     let step_id = decompose_text
@@ -66,7 +63,7 @@ fn tasks_note_is_mirrored_into_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_note", "arguments": { "workspace": "ws1", "task": task_id.clone(), "step_id": step_id, "note": note_content } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": { "workspace": "ws1", "task": task_id.clone(), "step_id": step_id, "note": note_content } } }
     }));
     let note_text = extract_tool_text(&note);
     assert_eq!(
@@ -78,7 +75,7 @@ fn tasks_note_is_mirrored_into_reasoning_notes() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "export", "arguments": { "workspace": "ws1", "target": task_id, "notes_limit": 50, "trace_limit": 10, "max_chars": 10000 } }
+        "params": { "name": "docs", "arguments": { "op": "call", "cmd": "docs.export", "args": { "workspace": "ws1", "target": task_id, "notes_limit": 50, "trace_limit": 10, "max_chars": 10000 } } }
     }));
     let export_text = extract_tool_text(&export);
     let export_notes_entries = export_text

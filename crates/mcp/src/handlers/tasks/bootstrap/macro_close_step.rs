@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::tools::tasks::steps::strict_gate::{
+use crate::handlers::tasks::steps::strict_gate::{
     StrictGateContext, enforce_strict_reasoning_gate, parse_strict_reasoning_override,
 };
 use crate::*;

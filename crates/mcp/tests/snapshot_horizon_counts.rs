@@ -16,10 +16,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_in_state_line() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_create",
-            "arguments": { "title": "Plan Horizon", "kind": "plan" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "title": "Plan Horizon", "kind": "plan" } } }
     }));
     let plan_id = extract_tool_text(&created_plan)
         .get("result")
@@ -33,10 +30,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_in_state_line() {
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_create",
-                "arguments": { "kind": "task", "parent": plan_id.clone(), "title": title }
-            }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "kind": "task", "parent": plan_id.clone(), "title": title } } }
         }));
         extract_tool_text(&created)
             .get("result")
@@ -62,10 +56,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_in_state_line() {
             "jsonrpc": "2.0",
             "id": 10,
             "method": "tools/call",
-            "params": {
-                "name": "tasks_complete",
-                "arguments": { "task": id, "status": status }
-            }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.complete", "args": { "task": id, "status": status } } }
         }));
     }
 
@@ -73,10 +64,7 @@ fn tasks_snapshot_plan_includes_horizon_counts_in_state_line() {
         "jsonrpc": "2.0",
         "id": 20,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_snapshot",
-            "arguments": { "plan": plan_id, "max_chars": 1200, "fmt": "lines" }
-        }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "plan": plan_id, "max_chars": 1200, "fmt": "lines" } } }
     }));
     let text = extract_tool_text_str(&snapshot);
     let state_line = text.lines().next().unwrap_or("");

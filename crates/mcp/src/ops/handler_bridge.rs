@@ -5,29 +5,29 @@ use crate::ops::{
 };
 use serde_json::{Value, json};
 
-pub(crate) fn legacy_to_op_response(
+pub(crate) fn handler_to_op_response(
     cmd: &str,
     workspace: Option<&str>,
-    legacy_resp: Value,
+    handler_resp: Value,
 ) -> OpResponse {
-    let success = legacy_resp
+    let success = handler_resp
         .get("success")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let warnings = legacy_resp
+    let warnings = handler_resp
         .get("warnings")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
 
     if success {
-        let result = legacy_resp.get("result").cloned().unwrap_or(json!({}));
-        // v1: legacy tools sometimes emit suggestions even on success (e.g. transcripts_*).
+        let result = handler_resp.get("result").cloned().unwrap_or(json!({}));
+        // Some handlers emit suggestions even on success (e.g. transcripts_*).
         // Convert those suggestions into portal-first `actions[]` to preserve the UX
         // while keeping `suggestions[]` empty at the public surface.
         let mut actions = Vec::<Action>::new();
-        if let Some(suggestions) = legacy_resp.get("suggestions").and_then(|v| v.as_array()) {
-            actions.extend(legacy_suggestions_to_actions(
+        if let Some(suggestions) = handler_resp.get("suggestions").and_then(|v| v.as_array()) {
+            actions.extend(handler_suggestions_to_actions(
                 CommandRegistry::global(),
                 workspace,
                 suggestions,
@@ -44,33 +44,33 @@ pub(crate) fn legacy_to_op_response(
         };
     }
 
-    let legacy_error = legacy_resp.get("error").cloned().unwrap_or(Value::Null);
-    let code = legacy_error
+    let handler_error = handler_resp.get("error").cloned().unwrap_or(Value::Null);
+    let code = handler_error
         .get("code")
         .and_then(|v| v.as_str())
         .unwrap_or("INTERNAL_ERROR")
         .trim()
         .to_string();
     // v1 strategy: preserve domain-specific codes. This keeps typed errors stable across
-    // the legacy → portal bridge (REVISION_MISMATCH, REASONING_REQUIRED, etc.).
+    // the handler → portal bridge (REVISION_MISMATCH, REASONING_REQUIRED, etc.).
     let mapped_code = if code.is_empty() {
         "INTERNAL_ERROR".to_string()
     } else {
         code
     };
-    let message = legacy_error
+    let message = handler_error
         .get("message")
         .and_then(|v| v.as_str())
         .unwrap_or("error")
         .to_string();
-    let recovery = legacy_error
+    let recovery = handler_error
         .get("recovery")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
     let mut actions = Vec::<Action>::new();
-    if let Some(suggestions) = legacy_resp.get("suggestions").and_then(|v| v.as_array()) {
-        actions.extend(legacy_suggestions_to_actions(
+    if let Some(suggestions) = handler_resp.get("suggestions").and_then(|v| v.as_array()) {
+        actions.extend(handler_suggestions_to_actions(
             CommandRegistry::global(),
             workspace,
             suggestions,
@@ -92,7 +92,7 @@ pub(crate) fn legacy_to_op_response(
     }
 }
 
-fn legacy_suggestions_to_actions(
+fn handler_suggestions_to_actions(
     registry: &CommandRegistry,
     workspace: Option<&str>,
     suggestions: &[Value],
@@ -121,7 +121,7 @@ fn legacy_suggestions_to_actions(
             .and_then(|v| v.as_str())
             .unwrap_or("Follow-up")
             .to_string();
-        let priority = parse_legacy_priority(
+        let priority = parse_suggestion_priority(
             obj.get("priority")
                 .and_then(|v| v.as_str())
                 .unwrap_or("medium"),
@@ -139,7 +139,7 @@ fn legacy_suggestions_to_actions(
             );
             args.insert("view".to_string(), Value::String("compact".to_string()));
             out.push(Action {
-                action_id: format!("recover.legacy.status::{idx}"),
+                action_id: format!("recover.handler.status::{idx}"),
                 priority,
                 tool: ToolName::Status.as_str().to_string(),
                 args: Value::Object(args),
@@ -149,8 +149,8 @@ fn legacy_suggestions_to_actions(
             continue;
         }
 
-        // Most legacy suggestions reference legacy tool names; map them via registry.
-        if let Some(spec) = registry.find_by_legacy_tool(target) {
+        // Most handler suggestions reference handler names; map them via registry.
+        if let Some(spec) = registry.find_by_handler_name(target) {
             let mut env = serde_json::Map::new();
             if let Some(ws) = workspace {
                 env.insert("workspace".to_string(), Value::String(ws.to_string()));
@@ -166,7 +166,7 @@ fn legacy_suggestions_to_actions(
 
             out.push(Action {
                 action_id: format!(
-                    "recover.legacy.call.{}::{idx}",
+                    "recover.handler.call.{}::{idx}",
                     sanitize_action_id_segment(target)
                 ),
                 priority,
@@ -178,10 +178,10 @@ fn legacy_suggestions_to_actions(
             continue;
         }
 
-        // Fallback: recommend migration lookup (even though v1 surface doesn't accept old names).
+        // Fallback: recommend migration lookup for deprecated tool names.
         out.push(Action {
             action_id: format!(
-                "recover.legacy.migration.lookup.{}::{idx}",
+                "recover.migration.lookup.{}::{idx}",
                 sanitize_action_id_segment(target)
             ),
             priority: ActionPriority::High,
@@ -191,14 +191,14 @@ fn legacy_suggestions_to_actions(
                 "args": { "old_name": target },
                 "budget_profile": "portal"
             }),
-            why: format!("Найти v1 cmd для legacy tool {target}."),
+            why: format!("Найти v1 cmd для устаревшего tool имени {target}."),
             risk: "Низкий".to_string(),
         });
     }
     out
 }
 
-fn parse_legacy_priority(raw: &str) -> ActionPriority {
+fn parse_suggestion_priority(raw: &str) -> ActionPriority {
     match raw.trim().to_ascii_lowercase().as_str() {
         "high" => ActionPriority::High,
         "low" => ActionPriority::Low,

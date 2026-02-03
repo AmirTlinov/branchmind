@@ -13,7 +13,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -27,7 +27,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "task", "parent": plan_id.clone(), "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -41,7 +41,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_get", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.get", "args": { "workspace": "ws1" } } }
     }));
     let focus_before_text = extract_tool_text(&focus_before);
     assert_eq!(
@@ -53,7 +53,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws1" } } }
     }));
     assert_eq!(
         radar_without_focus
@@ -89,7 +89,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_set", "arguments": { "workspace": "ws1", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.set", "args": { "workspace": "ws1", "task": task_id.clone() } } }
     }));
     let focus_set_text = extract_tool_text(&focus_set);
     assert_eq!(
@@ -104,7 +104,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws1", "max_chars": 10 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws1", "max_chars": 10 } } }
     }));
     assert_eq!(
         radar_from_focus
@@ -127,7 +127,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws1", "max_chars": 400 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws1", "max_chars": 400 } } }
     }));
     let radar_full_text = extract_tool_text(&radar_full);
     let expected_branch = format!("task/{task_id}");
@@ -152,7 +152,7 @@ fn tasks_focus_and_radar_smoke() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "tasks_focus_clear", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.focus.clear", "args": { "workspace": "ws1" } } }
     }));
     let focus_cleared_text = extract_tool_text(&focus_cleared);
     assert_eq!(

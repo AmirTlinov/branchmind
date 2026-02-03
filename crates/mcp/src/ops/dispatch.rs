@@ -2,10 +2,10 @@
 
 use crate::ops::{CommandSpec, Envelope, OpError, OpResponse};
 
-/// Dispatch a custom (non-legacy) command.
+/// Dispatch a custom (non-handler) command.
 ///
 /// Custom commands return `OpResponse` directly (v1 shape), so they can emit `actions[]`
-/// without passing through legacy suggestion mapping.
+/// without passing through handler suggestion mapping.
 pub(crate) fn dispatch_custom(
     server: &mut crate::McpServer,
     spec: &CommandSpec,
@@ -16,7 +16,7 @@ pub(crate) fn dispatch_custom(
             env.cmd.clone(),
             OpError {
                 code: "INTERNAL_ERROR".to_string(),
-                message: format!("cmd {} has no handler (and no legacy_tool)", spec.cmd),
+                message: format!("cmd {} has no handler", spec.cmd),
                 recovery: Some("Check registry wiring for this cmd.".to_string()),
             },
         );

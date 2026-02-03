@@ -11,7 +11,7 @@ fn tasks_edit_revision_mismatch() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws1", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -25,7 +25,7 @@ fn tasks_edit_revision_mismatch() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_edit", "arguments": { "workspace": "ws1", "task": plan_id, "expected_revision": 999, "title": "Nope" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.edit", "args": { "workspace": "ws1", "task": plan_id, "expected_revision": 999, "title": "Nope" } } }
     }));
     assert_eq!(
         mismatch
@@ -62,7 +62,7 @@ fn tasks_edit_revision_mismatch() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_delta", "arguments": { "workspace": "ws1" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.delta", "args": { "workspace": "ws1" } } }
     }));
     let delta_text = extract_tool_text(&delta);
     let events = delta_text

@@ -24,7 +24,7 @@ fn agent_id_auto_persists_across_restarts() {
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_auto_agent_id", "kind": "plan", "title": "Plan A" } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_auto_agent_id", "kind": "plan", "title": "Plan A" } } }
         }));
         let created_plan_text = extract_tool_text(&created_plan);
         let plan_id = created_plan_text
@@ -38,7 +38,7 @@ fn agent_id_auto_persists_across_restarts() {
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": { "name": "tasks_create", "arguments": { "workspace": "ws_auto_agent_id", "kind": "task", "parent": plan_id, "title": "Task A" } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_auto_agent_id", "kind": "task", "parent": plan_id, "title": "Task A" } } }
         }));
         let created_task_text = extract_tool_text(&created_task);
         let task_id = created_task_text
@@ -52,7 +52,7 @@ fn agent_id_auto_persists_across_restarts() {
             "jsonrpc": "2.0",
             "id": 4,
             "method": "tools/call",
-            "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_auto_agent_id", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": { "workspace": "ws_auto_agent_id", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } } }
         }));
         let decompose_text = extract_tool_text(&decompose);
         let step_id = decompose_text
@@ -71,7 +71,7 @@ fn agent_id_auto_persists_across_restarts() {
             "jsonrpc": "2.0",
             "id": 5,
             "method": "tools/call",
-            "params": { "name": "tasks_step_lease_claim", "arguments": { "workspace": "ws_auto_agent_id", "task": task_id.clone(), "step_id": step_id.clone() } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.step.lease.claim", "args": { "workspace": "ws_auto_agent_id", "task": task_id.clone(), "step_id": step_id.clone() } } }
         }));
         let claim_text = extract_tool_text(&claim);
         let holder = claim_text
@@ -94,7 +94,7 @@ fn agent_id_auto_persists_across_restarts() {
             "jsonrpc": "2.0",
             "id": 6,
             "method": "tools/call",
-            "params": { "name": "tasks_step_lease_get", "arguments": { "workspace": "ws_auto_agent_id", "task": task_id, "step_id": step_id } }
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.step.lease.get", "args": { "workspace": "ws_auto_agent_id", "task": task_id, "step_id": step_id } } }
         }));
         let get_text = extract_tool_text(&get);
         let holder = get_text

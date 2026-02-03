@@ -12,7 +12,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_lease", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_lease", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_lease", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_lease", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,7 +40,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_lease", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": { "workspace": "ws_lease", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } } }
     }));
     let decompose_text = extract_tool_text(&decompose);
     let step_id = decompose_text
@@ -57,7 +57,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_step_lease_claim", "arguments": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "agent_id": "agent_a" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.step.lease.claim", "args": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "agent_id": "agent_a" } } }
     }));
     let claim_text = extract_tool_text(&claim);
     assert_eq!(
@@ -69,7 +69,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "tasks_close_step", "arguments": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": "all", "agent_id": "agent_b" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.step.close", "args": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": "all", "agent_id": "agent_b" } } }
     }));
     let blocked_text = extract_tool_text(&blocked);
     assert_eq!(
@@ -88,7 +88,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_resume_super", "arguments": { "workspace": "ws_lease", "task": task_id.clone(), "view": "focus_only", "agent_id": "agent_b", "max_chars": 20000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": { "workspace": "ws_lease", "task": task_id.clone(), "view": "focus_only", "agent_id": "agent_b", "max_chars": 20000 } } }
     }));
     let resume_text = extract_tool_text(&resume);
     assert_eq!(
@@ -131,7 +131,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "tasks_step_lease_release", "arguments": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "agent_id": "agent_a" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.step.lease.release", "args": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "agent_id": "agent_a" } } }
     }));
     let release_text = extract_tool_text(&release);
     assert_eq!(
@@ -143,7 +143,7 @@ fn tasks_step_lease_blocks_mutations_and_surfaces_in_hud() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "tasks_close_step", "arguments": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": "all", "agent_id": "agent_b" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.step.close", "args": { "workspace": "ws_lease", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": "all", "agent_id": "agent_b" } } }
     }));
     let close_text = extract_tool_text(&close);
     assert_eq!(

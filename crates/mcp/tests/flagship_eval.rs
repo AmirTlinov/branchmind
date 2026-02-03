@@ -37,14 +37,14 @@ fn flagship_eval_snapshot_is_two_lines_and_ref_first() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Flagship Eval Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Flagship Eval Task" } } }
     }));
 
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": {} }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": {} } }
     }));
     let text = extract_tool_text_str(&snapshot);
     assert_tag_light(&text);
@@ -108,27 +108,24 @@ fn flagship_eval_snapshot_ref_survives_max_chars_2000() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "task_title": "Flagship Eval Budget Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Flagship Eval Budget Task" } } }
     }));
 
     let _note = server.request(json!({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_note",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.note", "args": {
                 "path": "s:0",
                 "note": "x".repeat(40_000)
-            }
-        }
+            } } }
     }));
 
     let snapshot = server.request(json!( {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_snapshot", "arguments": { "max_chars": 2000 } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.snapshot", "args": { "max_chars": 2000 } } }
     }));
     let text = extract_tool_text_str(&snapshot);
     assert_tag_light(&text);
@@ -148,21 +145,18 @@ fn flagship_eval_resume_super_capsule_survives_max_chars_2000() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "tasks_macro_start", "arguments": { "workspace": "ws_flagship_eval_capsule", "task_title": "Flagship Eval Capsule Task" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "workspace": "ws_flagship_eval_capsule", "task_title": "Flagship Eval Capsule Task" } } }
     }));
 
     let resume = server.request(json!({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {
-            "name": "tasks_resume_super",
-            "arguments": {
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.resume.super", "args": {
                 "workspace": "ws_flagship_eval_capsule",
                 "view": "smart",
                 "max_chars": 2000
-            }
-        }
+            } } }
     }));
     let parsed = extract_tool_text(&resume);
     let capsule = parsed

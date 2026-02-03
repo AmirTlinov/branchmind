@@ -2,7 +2,7 @@
 
 use crate::ops::{
     BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError, OpResponse, Safety,
-    SchemaSource, Stability, Tier, ToolName, legacy_to_cmd_segments,
+    SchemaSource, Stability, Tier, ToolName, name_to_cmd_segments,
 };
 use serde_json::{Value, json};
 
@@ -48,7 +48,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             }),
         },
         op_aliases: vec!["knowledge.upsert".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_knowledge_upsert),
     });
 
@@ -87,7 +87,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({ "limit": 12 }),
         },
         op_aliases: vec!["knowledge.query".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_knowledge_query),
     });
 
@@ -130,7 +130,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             }),
         },
         op_aliases: vec!["knowledge.recall".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_knowledge_recall),
     });
 
@@ -170,7 +170,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             example_minimal_args: json!({ "anchor": "core" }),
         },
         op_aliases: vec!["knowledge.lint".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_knowledge_lint),
     });
 
@@ -189,9 +189,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             idempotent: true,
         },
         budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Legacy,
+        schema: SchemaSource::Handler,
         op_aliases: vec!["reasoning.seed".to_string()],
-        legacy_tool: Some("think_template".to_string()),
+        handler_name: Some("think_template".to_string()),
         handler: Some(handle_reasoning_seed),
     });
 
@@ -210,13 +210,13 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             idempotent: false,
         },
         budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Legacy,
+        schema: SchemaSource::Handler,
         op_aliases: vec!["reasoning.pipeline".to_string()],
-        legacy_tool: Some("think_pipeline".to_string()),
+        handler_name: Some("think_pipeline".to_string()),
         handler: Some(handle_reasoning_pipeline),
     });
 
-    // Idea-branch helpers as golden ops (legacy-backed for v1).
+    // Idea-branch helpers as golden ops (handler-backed for v1).
     specs.push(CommandSpec {
         cmd: "think.idea.branch.create".to_string(),
         domain_tool: ToolName::ThinkOps,
@@ -232,9 +232,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             idempotent: false,
         },
         budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Legacy,
+        schema: SchemaSource::Handler,
         op_aliases: vec!["idea.branch.create".to_string()],
-        legacy_tool: Some("macro_branch_note".to_string()),
+        handler_name: Some("macro_branch_note".to_string()),
         handler: None,
     });
 
@@ -271,20 +271,20 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             }),
         },
         op_aliases: vec!["idea.branch.merge".to_string()],
-        legacy_tool: None,
+        handler_name: None,
         handler: Some(handle_idea_branch_merge),
     });
 
-    // Auto-map remaining legacy (non-tasks) tools into think op=call surface.
-    for def in crate::tools::tool_definitions(crate::Toolset::Full) {
+    // Auto-map remaining non-task handlers into think op=call surface.
+    for def in crate::handlers::handler_definitions() {
         let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
-        if should_skip_legacy_tool(name) {
+        if should_skip_handler_name(name) {
             continue;
         }
 
-        let cmd = legacy_think_cmd(name);
+        let cmd = handler_think_cmd(name);
         let op_aliases = Vec::<String>::new();
 
         specs.push(CommandSpec {
@@ -310,9 +310,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 ),
             },
             budget: BudgetPolicy::standard(),
-            schema: SchemaSource::Legacy,
+            schema: SchemaSource::Handler,
             op_aliases,
-            legacy_tool: Some(name.to_string()),
+            handler_name: Some(name.to_string()),
             handler: None,
         });
     }
@@ -359,7 +359,7 @@ fn handle_knowledge_upsert(server: &mut crate::McpServer, env: &Envelope) -> OpR
     let parsed = match crate::parse_think_card(&workspace, card_value.clone()) {
         Ok(v) => v,
         Err(resp) => {
-            return crate::ops::legacy_to_op_response(&env.cmd, Some(workspace.as_str()), resp);
+            return crate::ops::handler_to_op_response(&env.cmd, Some(workspace.as_str()), resp);
         }
     };
 
@@ -490,13 +490,13 @@ fn handle_knowledge_upsert(server: &mut crate::McpServer, env: &Envelope) -> OpR
         upsert_card_id_into_value(card_value, &card_id),
     );
 
-    let legacy =
-        crate::tools::dispatch_tool(server, "think_add_knowledge", Value::Object(forwarded))
+    let handler_resp =
+        crate::handlers::dispatch_handler(server, "think_add_knowledge", Value::Object(forwarded))
             .unwrap_or_else(|| {
                 crate::ai_error("INTERNAL_ERROR", "think_add_knowledge dispatch failed")
             });
 
-    crate::ops::legacy_to_op_response(&env.cmd, Some(workspace.as_str()), legacy)
+    crate::ops::handler_to_op_response(&env.cmd, Some(workspace.as_str()), handler_resp)
 }
 
 fn handle_knowledge_query(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
@@ -877,10 +877,11 @@ fn handle_knowledge_query(server: &mut crate::McpServer, env: &Envelope) -> OpRe
             .or_insert_with(|| Value::String(KB_GRAPH_DOC.to_string()));
     }
 
-    let legacy = crate::tools::dispatch_tool(server, "knowledge_list", Value::Object(args_obj))
-        .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "knowledge_list dispatch failed"));
+    let handler_resp =
+        crate::handlers::dispatch_handler(server, "knowledge_list", Value::Object(args_obj))
+            .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "knowledge_list dispatch failed"));
 
-    crate::ops::legacy_to_op_response(&env.cmd, Some(workspace.as_str()), legacy)
+    crate::ops::handler_to_op_response(&env.cmd, Some(workspace.as_str()), handler_resp)
 }
 
 fn handle_knowledge_recall(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
@@ -1189,24 +1190,26 @@ fn handle_knowledge_lint(server: &mut crate::McpServer, env: &Envelope) -> OpRes
 }
 
 fn handle_reasoning_seed(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
-    let legacy = crate::tools::dispatch_tool(server, "think_template", env.args.clone())
-        .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "think_template dispatch failed"));
-    crate::ops::legacy_to_op_response(&env.cmd, env.workspace.as_deref(), legacy)
+    let handler_resp =
+        crate::handlers::dispatch_handler(server, "think_template", env.args.clone())
+            .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "think_template dispatch failed"));
+    crate::ops::handler_to_op_response(&env.cmd, env.workspace.as_deref(), handler_resp)
 }
 
 fn handle_reasoning_pipeline(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
-    let legacy = crate::tools::dispatch_tool(server, "think_pipeline", env.args.clone())
-        .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "think_pipeline dispatch failed"));
-    crate::ops::legacy_to_op_response(&env.cmd, env.workspace.as_deref(), legacy)
+    let handler_resp =
+        crate::handlers::dispatch_handler(server, "think_pipeline", env.args.clone())
+            .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "think_pipeline dispatch failed"));
+    crate::ops::handler_to_op_response(&env.cmd, env.workspace.as_deref(), handler_resp)
 }
 
 fn handle_idea_branch_merge(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
-    let legacy = crate::tools::dispatch_tool(server, "merge", env.args.clone())
+    let handler_resp = crate::handlers::dispatch_handler(server, "merge", env.args.clone())
         .unwrap_or_else(|| crate::ai_error("INTERNAL_ERROR", "merge dispatch failed"));
-    crate::ops::legacy_to_op_response(&env.cmd, env.workspace.as_deref(), legacy)
+    crate::ops::handler_to_op_response(&env.cmd, env.workspace.as_deref(), handler_resp)
 }
 
-fn should_skip_legacy_tool(name: &str) -> bool {
+fn should_skip_handler_name(name: &str) -> bool {
     if name.starts_with("tasks_") {
         return true;
     }
@@ -1237,17 +1240,17 @@ fn should_skip_legacy_tool(name: &str) -> bool {
     false
 }
 
-fn legacy_think_cmd(name: &str) -> String {
+fn handler_think_cmd(name: &str) -> String {
     if let Some(suffix) = name.strip_prefix("think_") {
-        return format!("think.{}", legacy_to_cmd_segments(suffix));
+        return format!("think.{}", name_to_cmd_segments(suffix));
     }
     if let Some(suffix) = name.strip_prefix("anchors_") {
-        return format!("think.anchor.{}", legacy_to_cmd_segments(suffix));
+        return format!("think.anchor.{}", name_to_cmd_segments(suffix));
     }
     if let Some(suffix) = name.strip_prefix("anchor_") {
-        return format!("think.anchor.{}", legacy_to_cmd_segments(suffix));
+        return format!("think.anchor.{}", name_to_cmd_segments(suffix));
     }
-    format!("think.{}", legacy_to_cmd_segments(name))
+    format!("think.{}", name_to_cmd_segments(name))
 }
 
 fn normalized_claim(title: Option<&str>, text: Option<&str>) -> String {

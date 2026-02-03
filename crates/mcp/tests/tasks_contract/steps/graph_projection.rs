@@ -12,7 +12,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_proj", "kind": "plan", "title": "Plan A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_proj", "kind": "plan", "title": "Plan A" } } }
     }));
     let created_plan_text = extract_tool_text(&created_plan);
     let plan_id = created_plan_text
@@ -26,7 +26,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "tasks_create", "arguments": { "workspace": "ws_graph_proj", "kind": "task", "parent": plan_id, "title": "Task A" } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.create", "args": { "workspace": "ws_graph_proj", "kind": "task", "parent": plan_id, "title": "Task A" } } }
     }));
     let created_task_text = extract_tool_text(&created_task);
     let task_id = created_task_text
@@ -40,7 +40,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "tasks_decompose", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.plan.decompose", "args": { "workspace": "ws_graph_proj", "task": task_id.clone(), "steps": [ { "title": "S1", "success_criteria": ["c1"] } ] } } }
     }));
     let decompose_text = extract_tool_text(&decompose);
     let step_id = decompose_text
@@ -57,7 +57,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "tasks_radar", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws_graph_proj", "task": task_id.clone() } } }
     }));
     let radar_text = extract_tool_text(&radar);
     let branch = radar_text
@@ -81,7 +81,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
-        "params": { "name": "graph_query", "arguments": { "workspace": "ws_graph_proj", "branch": branch.clone(), "doc": graph_doc.clone(), "ids": [task_node.clone(), step_node.clone()], "include_edges": true, "edges_limit": 10, "limit": 10 } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.query", "args": { "workspace": "ws_graph_proj", "branch": branch.clone(), "doc": graph_doc.clone(), "ids": [task_node.clone(), step_node.clone()], "include_edges": true, "edges_limit": 10, "limit": 10 } } }
     }));
     let query_text = extract_tool_text(&query);
     assert_eq!(
@@ -126,7 +126,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": { "name": "tasks_verify", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } } } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.verify", "args": { "workspace": "ws_graph_proj", "task": task_id.clone(), "step_id": step_id.clone(), "checkpoints": { "criteria": { "confirmed": true }, "tests": { "confirmed": true } } } } }
     }));
     let verify_text = extract_tool_text(&verify);
     assert_eq!(
@@ -138,7 +138,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 8,
         "method": "tools/call",
-        "params": { "name": "tasks_done", "arguments": { "workspace": "ws_graph_proj", "task": task_id.clone(), "step_id": step_id.clone() } }
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.done", "args": { "workspace": "ws_graph_proj", "task": task_id.clone(), "step_id": step_id.clone() } } }
     }));
     let done_text = extract_tool_text(&done);
     assert_eq!(
@@ -150,7 +150,7 @@ fn tasks_graph_projection_smoke() {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": { "name": "graph_query", "arguments": { "workspace": "ws_graph_proj", "branch": branch.clone(), "doc": graph_doc.clone(), "ids": [step_node.clone()], "include_edges": false, "limit": 10 } }
+        "params": { "name": "graph", "arguments": { "op": "call", "cmd": "graph.query", "args": { "workspace": "ws_graph_proj", "branch": branch.clone(), "doc": graph_doc.clone(), "ids": [step_node.clone()], "include_edges": false, "limit": 10 } } }
     }));
     let query_done_text = extract_tool_text(&query_done);
     let done_nodes = query_done_text
