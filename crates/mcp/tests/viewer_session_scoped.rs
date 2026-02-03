@@ -221,7 +221,15 @@ mod unix {
     }
 
     fn temp_dir(test_name: &str) -> PathBuf {
-        let base = std::env::temp_dir();
+        // Prefer a short runtime dir to avoid Unix domain socket SUN_LEN limits on some systems.
+        let base = {
+            let tmp = PathBuf::from("/tmp");
+            if tmp.is_dir() {
+                tmp
+            } else {
+                std::env::temp_dir()
+            }
+        };
         let pid = std::process::id();
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

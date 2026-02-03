@@ -107,6 +107,77 @@
 
         <div class="graph-shell">
           <canvas id="graph" aria-hidden="true"></canvas>
+          <div class="graph-overlay" aria-hidden="false">
+            <section id="hud" class="hud" aria-label="Map context" aria-live="polite">
+              <div class="hud-title">Карта проекта</div>
+              <div class="hud-grid">
+                <div class="hud-row">
+                  <span class="hud-k">Где</span>
+                  <span id="hud-where" class="hud-v">-</span>
+                </div>
+                <div class="hud-row">
+                  <span class="hud-k">Слой</span>
+                  <span id="hud-lod" class="hud-v">-</span>
+                </div>
+                <div class="hud-row">
+                  <span class="hud-k">Фокус</span>
+                  <span id="hud-focus" class="hud-v">-</span>
+                </div>
+                <div class="hud-row">
+                  <span class="hud-k">Выбрано</span>
+                  <span id="hud-selected" class="hud-v">-</span>
+                </div>
+                <div class="hud-row hud-legend">
+                  <span class="hud-k">Легенда</span>
+                  <span id="hud-legend" class="hud-v"
+                    >Цель=материк, кластер=город, задача=точка.</span
+                  >
+                </div>
+                <div id="hud-warning" class="hud-warning" hidden></div>
+              </div>
+            </section>
+
+            <section
+              id="graph-controls"
+              class="graph-controls"
+              aria-label="Graph controls"
+            >
+              <div class="graph-controls-row">
+                <button id="btn-home" class="gc-btn" type="button" title="Домой">Домой</button>
+                <button id="btn-fit" class="gc-btn" type="button" title="Fit">Fit</button>
+                <button id="btn-focus" class="gc-btn" type="button" title="К фокусу">
+                  К фокусу
+                </button>
+              </div>
+              <div class="graph-controls-row">
+                <button id="btn-zoom-in" class="gc-btn gc-btn-icon" type="button" title="Zoom in">
+                  +
+                </button>
+                <button id="btn-zoom-out" class="gc-btn gc-btn-icon" type="button" title="Zoom out">
+                  −
+                </button>
+                <button
+                  id="btn-refresh"
+                  class="gc-btn"
+                  type="button"
+                  title="Обновить сейчас"
+                >
+                  Обновить
+                </button>
+              </div>
+              <div class="graph-controls-row">
+                <input
+                  id="graph-search"
+                  class="gc-search"
+                  type="search"
+                  placeholder="Поиск: PLAN-123, TASK-456, текст…"
+                  aria-label="Search"
+                />
+              </div>
+            </section>
+
+            <canvas id="minimap" class="minimap" aria-hidden="true"></canvas>
+          </div>
         </div>
       </section>
     </div>

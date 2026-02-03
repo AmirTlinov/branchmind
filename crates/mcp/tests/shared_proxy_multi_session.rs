@@ -325,7 +325,17 @@ mod unix {
     }
 
     fn temp_dir(test_name: &str) -> PathBuf {
-        let base = std::env::temp_dir();
+        // Some macOS/sandboxed environments have very long temp dirs (e.g. `/var/folders/...`)
+        // that can exceed Unix domain socket path limits when we place `.sock` files under them.
+        // Prefer a short runtime dir when available.
+        let base = {
+            let tmp = PathBuf::from("/tmp");
+            if tmp.is_dir() {
+                tmp
+            } else {
+                std::env::temp_dir()
+            }
+        };
         let pid = std::process::id();
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

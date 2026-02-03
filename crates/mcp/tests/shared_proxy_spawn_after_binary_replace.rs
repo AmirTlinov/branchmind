@@ -190,8 +190,16 @@ mod unix {
     }
 
     fn temp_dir(test_name: &str) -> PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!(
+        // Prefer a short runtime dir to avoid Unix domain socket SUN_LEN limits on some systems.
+        let base = {
+            let tmp = PathBuf::from("/tmp");
+            if tmp.is_dir() {
+                tmp
+            } else {
+                std::env::temp_dir()
+            }
+        };
+        base.join(format!(
             "branchmind_{}_{}_{}",
             test_name,
             std::process::id(),
@@ -199,7 +207,6 @@ mod unix {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis()
-        ));
-        dir
+        ))
     }
 }
