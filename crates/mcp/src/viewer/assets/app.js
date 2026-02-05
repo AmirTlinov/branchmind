@@ -357,6 +357,8 @@ function setLens(value) {
     nodes.lens.value = next;
   }
   applyLensCopy();
+  applyExplorerWindowPreference({ defaultOpen: true });
+  applyDetailWindowPreference({ defaultOpen: false });
 }
 
 function loadLensFromStorage() {
@@ -434,6 +436,9 @@ function loadDetailWindowStateFromStorage() {
 }
 
 function applyExplorerWindowPreference({ defaultOpen } = {}) {
+  const key = sidebarOpenStorageKey();
+  if (windowUi.lastExplorerKey === key) return;
+  windowUi.lastExplorerKey = key;
   const stored = loadExplorerWindowStateFromStorage();
   windowUi.explorer.pinned = stored.pinned;
   windowUi.explorer.anchor = stored.anchor;
@@ -447,6 +452,9 @@ function applyExplorerWindowPreference({ defaultOpen } = {}) {
 }
 
 function applyDetailWindowPreference({ defaultOpen } = {}) {
+  const key = detailWindowStorageKey();
+  if (windowUi.lastDetailKey === key) return;
+  windowUi.lastDetailKey = key;
   const stored = loadDetailWindowStateFromStorage();
   windowUi.detail.pinned = stored.pinned;
   windowUi.detail.anchor = stored.anchor;
