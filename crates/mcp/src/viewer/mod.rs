@@ -5,6 +5,7 @@ mod detail;
 mod events_stream;
 mod knowledge_snapshot;
 mod registry;
+mod search;
 mod snapshot;
 
 pub(crate) use registry::record_catalog_entry;
@@ -854,6 +855,112 @@ fn handle_connection(
             )?;
             event_streams.push(client);
             Ok(())
+        }
+        "/api/search" => {
+            if method != "GET" && method != "HEAD" {
+                return write_response(
+                    &mut stream,
+                    "405 Method Not Allowed",
+                    "text/plain; charset=utf-8",
+                    b"Method not allowed.",
+                    false,
+                );
+            }
+            if project_param_invalid {
+                return write_api_error(
+                    &mut stream,
+                    "400 Bad Request",
+                    "INVALID_PROJECT",
+                    "project: invalid project guard.",
+                    Some("Use a value like repo:0123abcd… from /api/projects."),
+                    method == "HEAD",
+                );
+            }
+            if project_unknown {
+                return write_api_error(
+                    &mut stream,
+                    "404 Not Found",
+                    "UNKNOWN_PROJECT",
+                    "Unknown project.",
+                    Some("Pick one of the active projects returned by /api/projects."),
+                    method == "HEAD",
+                );
+            }
+
+            let store = match stores.store_for(&request_storage_dir) {
+                Ok(store) => store,
+                Err(err) => {
+                    return write_api_error(
+                        &mut stream,
+                        "503 Service Unavailable",
+                        "PROJECT_UNAVAILABLE",
+                        "Unable to open project store in read-only mode.",
+                        Some(&format!("{err}")),
+                        method == "HEAD",
+                    );
+                }
+            };
+
+            let lens_raw = extract_query_param_raw(&request.path, "lens")
+                .as_deref()
+                .and_then(decode_query_value)
+                .unwrap_or_else(|| "work".to_string());
+            let lens = lens_raw.trim().to_ascii_lowercase();
+            let lens = match lens.as_str() {
+                "" | "work" => "work",
+                "knowledge" => "knowledge",
+                _ => {
+                    return write_api_error(
+                        &mut stream,
+                        "400 Bad Request",
+                        "INVALID_LENS",
+                        "lens: expected work|knowledge.",
+                        Some("Remove lens=... or pass lens=work|knowledge."),
+                        method == "HEAD",
+                    );
+                }
+            };
+
+            let query = extract_query_param_raw(&request.path, "q")
+                .as_deref()
+                .and_then(decode_query_value)
+                .unwrap_or_default();
+            let limit = extract_query_param_raw(&request.path, "limit")
+                .as_deref()
+                .and_then(decode_query_value)
+                .and_then(|value| value.parse::<usize>().ok());
+
+            let result = search::build_search(
+                store,
+                &request_config,
+                workspace_override.as_deref(),
+                lens,
+                &query,
+                limit,
+            );
+
+            match result {
+                Ok(payload) => {
+                    let body = payload.to_string();
+                    write_response(
+                        &mut stream,
+                        "200 OK",
+                        "application/json; charset=utf-8",
+                        body.as_bytes(),
+                        method == "HEAD",
+                    )
+                }
+                Err(err) => {
+                    let body = err.to_json().to_string();
+                    write_response(
+                        &mut stream,
+                        err.status_line(),
+                        "application/json; charset=utf-8",
+                        body.as_bytes(),
+                        method == "HEAD",
+                    )
+                }
+            }
         }
         "/api/snapshot" => {
             if project_param_invalid {

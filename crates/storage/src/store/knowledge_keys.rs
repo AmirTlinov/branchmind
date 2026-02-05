@@ -407,4 +407,61 @@ impl SqliteStore {
         tx.commit()?;
         Ok(KnowledgeKeysListResult { items, has_more })
     }
+
+    pub fn knowledge_keys_search(
+        &mut self,
+        workspace: &WorkspaceId,
+        request: KnowledgeKeysSearchRequest,
+    ) -> Result<KnowledgeKeysSearchResult, StoreError> {
+        let limit = request.limit.clamp(0, MAX_LIST_LIMIT);
+        if limit == 0 {
+            return Ok(KnowledgeKeysSearchResult {
+                items: Vec::new(),
+                has_more: false,
+            });
+        }
+        let text = request.text.trim();
+        if text.is_empty() {
+            return Ok(KnowledgeKeysSearchResult {
+                items: Vec::new(),
+                has_more: false,
+            });
+        }
+        let query_limit = limit.saturating_add(1) as i64;
+        let text_like = format!("%{text}%");
+
+        let tx = self.conn.transaction()?;
+        let mut items = Vec::<KnowledgeKeyRow>::new();
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT anchor_id, key, card_id, created_at_ms, updated_at_ms
+                FROM knowledge_keys
+                WHERE workspace=?1
+                  AND (
+                    anchor_id LIKE ?2 COLLATE NOCASE
+                    OR key LIKE ?2 COLLATE NOCASE
+                    OR card_id LIKE ?2 COLLATE NOCASE
+                  )
+                ORDER BY updated_at_ms DESC, anchor_id ASC, key ASC
+                LIMIT ?3
+                "#,
+            )?;
+            let mut rows = stmt.query(params![workspace.as_str(), text_like, query_limit])?;
+            while let Some(row) = rows.next()? {
+                items.push(KnowledgeKeyRow {
+                    anchor_id: row.get(0)?,
+                    key: row.get(1)?,
+                    card_id: row.get(2)?,
+                    created_at_ms: row.get(3)?,
+                    updated_at_ms: row.get(4)?,
+                });
+            }
+        }
+
+        let has_more = items.len() > limit;
+        items.truncate(limit);
+        tx.commit()?;
+        Ok(KnowledgeKeysSearchResult { items, has_more })
+    }
 }

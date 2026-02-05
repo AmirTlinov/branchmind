@@ -28,3 +28,15 @@ pub struct KnowledgeKeysListResult {
     pub items: Vec<KnowledgeKeyRow>,
     pub has_more: bool,
 }
+
+#[derive(Clone, Debug)]
+pub struct KnowledgeKeysSearchRequest {
+    pub text: String,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct KnowledgeKeysSearchResult {
+    pub items: Vec<KnowledgeKeyRow>,
+    pub has_more: bool,
+}

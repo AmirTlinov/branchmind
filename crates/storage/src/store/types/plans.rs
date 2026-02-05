@@ -69,3 +69,22 @@ pub struct PlanChecklistUpdateRequest {
     pub event_type: String,
     pub event_payload_json: String,
 }
+
+#[derive(Clone, Debug)]
+pub struct PlansSearchRequest {
+    pub text: String,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlanSearchHit {
+    pub id: String,
+    pub title: String,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlansSearchResult {
+    pub plans: Vec<PlanSearchHit>,
+    pub has_more: bool,
+}

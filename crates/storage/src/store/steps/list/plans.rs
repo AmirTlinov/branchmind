@@ -4,6 +4,8 @@ use super::super::*;
 use bm_core::ids::WorkspaceId;
 use rusqlite::params;
 
+const MAX_SEARCH_LIMIT: usize = 200;
+
 impl SqliteStore {
     pub fn list_plans(
         &self,
@@ -53,6 +55,56 @@ impl SqliteStore {
             },
         )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn search_plans(
+        &self,
+        workspace: &WorkspaceId,
+        request: PlansSearchRequest,
+    ) -> Result<PlansSearchResult, StoreError> {
+        let limit = request.limit.clamp(0, MAX_SEARCH_LIMIT);
+        if limit == 0 {
+            return Ok(PlansSearchResult {
+                plans: Vec::new(),
+                has_more: false,
+            });
+        }
+        let text = request.text.trim();
+        if text.is_empty() {
+            return Ok(PlansSearchResult {
+                plans: Vec::new(),
+                has_more: false,
+            });
+        }
+        let query_limit = limit.saturating_add(1) as i64;
+        let text_like = format!("%{text}%");
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, title, updated_at_ms
+            FROM plans
+            WHERE workspace = ?1
+              AND (
+                id LIKE ?2 COLLATE NOCASE
+                OR title LIKE ?2 COLLATE NOCASE
+                OR description LIKE ?2 COLLATE NOCASE
+                OR context LIKE ?2 COLLATE NOCASE
+              )
+            ORDER BY updated_at_ms DESC, id ASC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = stmt.query_map(params![workspace.as_str(), text_like, query_limit], |row| {
+            Ok(PlanSearchHit {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                updated_at_ms: row.get(2)?,
+            })
+        })?;
+        let mut plans = rows.collect::<Result<Vec<_>, _>>()?;
+        let has_more = plans.len() > limit;
+        plans.truncate(limit);
+        Ok(PlansSearchResult { plans, has_more })
     }
 
     pub fn count_plans(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {

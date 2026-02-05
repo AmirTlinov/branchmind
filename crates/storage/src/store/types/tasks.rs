@@ -116,3 +116,23 @@ pub struct TaskDetailPatchRequest {
     pub event_payload_json: String,
     pub record_undo: bool,
 }
+
+#[derive(Clone, Debug)]
+pub struct TasksSearchRequest {
+    pub text: String,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskSearchHit {
+    pub id: String,
+    pub plan_id: String,
+    pub title: String,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct TasksSearchResult {
+    pub tasks: Vec<TaskSearchHit>,
+    pub has_more: bool,
+}

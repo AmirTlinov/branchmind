@@ -4,6 +4,8 @@ use super::super::*;
 use bm_core::ids::WorkspaceId;
 use rusqlite::{params, params_from_iter};
 
+const MAX_SEARCH_LIMIT: usize = 200;
+
 impl SqliteStore {
     pub fn list_tasks(
         &self,
@@ -180,6 +182,57 @@ impl SqliteStore {
             },
         )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn search_tasks(
+        &self,
+        workspace: &WorkspaceId,
+        request: TasksSearchRequest,
+    ) -> Result<TasksSearchResult, StoreError> {
+        let limit = request.limit.clamp(0, MAX_SEARCH_LIMIT);
+        if limit == 0 {
+            return Ok(TasksSearchResult {
+                tasks: Vec::new(),
+                has_more: false,
+            });
+        }
+        let text = request.text.trim();
+        if text.is_empty() {
+            return Ok(TasksSearchResult {
+                tasks: Vec::new(),
+                has_more: false,
+            });
+        }
+        let query_limit = limit.saturating_add(1) as i64;
+        let text_like = format!("%{text}%");
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, parent_plan_id, title, updated_at_ms
+            FROM tasks
+            WHERE workspace = ?1
+              AND (
+                id LIKE ?2 COLLATE NOCASE
+                OR title LIKE ?2 COLLATE NOCASE
+                OR description LIKE ?2 COLLATE NOCASE
+                OR context LIKE ?2 COLLATE NOCASE
+              )
+            ORDER BY updated_at_ms DESC, id ASC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = stmt.query_map(params![workspace.as_str(), text_like, query_limit], |row| {
+            Ok(TaskSearchHit {
+                id: row.get(0)?,
+                plan_id: row.get(1)?,
+                title: row.get(2)?,
+                updated_at_ms: row.get(3)?,
+            })
+        })?;
+        let mut tasks = rows.collect::<Result<Vec<_>, _>>()?;
+        let has_more = tasks.len() > limit;
+        tasks.truncate(limit);
+        Ok(TasksSearchResult { tasks, has_more })
     }
 
     pub fn count_tasks(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {

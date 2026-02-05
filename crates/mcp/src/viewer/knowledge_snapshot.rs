@@ -271,7 +271,7 @@ pub(crate) fn build_knowledge_snapshot(
     }))
 }
 
-fn knowledge_key_task_id(anchor_id: &str, key: &str) -> String {
+pub(crate) fn knowledge_key_task_id(anchor_id: &str, key: &str) -> String {
     let anchor_id = anchor_id.trim();
     let key = key.trim();
     if anchor_id.is_empty() || key.is_empty() {

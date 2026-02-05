@@ -257,6 +257,57 @@ Notes:
     the underlying knowledge card via MCP (or future viewer endpoints).
   - `plan_checklist` is always `null` and `plan_checklists` is `{}`.
 
+### `GET /api/search`
+
+Returns a bounded server-side search result set for viewer navigation (Ctrl+K / command palette).
+
+This endpoint exists so navigation can scale **past** `/api/snapshot` truncation without increasing
+the snapshot caps. It is still read-only and local-only.
+
+Optional query params:
+
+- `q=<string>`: case-insensitive substring query.
+  - Empty/omitted query returns `items=[]`.
+- `workspace=<WorkspaceId>`: override workspace for this request (read-only view selection).
+- `project=<project_guard>`: switch the search to another active project (read-only).
+- `lens=work|knowledge`: select the search lens (default: `work`).
+- `limit=<int>`: maximum number of returned items (default: 60; clamped to 1..120).
+
+Response:
+
+```json
+{
+  "generated_at": "RFC3339",
+  "generated_at_ms": 0,
+  "lens": "work|knowledge",
+  "workspace": "string",
+  "workspace_exists": true,
+  "query": "string",
+  "limit": 60,
+  "items": [
+    { "kind": "plan", "id": "PLAN-123", "title": "string", "plan_id": "PLAN-123" },
+    { "kind": "task", "id": "TASK-456", "title": "string", "plan_id": "PLAN-123" },
+    { "kind": "anchor", "id": "a:viewer", "title": "string", "plan_id": "a:viewer" },
+    {
+      "kind": "knowledge_key",
+      "id": "KN:a:viewer:events-sse-live",
+      "title": "events-sse-live",
+      "plan_id": "a:viewer",
+      "anchor_id": "a:viewer",
+      "key": "events-sse-live",
+      "card_id": "CARD-KN-..."
+    }
+  ],
+  "has_more": false
+}
+```
+
+Notes:
+
+- Lens `work` searches plans/tasks by `id` and `title` (best-effort match).
+- Lens `knowledge` searches anchors/knowledge keys by `id`/`title`/`key` (best-effort match).
+- Ordering is stable (deterministic) and bounded; it is not a full-text index.
+
 ### `GET /api/events` (SSE)
 
 Returns a **local-only** Server-Sent Events stream of new store events for the selected workspace.
