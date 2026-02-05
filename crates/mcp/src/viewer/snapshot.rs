@@ -168,18 +168,24 @@ pub(crate) fn build_snapshot(
         .list_tasks(&workspace, MAX_TASKS, 0)
         .map_err(store_err("STORE_ERROR"))?;
 
+    let plan_ids = plans.iter().map(|plan| plan.id.clone()).collect::<Vec<_>>();
+    let counts_by_plan_raw = store
+        .count_tasks_by_status_for_plans(&workspace, &plan_ids)
+        .map_err(store_err("STORE_ERROR"))?;
+
     let mut counts_by_plan: BTreeMap<String, TaskCounts> = BTreeMap::new();
-    for task in tasks.iter() {
-        let entry = counts_by_plan
-            .entry(task.parent_plan_id.clone())
-            .or_default();
-        entry.total += 1;
-        match task.status.as_str() {
-            "DONE" => entry.done += 1,
-            "PARKED" => entry.parked += 1,
-            "TODO" => entry.backlog += 1,
-            _ => entry.active += 1,
+    for (plan_id, status_counts) in counts_by_plan_raw {
+        let mut counts = TaskCounts::default();
+        for (status, count) in status_counts {
+            counts.total += count;
+            match status.as_str() {
+                "DONE" => counts.done += count,
+                "PARKED" => counts.parked += count,
+                "TODO" => counts.backlog += count,
+                _ => counts.active += count,
+            }
         }
+        counts_by_plan.insert(plan_id, counts);
     }
 
     let focus_id = store.focus_get(&workspace).ok().flatten();
@@ -295,6 +301,8 @@ pub(crate) fn build_snapshot(
             })
         }),
         "primary_plan_id": primary_plan_id,
+        "plans_total": plan_total,
+        "tasks_total": task_total,
         "plans": plans_json,
         "plan_checklist": plan_checklist,
         "plan_checklists": Value::Object(plan_checklists),
@@ -347,6 +355,8 @@ fn empty_snapshot(
             "plan_id": Value::Null
         },
         "primary_plan_id": Value::Null,
+        "plans_total": 0,
+        "tasks_total": 0,
         "plans": [],
         "plan_checklist": Value::Null,
         "plan_checklists": {},
@@ -528,10 +538,101 @@ mod tests {
             runner_autostart: None,
         };
         let snapshot = build_snapshot(&mut store, &config, None).unwrap();
+        assert_eq!(
+            snapshot.get("plans_total").and_then(|v| v.as_i64()),
+            Some(1)
+        );
+        assert_eq!(
+            snapshot.get("tasks_total").and_then(|v| v.as_i64()),
+            Some(1)
+        );
         let plans = snapshot.get("plans").and_then(|v| v.as_array()).unwrap();
         let tasks = snapshot.get("tasks").and_then(|v| v.as_array()).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(tasks.len(), 1);
+        let plan_task_total = plans[0]
+            .get("task_counts")
+            .and_then(|v| v.get("total"))
+            .and_then(|v| v.as_i64());
+        assert_eq!(plan_task_total, Some(1));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_task_counts_remain_correct_when_tasks_truncated() {
+        let dir = temp_dir();
+        let mut store = SqliteStore::open(&dir).unwrap();
+        let workspace = WorkspaceId::try_new("demo".to_string()).unwrap();
+        store.workspace_init(&workspace).unwrap();
+
+        let (plan_id, _, _) = store
+            .create(
+                &workspace,
+                TaskCreateRequest {
+                    kind: TaskKind::Plan,
+                    title: "Goal Alpha".to_string(),
+                    parent_plan_id: None,
+                    description: None,
+                    contract: None,
+                    contract_json: None,
+                    event_type: "plan_created".to_string(),
+                    event_payload_json: "{}".to_string(),
+                },
+            )
+            .unwrap();
+
+        for idx in 0..(super::MAX_TASKS + 1) {
+            let _ = store
+                .create(
+                    &workspace,
+                    TaskCreateRequest {
+                        kind: TaskKind::Task,
+                        title: format!("Task {idx}"),
+                        parent_plan_id: Some(plan_id.clone()),
+                        description: None,
+                        contract: None,
+                        contract_json: None,
+                        event_type: "task_created".to_string(),
+                        event_payload_json: "{}".to_string(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let config = ViewerConfig {
+            storage_dir: dir.clone(),
+            workspace: Some("demo".to_string()),
+            project_guard: None,
+            port: 0,
+            runner_autostart_enabled: None,
+            runner_autostart_dry_run: false,
+            runner_autostart: None,
+        };
+        let snapshot = build_snapshot(&mut store, &config, None).unwrap();
+
+        assert_eq!(
+            snapshot
+                .get("truncated")
+                .and_then(|v| v.get("tasks"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            snapshot.get("tasks_total").and_then(|v| v.as_i64()),
+            Some((super::MAX_TASKS + 1) as i64)
+        );
+
+        let tasks = snapshot.get("tasks").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(tasks.len(), super::MAX_TASKS);
+
+        let plans = snapshot.get("plans").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(plans.len(), 1);
+        let plan_task_total = plans[0]
+            .get("task_counts")
+            .and_then(|v| v.get("total"))
+            .and_then(|v| v.as_i64());
+        assert_eq!(plan_task_total, Some((super::MAX_TASKS + 1) as i64));
+
         let _ = fs::remove_dir_all(&dir);
     }
 

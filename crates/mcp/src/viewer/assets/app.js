@@ -1177,18 +1177,27 @@ function renderSummary(snapshot) {
     nodes.focusSub.textContent = `${nodes.focusSub.textContent} • guard uninitialized`;
   }
 
-  nodes.planCount.textContent = snapshot.plans.length.toString();
+  const plansShown = snapshot.plans.length;
+  const plansTotal = Number.isFinite(snapshot.plans_total) ? snapshot.plans_total : plansShown;
+  nodes.planCount.textContent = plansTotal.toString();
   const activePlans = snapshot.plans.filter((plan) => plan.status !== "DONE").length;
-  nodes.planBreakdown.textContent = `${activePlans} active`;
+  nodes.planBreakdown.textContent = snapshot.truncated?.plans && plansTotal > plansShown
+    ? `${activePlans} active (shown)`
+    : `${activePlans} active`;
 
   const counts = sumTaskCounts(snapshot.plans);
-  nodes.taskCount.textContent = counts.total.toString();
-  nodes.taskBreakdown.textContent = [
-    formatCount("active", counts.active),
-    formatCount("backlog", counts.backlog),
-    formatCount("parked", counts.parked),
-    formatCount("done", counts.done),
-  ].join(" | ");
+  const tasksTotal = Number.isFinite(snapshot.tasks_total) ? snapshot.tasks_total : counts.total;
+  nodes.taskCount.textContent = tasksTotal.toString();
+  if (snapshot.truncated?.plans && tasksTotal > counts.total) {
+    nodes.taskBreakdown.textContent = "Partial map (plans truncated)";
+  } else {
+    nodes.taskBreakdown.textContent = [
+      formatCount("active", counts.active),
+      formatCount("backlog", counts.backlog),
+      formatCount("parked", counts.parked),
+      formatCount("done", counts.done),
+    ].join(" | ");
+  }
 }
 
 function renderGoals(snapshot) {
@@ -1986,7 +1995,36 @@ function buildDisplayModelFlagship(snapshot, view, lodOverride) {
 
   const nodes = planNodes.slice();
   const edges = [];
-  let warning = null;
+  const warnings = [];
+
+  const truncated = snapshot?.truncated || null;
+  if (truncated?.plans || truncated?.tasks) {
+    const bits = [];
+    if (truncated.plans) {
+      const shown = Array.isArray(snapshot?.plans) ? snapshot.plans.length : 0;
+      const total = Number.isFinite(snapshot?.plans_total) ? snapshot.plans_total : null;
+      if (total && total > shown) {
+        bits.push(`Карта неполная: целей ${total}, показано ${shown}.`);
+      } else {
+        bits.push(`Карта неполная: целей показано ${shown}.`);
+      }
+    }
+    if (truncated.tasks) {
+      const shown = Array.isArray(snapshot?.tasks) ? snapshot.tasks.length : 0;
+      const total = Number.isFinite(snapshot?.tasks_total)
+        ? snapshot.tasks_total
+        : sumTaskCounts(Array.isArray(snapshot?.plans) ? snapshot.plans : []).total;
+      if (total && total > shown) {
+        bits.push(`Карта неполная: задач ${total}, показано ${shown}.`);
+      } else {
+        bits.push("Карта неполная: список задач урезан.");
+      }
+    }
+    bits.push("Совет: Ctrl+K — быстрый прыжок.");
+    warnings.push(bits.join(" "));
+  }
+
+  const warning = () => (warnings.length ? warnings.join(" ") : null);
 
   if (lod === "overview") {
     const items = planNodes.map((plan) => ({
@@ -2000,7 +2038,7 @@ function buildDisplayModelFlagship(snapshot, view, lodOverride) {
       edges,
       lod,
       selectedPlanId,
-      warning,
+      warning: warning(),
       bounds: boundsOfNodes(planNodes),
     };
   }
@@ -2012,14 +2050,16 @@ function buildDisplayModelFlagship(snapshot, view, lodOverride) {
       edges,
       lod,
       selectedPlanId,
-      warning,
+      warning: warning(),
       bounds: boundsOfNodes(planNodes),
     };
   }
 
   const picked = pickTasksForPlan(snapshot, selectedPlanId);
   if (picked.truncated) {
-    warning = `Слишком много задач в цели (${picked.total}). Показано ${picked.tasks.length}.`;
+    warnings.push(
+      `Слишком много задач в цели (${picked.total}). Показано ${picked.tasks.length}.`
+    );
   }
   const { taskNodes, taskMetas } = buildTaskNodesFlagship(snapshot, planNode, picked.tasks);
 
@@ -2045,7 +2085,7 @@ function buildDisplayModelFlagship(snapshot, view, lodOverride) {
     edges,
     lod,
     selectedPlanId,
-    warning,
+    warning: warning(),
     bounds: boundsOfNodes(planNodes),
   };
 }

@@ -193,6 +193,8 @@ Response shape (high-level):
     "plan_id": "string|null"
   },
   "primary_plan_id": "string|null",
+  "plans_total": 0,
+  "tasks_total": 0,
   "plans": [
     {
       "id": "PLAN-###",
@@ -241,6 +243,9 @@ Notes:
   viewer allows read-only browsing, but the workspace has not been "locked" to a project yet. To
   initialize it, open the workspace via MCP once (any tool call that targets that workspace).
 - `plan_checklists` includes checklists for the listed plans (may be empty if none exist).
+- `plans_total` / `tasks_total` reflect the full workspace counts even when `plans` / `tasks` lists are truncated.
+- `plans[*].task_counts` are computed from the full task table (not from the truncated `tasks` list), so counts remain
+  correct even when `truncated.tasks=true`.
 - The viewer never writes to the store.
 - If a project guard mismatch is detected, the snapshot returns a typed error payload instead.
 - If `project=` is invalid or unknown, the snapshot returns a typed error payload.

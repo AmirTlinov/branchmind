@@ -2,7 +2,7 @@
 
 use super::super::*;
 use bm_core::ids::WorkspaceId;
-use rusqlite::params;
+use rusqlite::{params, params_from_iter};
 
 impl SqliteStore {
     pub fn list_tasks(
@@ -209,6 +209,57 @@ impl SqliteStore {
             let status: String = row.get(0)?;
             let count: i64 = row.get(1)?;
             out.insert(status, count);
+        }
+        Ok(out)
+    }
+
+    pub fn count_tasks_by_status_for_plans(
+        &self,
+        workspace: &WorkspaceId,
+        plan_ids: &[String],
+    ) -> Result<
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, i64>>,
+        StoreError,
+    > {
+        if plan_ids.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+
+        let mut placeholders = String::new();
+        for idx in 0..plan_ids.len() {
+            if idx > 0 {
+                placeholders.push(',');
+            }
+            placeholders.push('?');
+        }
+
+        let sql = format!(
+            r#"
+            SELECT parent_plan_id, status, COUNT(*)
+            FROM tasks
+            WHERE workspace = ? AND parent_plan_id IN ({placeholders})
+            GROUP BY parent_plan_id, status
+            "#,
+            placeholders = placeholders,
+        );
+
+        let mut params = Vec::<rusqlite::types::Value>::new();
+        params.push(rusqlite::types::Value::Text(workspace.as_str().to_string()));
+        for plan_id in plan_ids {
+            params.push(rusqlite::types::Value::Text(plan_id.clone()));
+        }
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(params))?;
+
+        let mut out = std::collections::BTreeMap::new();
+        while let Some(row) = rows.next()? {
+            let plan_id: String = row.get(0)?;
+            let status: String = row.get(1)?;
+            let count: i64 = row.get(2)?;
+            out.entry(plan_id)
+                .or_insert_with(std::collections::BTreeMap::new)
+                .insert(status, count);
         }
         Ok(out)
     }
