@@ -4363,6 +4363,73 @@ const paletteState = {
   index: 0,
 };
 
+const paletteRemote = {
+  timer: 0,
+  seq: 0,
+};
+
+const PALETTE_CONST = {
+  debounceMs: 140,
+  remoteLimit: 90,
+  remoteTimeoutMs: 3500,
+};
+
+function cancelPaletteRemoteSearch() {
+  paletteRemote.seq += 1;
+  if (paletteRemote.timer) {
+    window.clearTimeout(paletteRemote.timer);
+    paletteRemote.timer = 0;
+  }
+}
+
+async function fetchPaletteRemoteItems(query, expectedSeq) {
+  try {
+    const q = (query || "").trim();
+    if (!q) return null;
+    const response = await fetchWithTimeout(
+      workspaceUrlWithParams("/api/search", {
+        q,
+        lens: state.lens || "work",
+        limit: PALETTE_CONST.remoteLimit,
+      }),
+      { cache: "no-store" },
+      PALETTE_CONST.remoteTimeoutMs
+    );
+    const payload = await response.json();
+    if (expectedSeq !== paletteRemote.seq) return null;
+    if (!response.ok || ("error" in payload && payload.error)) return null;
+    const items = payload?.items;
+    if (!Array.isArray(items)) return null;
+    return items;
+  } catch {
+    return null;
+  }
+}
+
+function schedulePaletteRemoteSearch(query) {
+  if (!state.snapshot) return;
+  const q = (query || "").trim();
+
+  cancelPaletteRemoteSearch();
+  if (!q || q.length < 2) return;
+
+  const seq = paletteRemote.seq;
+  paletteRemote.timer = window.setTimeout(async () => {
+    paletteRemote.timer = 0;
+    if (!paletteIsOpen()) return;
+    if (!state.snapshot) return;
+
+    const items = await fetchPaletteRemoteItems(q, seq);
+    if (!items) return;
+    if (!paletteIsOpen()) return;
+    if (!state.snapshot) return;
+
+    paletteState.items = paletteRankAndSlice(state.snapshot, items, q);
+    paletteState.index = 0;
+    renderPaletteResults(paletteState.items);
+  }, PALETTE_CONST.debounceMs);
+}
+
 function cameraSnapshot() {
   const view = graphState.view;
   if (!view) return null;
@@ -4501,6 +4568,7 @@ function navForward() {
 
 function setPaletteOpen(open) {
   if (!nodes.palette || !nodes.paletteInput || !nodes.paletteResults) return;
+  cancelPaletteRemoteSearch();
   const desired = !!open;
   paletteState.open = desired;
   paletteState.items = [];
@@ -4526,30 +4594,10 @@ function paletteIsOpen() {
   return !!paletteState.open;
 }
 
-function paletteItemsFor(snapshot, query) {
+function paletteRankAndSlice(snapshot, items, query) {
   const q = (query || "").trim();
   const needle = q.toLowerCase();
   const selectedPlanId = state.selectedPlanId || snapshot.primary_plan_id || "";
-
-  const items = [];
-  (snapshot.plans || []).forEach((plan) => {
-    if (!plan || !plan.id) return;
-    items.push({
-      kind: "plan",
-      id: plan.id,
-      title: plan.title || plan.id,
-      plan_id: plan.id,
-    });
-  });
-  (snapshot.tasks || []).forEach((task) => {
-    if (!task || !task.id) return;
-    items.push({
-      kind: "task",
-      id: task.id,
-      title: task.title || task.id,
-      plan_id: task.plan_id || "",
-    });
-  });
 
   const scoreOf = (item) => {
     if (!needle) return 0;
@@ -4568,13 +4616,13 @@ function paletteItemsFor(snapshot, query) {
         const title = (item.title || "").toLowerCase();
         return id.includes(needle) || title.includes(needle);
       })
-    : items;
+    : items.slice();
 
   filtered.sort((a, b) => {
     const diff = scoreOf(a) - scoreOf(b);
     if (diff !== 0) return diff;
-    const planBiasA = a.kind === "plan" ? -1 : 0;
-    const planBiasB = b.kind === "plan" ? -1 : 0;
+    const planBiasA = a.kind === "plan" || a.kind === "anchor" ? -1 : 0;
+    const planBiasB = b.kind === "plan" || b.kind === "anchor" ? -1 : 0;
     if (planBiasA !== planBiasB) return planBiasA - planBiasB;
     const inPlanA = a.plan_id === selectedPlanId ? -1 : 0;
     const inPlanB = b.plan_id === selectedPlanId ? -1 : 0;
@@ -4583,6 +4631,31 @@ function paletteItemsFor(snapshot, query) {
   });
 
   return filtered.slice(0, 10);
+}
+
+function paletteItemsFor(snapshot, query) {
+  const isKnowledge = normalizeLens(snapshot?.lens || state.lens) === "knowledge";
+
+  const items = [];
+  (snapshot.plans || []).forEach((plan) => {
+    if (!plan || !plan.id) return;
+    items.push({
+      kind: isKnowledge ? "anchor" : "plan",
+      id: plan.id,
+      title: plan.title || plan.id,
+      plan_id: plan.id,
+    });
+  });
+  (snapshot.tasks || []).forEach((task) => {
+    if (!task || !task.id) return;
+    items.push({
+      kind: isKnowledge ? "knowledge_key" : "task",
+      id: task.id,
+      title: task.title || task.id,
+      plan_id: task.plan_id || "",
+    });
+  });
+  return paletteRankAndSlice(snapshot, items, query);
 }
 
 function renderPaletteResults(items) {
@@ -4612,13 +4685,29 @@ function renderPaletteResults(items) {
     id.textContent = item.id;
     const kind = document.createElement("span");
     kind.className = "badge accent";
-    kind.textContent = item.kind === "plan" ? "PLAN" : "TASK";
+    switch (item.kind) {
+      case "plan":
+        kind.textContent = "PLAN";
+        break;
+      case "task":
+        kind.textContent = "TASK";
+        break;
+      case "anchor":
+        kind.textContent = "ANCHOR";
+        break;
+      case "knowledge_key":
+        kind.textContent = "KEY";
+        break;
+      default:
+        kind.textContent = ((item.kind || "ITEM") + "").toUpperCase();
+        break;
+    }
     meta.append(id, kind);
     btn.append(title, meta);
     btn.addEventListener("click", () => {
       setPaletteOpen(false);
       if (!state.snapshot) return;
-      searchFlagship(item.id);
+      jumpToPaletteItem(state.snapshot, item);
     });
     nodes.paletteResults.append(btn);
   });
@@ -4787,6 +4876,97 @@ function searchFlagship(query) {
   }
 }
 
+function jumpToPaletteItem(snapshot, item) {
+  if (UI_MODE !== "flagship") return;
+  if (!snapshot || !item) return;
+
+  const id = (item.id || "").trim();
+  if (!id) return;
+
+  const inSnapshot =
+    (snapshot.plans || []).some((p) => p && p.id === id) ||
+    (snapshot.tasks || []).some((t) => t && t.id === id);
+  if (inSnapshot) {
+    searchFlagship(id);
+    return;
+  }
+
+  const kind = (item.kind || "").trim();
+
+  if (kind === "plan" || kind === "anchor") {
+    clearLocalGraph();
+    state.selectedPlanId = id;
+    renderGraphFlagship(snapshot);
+
+    const node = layoutCache.nodesById.get(id);
+    let camera = null;
+    if (node) {
+      camera = {
+        offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.05,
+        offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.05,
+        scale: 1.05,
+      };
+      startCameraAnimation(camera, 420);
+    }
+
+    const fallback = {
+      id,
+      title: item.title || id,
+      description: null,
+      context: null,
+      status: item.anchor_status || "ACTIVE",
+      priority: "MEDIUM",
+      updated_at_ms: snapshot.generated_at_ms || Date.now(),
+      task_counts: { total: 0, done: 0, active: 0, backlog: 0, parked: 0 },
+      kind: item.anchor_kind || "anchor",
+      refs: [],
+      aliases: [],
+      parent_id: null,
+      depends_on: [],
+    };
+    renderPlanDetail(snapshot, fallback);
+    pushNavEntry(camera ? { camera } : null);
+    return;
+  }
+
+  if (kind === "task" || kind === "knowledge_key") {
+    if (item.plan_id) state.selectedPlanId = item.plan_id;
+    renderGraphFlagship(snapshot);
+
+    const node = layoutCache.nodesById.get(id);
+    let camera = null;
+    if (node) {
+      camera = {
+        offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.45,
+        offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.45,
+        scale: 1.45,
+      };
+      startCameraAnimation(camera, 420);
+    }
+
+    const key = item.key || item.title || id;
+    const anchorId = item.anchor_id || item.plan_id || "";
+    const cardId = item.card_id || item.context || null;
+    const fallback = {
+      id,
+      plan_id: item.plan_id || "",
+      title: item.title || id,
+      description: null,
+      context: cardId,
+      status: "TODO",
+      priority: "MEDIUM",
+      blocked: false,
+      updated_at_ms: snapshot.generated_at_ms || Date.now(),
+      parked_until_ts_ms: null,
+      card_id: cardId,
+      key,
+      anchor_id: anchorId,
+    };
+    renderTaskDetail(snapshot, fallback);
+    pushNavEntry(camera ? { camera } : null);
+  }
+}
+
 if (nodes.btnBack) nodes.btnBack.addEventListener("click", () => navBack());
 if (nodes.btnForward) nodes.btnForward.addEventListener("click", () => navForward());
 if (nodes.btnHome) nodes.btnHome.addEventListener("click", () => homeFlagship());
@@ -4818,9 +4998,11 @@ if (nodes.palette) {
 if (nodes.paletteInput) {
   nodes.paletteInput.addEventListener("input", () => {
     if (!state.snapshot) return;
-    paletteState.items = paletteItemsFor(state.snapshot, nodes.paletteInput.value || "");
+    const q = nodes.paletteInput.value || "";
+    paletteState.items = paletteItemsFor(state.snapshot, q);
     paletteState.index = 0;
     renderPaletteResults(paletteState.items);
+    schedulePaletteRemoteSearch(q);
   });
 
   nodes.paletteInput.addEventListener("keydown", (event) => {
@@ -4846,7 +5028,8 @@ if (nodes.paletteInput) {
       const item = paletteState.items[paletteState.index];
       if (!item) return;
       setPaletteOpen(false);
-      searchFlagship(item.id);
+      if (!state.snapshot) return;
+      jumpToPaletteItem(state.snapshot, item);
     }
   });
 }
