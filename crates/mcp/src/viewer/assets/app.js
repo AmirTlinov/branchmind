@@ -82,6 +82,111 @@ const navMutation = { applying: false };
 const snapshotMutation = { pending: false, queued: false, timer: 0, lastRequestedAt: 0 };
 const liveMutation = { source: null, open: false, lastEventId: null, lastMessageAt: 0, failures: 0 };
 
+const graphOverlay = {
+  contextKey: null,
+  plans: new Map(),
+  tasks: new Map(),
+  maxPlans: 800,
+  maxTasks: 4500,
+};
+
+function graphOverlayContextKey(lensOverride) {
+  const project = ((state.projectOverride || state.currentProjectGuard || "current") + "").trim() || "current";
+  const workspace = ((state.workspaceOverride || "auto") + "").trim() || "auto";
+  const lens = normalizeLens(lensOverride || state.lens || "work");
+  return `${project}::${workspace}::${lens}`;
+}
+
+function clearGraphOverlay() {
+  graphOverlay.contextKey = null;
+  graphOverlay.plans.clear();
+  graphOverlay.tasks.clear();
+}
+
+function ensureGraphOverlayContext(lensOverride) {
+  const key = graphOverlayContextKey(lensOverride);
+  if (graphOverlay.contextKey && graphOverlay.contextKey === key) return;
+  clearGraphOverlay();
+  graphOverlay.contextKey = key;
+}
+
+function overlayTouch(map, id, value) {
+  map.delete(id);
+  map.set(id, value);
+}
+
+function pruneOverlayMap(map, maxSize) {
+  while (map.size > maxSize) {
+    const first = map.keys().next();
+    if (first.done) break;
+    map.delete(first.value);
+  }
+}
+
+function ingestGraphOverlay(payload) {
+  if (!payload || typeof payload !== "object") return;
+  ensureGraphOverlayContext(payload?.lens);
+
+  const plan = payload.plan;
+  if (plan && plan.id) {
+    overlayTouch(graphOverlay.plans, plan.id, plan);
+  }
+
+  const tasks = payload.tasks;
+  if (Array.isArray(tasks)) {
+    tasks.forEach((task) => {
+      if (!task || !task.id) return;
+      overlayTouch(graphOverlay.tasks, task.id, task);
+    });
+  }
+
+  pruneOverlayMap(graphOverlay.plans, graphOverlay.maxPlans);
+  pruneOverlayMap(graphOverlay.tasks, graphOverlay.maxTasks);
+}
+
+function mergeGraphOverlay(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return snapshot;
+  ensureGraphOverlayContext(snapshot?.lens);
+
+  const basePlans = Array.isArray(snapshot.plans) ? snapshot.plans : [];
+  const baseTasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
+
+  const planOverlay = graphOverlay.plans;
+  const taskOverlay = graphOverlay.tasks;
+
+  const seenPlans = new Set();
+  const plans = [];
+  basePlans.forEach((plan) => {
+    if (!plan || !plan.id) return;
+    seenPlans.add(plan.id);
+    plans.push(planOverlay.get(plan.id) || plan);
+  });
+  Array.from(planOverlay.keys())
+    .filter((id) => !seenPlans.has(id))
+    .sort((a, b) => a.localeCompare(b))
+    .forEach((id) => {
+      const plan = planOverlay.get(id);
+      if (plan) plans.push(plan);
+    });
+
+  const seenTasks = new Set();
+  const tasks = [];
+  baseTasks.forEach((task) => {
+    if (!task || !task.id) return;
+    seenTasks.add(task.id);
+    tasks.push(taskOverlay.get(task.id) || task);
+  });
+  Array.from(taskOverlay.keys())
+    .filter((id) => !seenTasks.has(id))
+    .sort((a, b) => a.localeCompare(b))
+    .forEach((id) => {
+      const task = taskOverlay.get(id);
+      if (task) tasks.push(task);
+    });
+
+  return { ...snapshot, plans, tasks };
+}
+
 const PROJECT_STORAGE_KEY = "bm_viewer_project";
 const WORKSPACE_STORAGE_KEY = "bm_viewer_workspace";
 const WORKSPACE_STORAGE_PREFIX = "bm_viewer_workspace:";
@@ -601,6 +706,43 @@ async function fetchJson(path) {
     throw new Error(`${message}${recovery}`.trim());
   }
   return payload;
+}
+
+async function fetchGraphPlan(planId, opts) {
+  const id = (planId || "").trim();
+  if (!id) throw new Error("plan_id: missing");
+  const params = { lens: "work" };
+  if (opts && typeof opts === "object") {
+    if (opts.cursor) params.cursor = opts.cursor;
+    if (typeof opts.limit === "number") params.limit = opts.limit;
+  }
+  const url = workspaceUrlWithParams(`/api/graph/plan/${id}`, params);
+  return await fetchJson(url);
+}
+
+async function fetchGraphCluster(clusterId, opts) {
+  const id = (clusterId || "").trim();
+  if (!id) throw new Error("cluster_id: missing");
+  const params = { lens: "work" };
+  if (opts && typeof opts === "object") {
+    if (opts.cursor) params.cursor = opts.cursor;
+    if (typeof opts.limit === "number") params.limit = opts.limit;
+  }
+  const url = workspaceUrlWithParams(`/api/graph/cluster/${id}`, params);
+  return await fetchJson(url);
+}
+
+async function fetchGraphLocal(nodeId, opts) {
+  const id = (nodeId || "").trim();
+  if (!id) throw new Error("node_id: missing");
+  const params = { lens: "work" };
+  if (opts && typeof opts === "object") {
+    if (opts.cursor) params.cursor = opts.cursor;
+    if (typeof opts.limit === "number") params.limit = opts.limit;
+    if (typeof opts.hops === "number") params.hops = clamp(opts.hops, 1, 2);
+  }
+  const url = workspaceUrlWithParams(`/api/graph/local/${id}`, params);
+  return await fetchJson(url);
 }
 
 async function postJson(path, body) {
@@ -3765,39 +3907,85 @@ function openClusterDetail(snapshot, clusterNode) {
   );
 
   const members = Array.isArray(clusterNode.members) ? clusterNode.members.slice() : [];
-  const memberTasks = (snapshot.tasks || [])
-    .filter((task) => members.includes(task.id))
-    .slice()
-    .sort((a, b) => statusRank(a.status) - statusRank(b.status) || (a.id || "").localeCompare(b.id || ""))
-    .slice(0, 10);
-  const list = memberTasks.length
-    ? memberTasks.map((task) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "list-item";
-        btn.style.transform = "none";
-        const title = document.createElement("div");
-        title.className = "item-title";
-        title.textContent = task.title || task.id;
-        const meta = document.createElement("div");
-        meta.className = "item-meta";
-        const id = document.createElement("span");
-        id.className = "badge dim";
-        id.textContent = task.id;
-        const status = document.createElement("span");
-        status.className = "badge accent";
-        status.textContent = formatStatus(task.status);
-        meta.append(id, status);
-        btn.append(title, meta);
-        btn.addEventListener("click", () => renderTaskDetail(snapshot, task));
-        return btn;
-      })
-    : [renderDetailText(null, "Нет задач в этом кластере.")];
-  sections.push(renderDetailSection("Задачи (топ 10)", list));
+  const renderTaskButton = (task, sourceSnapshot) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "list-item";
+    btn.style.transform = "none";
+    const title = document.createElement("div");
+    title.className = "item-title";
+    title.textContent = task.title || task.id;
+    const meta = document.createElement("div");
+    meta.className = "item-meta";
+    const id = document.createElement("span");
+    id.className = "badge dim";
+    id.textContent = task.id;
+    const status = document.createElement("span");
+    status.className = "badge accent";
+    status.textContent = formatStatus(task.status);
+    meta.append(id, status);
+    btn.append(title, meta);
+    btn.addEventListener("click", () => renderTaskDetail(sourceSnapshot, task));
+    return btn;
+  };
+
+  const sortTasks = (tasks) =>
+    tasks
+      .slice()
+      .sort(
+        (a, b) =>
+          statusRank(a.status) - statusRank(b.status) || (a.id || "").localeCompare(b.id || "")
+      )
+      .slice(0, 10);
+
+  const localTasks = sortTasks((snapshot.tasks || []).filter((task) => members.includes(task.id)));
+  const tasksSection = renderDetailSection(
+    "Задачи (топ 10)",
+    localTasks.length ? localTasks.map((task) => renderTaskButton(task, snapshot)) : [renderDetailText(null, "Нет задач в этом кластере.")]
+  );
+  sections.push(tasksSection);
 
   nodes.detailBody.append(...sections);
   setDetailVisible(true);
   if (!isCurrentDetail(token)) return;
+
+  // Best-effort "cluster expansion" for truncated snapshots:
+  // when the plan task list is incomplete, fetch a bounded cluster page and merge it into the overlay.
+  const lens = normalizeLens(snapshot?.lens || state.lens);
+  if (lens !== "work") return;
+  const planId = (clusterNode.plan_id || "").trim();
+  const plan = planId ? (snapshot.plans || []).find((p) => p && p.id === planId) : null;
+  const expectedTotal = typeof plan?.task_counts?.total === "number" ? plan.task_counts.total : null;
+  const presentTotal = planId
+    ? (snapshot.tasks || []).filter((task) => (task?.plan_id || "").trim() === planId).length
+    : 0;
+  const expectedBounded =
+    expectedTotal !== null ? Math.min(expectedTotal, GRAPH_LIMITS.maxTasksInPlan) : null;
+  const likelyTruncated =
+    expectedBounded !== null && expectedBounded > 0 && presentTotal < expectedBounded;
+  if (!likelyTruncated) return;
+
+  void (async () => {
+    try {
+      const payload = await fetchGraphCluster(clusterNode.id, { limit: 420 });
+      ingestGraphOverlay(payload);
+      const merged = mergeGraphOverlay(state.snapshot || snapshot);
+      render(merged);
+      if (!isCurrentDetail(token)) return;
+
+      const remoteTasks = Array.isArray(payload?.tasks) ? sortTasks(payload.tasks) : [];
+      if (remoteTasks.length === 0) return;
+
+      // Replace the section content in-place (keep header).
+      while (tasksSection.childNodes.length > 1) {
+        tasksSection.removeChild(tasksSection.lastChild);
+      }
+      const sourceSnapshot = state.snapshot || merged || snapshot;
+      remoteTasks.forEach((task) => tasksSection.append(renderTaskButton(task, sourceSnapshot)));
+    } catch {
+      // ignore remote failures
+    }
+  })();
 }
 
 function updateHud(snapshot) {
@@ -4228,7 +4416,7 @@ async function loadSnapshot() {
       renderError(payload);
       return;
     }
-    render(payload);
+    render(mergeGraphOverlay(payload));
   } catch (err) {
     renderError({
       error: { code: "NETWORK_ERROR", message: "Snapshot unavailable." },
@@ -4269,6 +4457,7 @@ if (nodes.project) {
     state.selectedPlanId = null;
     state.detailSelection = null;
     clearLocalGraph();
+    clearGraphOverlay();
     state.navStack = [];
     state.navIndex = -1;
     updateNavButtons();
@@ -4295,6 +4484,7 @@ if (nodes.workspace) {
     state.selectedPlanId = null;
     state.detailSelection = null;
     clearLocalGraph();
+    clearGraphOverlay();
     state.navStack = [];
     state.navIndex = -1;
     updateNavButtons();
@@ -4313,6 +4503,7 @@ if (nodes.lens) {
     state.selectedPlanId = null;
     state.detailSelection = null;
     clearLocalGraph();
+    clearGraphOverlay();
     graphState.view = null;
     graphState.model = null;
     graphState.displayKey = null;
@@ -4707,7 +4898,7 @@ function renderPaletteResults(items) {
     btn.addEventListener("click", () => {
       setPaletteOpen(false);
       if (!state.snapshot) return;
-      jumpToPaletteItem(state.snapshot, item);
+      void jumpToPaletteItem(state.snapshot, item);
     });
     nodes.paletteResults.append(btn);
   });
@@ -4876,7 +5067,7 @@ function searchFlagship(query) {
   }
 }
 
-function jumpToPaletteItem(snapshot, item) {
+async function jumpToPaletteItem(snapshot, item) {
   if (UI_MODE !== "flagship") return;
   if (!snapshot || !item) return;
 
@@ -4892,11 +5083,52 @@ function jumpToPaletteItem(snapshot, item) {
   }
 
   const kind = (item.kind || "").trim();
+  const lens = normalizeLens(snapshot?.lens || state.lens);
+
+  // Hierarchical subgraph materialization:
+  // - For plans: fetch a bounded plan-scoped page.
+  // - For tasks: fetch a bounded local graph (root + cluster neighbors).
+  // This keeps jumps usable even when /api/snapshot is truncated.
+  if (lens === "work") {
+    if ((kind === "plan" || id.startsWith("PLAN-")) && id.startsWith("PLAN-")) {
+      clearLocalGraph();
+      state.selectedPlanId = id;
+      try {
+        const payload = await fetchGraphPlan(id, { limit: GRAPH_LIMITS.maxTasksInPlan });
+        ingestGraphOverlay(payload);
+        const merged = mergeGraphOverlay(state.snapshot || snapshot);
+        render(merged);
+      } catch {
+        // fall through to cheap fallback
+      }
+      if ((state.snapshot?.plans || []).some((p) => p && p.id === id)) {
+        searchFlagship(id);
+        return;
+      }
+    }
+
+    if ((kind === "task" || id.startsWith("TASK-")) && id.startsWith("TASK-")) {
+      try {
+        const payload = await fetchGraphLocal(id, { hops: 2, limit: 240 });
+        ingestGraphOverlay(payload);
+        const merged = mergeGraphOverlay(state.snapshot || snapshot);
+        render(merged);
+      } catch {
+        // fall through to cheap fallback
+      }
+      if ((state.snapshot?.tasks || []).some((t) => t && t.id === id)) {
+        searchFlagship(id);
+        return;
+      }
+    }
+  }
+
+  const currentSnapshot = state.snapshot || snapshot;
 
   if (kind === "plan" || kind === "anchor") {
     clearLocalGraph();
     state.selectedPlanId = id;
-    renderGraphFlagship(snapshot);
+    renderGraphFlagship(currentSnapshot);
 
     const node = layoutCache.nodesById.get(id);
     let camera = null;
@@ -4916,7 +5148,7 @@ function jumpToPaletteItem(snapshot, item) {
       context: null,
       status: item.anchor_status || "ACTIVE",
       priority: "MEDIUM",
-      updated_at_ms: snapshot.generated_at_ms || Date.now(),
+      updated_at_ms: currentSnapshot.generated_at_ms || Date.now(),
       task_counts: { total: 0, done: 0, active: 0, backlog: 0, parked: 0 },
       kind: item.anchor_kind || "anchor",
       refs: [],
@@ -4924,14 +5156,14 @@ function jumpToPaletteItem(snapshot, item) {
       parent_id: null,
       depends_on: [],
     };
-    renderPlanDetail(snapshot, fallback);
+    renderPlanDetail(currentSnapshot, fallback);
     pushNavEntry(camera ? { camera } : null);
     return;
   }
 
   if (kind === "task" || kind === "knowledge_key") {
     if (item.plan_id) state.selectedPlanId = item.plan_id;
-    renderGraphFlagship(snapshot);
+    renderGraphFlagship(currentSnapshot);
 
     const node = layoutCache.nodesById.get(id);
     let camera = null;
@@ -4956,13 +5188,13 @@ function jumpToPaletteItem(snapshot, item) {
       status: "TODO",
       priority: "MEDIUM",
       blocked: false,
-      updated_at_ms: snapshot.generated_at_ms || Date.now(),
+      updated_at_ms: currentSnapshot.generated_at_ms || Date.now(),
       parked_until_ts_ms: null,
       card_id: cardId,
       key,
       anchor_id: anchorId,
     };
-    renderTaskDetail(snapshot, fallback);
+    renderTaskDetail(currentSnapshot, fallback);
     pushNavEntry(camera ? { camera } : null);
   }
 }
@@ -5029,7 +5261,7 @@ if (nodes.paletteInput) {
       if (!item) return;
       setPaletteOpen(false);
       if (!state.snapshot) return;
-      jumpToPaletteItem(state.snapshot, item);
+      void jumpToPaletteItem(state.snapshot, item);
     }
   });
 }
