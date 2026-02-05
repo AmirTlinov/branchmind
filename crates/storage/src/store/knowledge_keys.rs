@@ -161,6 +161,58 @@ pub(in crate::store) fn upsert_knowledge_keys_for_card_tx(
 }
 
 impl SqliteStore {
+    pub fn count_knowledge_keys(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_keys WHERE workspace=?1",
+            params![workspace.as_str()],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn count_knowledge_keys_for_anchors(
+        &self,
+        workspace: &WorkspaceId,
+        anchor_ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, i64>, StoreError> {
+        if anchor_ids.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+
+        let mut placeholders = String::new();
+        for idx in 0..anchor_ids.len() {
+            if idx > 0 {
+                placeholders.push(',');
+            }
+            placeholders.push('?');
+        }
+
+        let sql = format!(
+            r#"
+            SELECT anchor_id, COUNT(*)
+            FROM knowledge_keys
+            WHERE workspace = ? AND anchor_id IN ({placeholders})
+            GROUP BY anchor_id
+            "#,
+            placeholders = placeholders,
+        );
+
+        let mut params = Vec::<rusqlite::types::Value>::new();
+        params.push(rusqlite::types::Value::Text(workspace.as_str().to_string()));
+        for anchor_id in anchor_ids {
+            params.push(rusqlite::types::Value::Text(anchor_id.clone()));
+        }
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(params))?;
+        let mut out = std::collections::BTreeMap::new();
+        while let Some(row) = rows.next()? {
+            let anchor_id: String = row.get(0)?;
+            let count: i64 = row.get::<_, i64>(1)?.max(0);
+            out.insert(anchor_id, count);
+        }
+        Ok(out)
+    }
+
     pub fn knowledge_keys_list_any(
         &mut self,
         workspace: &WorkspaceId,

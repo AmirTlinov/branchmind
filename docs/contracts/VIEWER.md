@@ -172,11 +172,13 @@ Optional query params:
 
 - `workspace=<WorkspaceId>`: override workspace for this request (read-only view selection).
 - `project=<project_guard>`: switch the snapshot to another active project (read-only).
+- `lens=work|knowledge`: select the snapshot lens (default: `work`).
 
 Response shape (high-level):
 
 ```json
 {
+  "lens": "work|knowledge",
   "workspace": "string",
   "workspace_exists": true,
   "project_guard": {
@@ -249,6 +251,11 @@ Notes:
 - The viewer never writes to the store.
 - If a project guard mismatch is detected, the snapshot returns a typed error payload instead.
 - If `project=` is invalid or unknown, the snapshot returns a typed error payload.
+- Lens `knowledge` is a viewer-only “meaning map” view:
+  - `plans[*]` represent **anchors** (ids like `a:viewer`).
+  - `tasks[*]` represent **knowledge keys** (ids like `KN:a:viewer:events-sse-live`) and include `card_id` for opening
+    the underlying knowledge card via MCP (or future viewer endpoints).
+  - `plan_checklist` is always `null` and `plan_checklists` is `{}`.
 
 ### `GET /api/events` (SSE)
 

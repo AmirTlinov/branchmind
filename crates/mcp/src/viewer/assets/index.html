@@ -33,12 +33,12 @@
               <div id="focus-sub" class="summary-sub">-</div>
             </div>
             <div class="summary-card">
-              <div class="summary-label">Plans</div>
+              <div id="summary-plan-label" class="summary-label">Plans</div>
               <div id="plan-count" class="summary-value">-</div>
               <div id="plan-breakdown" class="summary-sub">-</div>
             </div>
             <div class="summary-card">
-              <div class="summary-label">Tasks</div>
+              <div id="summary-task-label" class="summary-label">Tasks</div>
               <div id="task-count" class="summary-value">-</div>
               <div id="task-breakdown" class="summary-sub">-</div>
             </div>
@@ -47,24 +47,24 @@
           <section class="columns">
             <div class="column">
               <div class="section-head">
-                <h2>Goals</h2>
-                <p>Active plans at a glance.</p>
+                <h2 id="goals-heading">Goals</h2>
+                <p id="goals-subheading">Active plans at a glance.</p>
               </div>
               <div id="goal-list" class="list"></div>
             </div>
 
             <div class="column">
               <div class="section-head">
-                <h2>Plan</h2>
-                <p>Selected goal checklist.</p>
+                <h2 id="plan-heading">Plan</h2>
+                <p id="plan-subheading">Selected goal checklist.</p>
               </div>
               <div id="plan-checklist" class="list list-tight"></div>
             </div>
 
             <div class="column">
               <div class="section-head">
-                <h2>Tasks</h2>
-                <p>Workstream for the selected goal.</p>
+                <h2 id="tasks-heading">Tasks</h2>
+                <p id="tasks-subheading">Workstream for the selected goal.</p>
               </div>
               <div id="task-list" class="list"></div>
             </div>
@@ -82,6 +82,13 @@
             <div class="meta-item">
               <span class="meta-label">Repo</span>
               <select id="project" class="meta-select" aria-label="Repo"></select>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Lens</span>
+              <select id="lens" class="meta-select" aria-label="Lens">
+                <option value="work">Work</option>
+                <option value="knowledge">Knowledge</option>
+              </select>
             </div>
             <div class="meta-item">
               <span class="meta-label">Updated</span>

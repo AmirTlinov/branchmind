@@ -1,6 +1,7 @@
 // Source of truth for the viewer UI (no TS build step).
 const state = {
   snapshot: null,
+  lens: "work",
   selectedPlanId: null,
   detailToken: 0,
   detailSelection: null,
@@ -81,6 +82,7 @@ const liveMutation = { source: null, open: false, lastEventId: null, lastMessage
 const PROJECT_STORAGE_KEY = "bm_viewer_project";
 const WORKSPACE_STORAGE_KEY = "bm_viewer_workspace";
 const WORKSPACE_STORAGE_PREFIX = "bm_viewer_workspace:";
+const LENS_STORAGE_KEY = "bm_viewer_lens";
 
 function queryFlag(name) {
   try {
@@ -100,6 +102,12 @@ function queryParam(name) {
   } catch {
     return null;
   }
+}
+
+function normalizeLens(value) {
+  const raw = ((value || "") + "").trim().toLowerCase();
+  if (raw === "knowledge") return "knowledge";
+  return "work";
 }
 
 // UI mode: default = flagship. Use `?ui=legacy` to keep the previous graph renderer.
@@ -191,6 +199,31 @@ function loadWorkspaceOverrideFromStorage() {
     stored = null;
   }
   state.workspaceOverride = stored ? stored.trim() || null : null;
+}
+
+function setLens(value) {
+  const next = normalizeLens(value);
+  state.lens = next;
+  try {
+    localStorage.setItem(LENS_STORAGE_KEY, next);
+  } catch {
+    // ignore storage failures
+  }
+  if (nodes.lens) {
+    nodes.lens.value = next;
+  }
+  applyLensCopy();
+}
+
+function loadLensFromStorage() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(LENS_STORAGE_KEY);
+  } catch {
+    stored = null;
+  }
+  const fromQuery = queryParam("lens");
+  setLens(fromQuery || stored || state.lens || "work");
 }
 
 async function loadProjects() {
@@ -288,6 +321,7 @@ async function loadWorkspaces() {
 
 const nodes = {
   project: document.getElementById("project"),
+  lens: document.getElementById("lens"),
   workspace: document.getElementById("workspace"),
   updated: document.getElementById("updated"),
   runnerStatus: document.getElementById("runner-status"),
@@ -295,10 +329,18 @@ const nodes = {
   runnerAutostart: document.getElementById("runner-autostart"),
   focus: document.getElementById("focus"),
   focusSub: document.getElementById("focus-sub"),
+  summaryPlanLabel: document.getElementById("summary-plan-label"),
   planCount: document.getElementById("plan-count"),
   planBreakdown: document.getElementById("plan-breakdown"),
+  summaryTaskLabel: document.getElementById("summary-task-label"),
   taskCount: document.getElementById("task-count"),
   taskBreakdown: document.getElementById("task-breakdown"),
+  goalsHeading: document.getElementById("goals-heading"),
+  goalsSubheading: document.getElementById("goals-subheading"),
+  planHeading: document.getElementById("plan-heading"),
+  planSubheading: document.getElementById("plan-subheading"),
+  tasksHeading: document.getElementById("tasks-heading"),
+  tasksSubheading: document.getElementById("tasks-subheading"),
   goalList: document.getElementById("goal-list"),
   planChecklist: document.getElementById("plan-checklist"),
   taskList: document.getElementById("task-list"),
@@ -843,7 +885,58 @@ function renderStepsBlock(steps) {
   return nodes;
 }
 
+function renderAnchorDetail(snapshot, anchor) {
+  const token = startDetailLoad("plan", anchor.id);
+  void token;
+  nodes.detailKicker.textContent = "Anchor";
+  nodes.detailTitle.textContent = anchor.title || anchor.id;
+
+  const total = typeof anchor?.task_counts?.total === "number" ? anchor.task_counts.total : 0;
+  renderDetailMeta([
+    `ID: ${anchor.id}`,
+    `Kind: ${(anchor.kind || anchor.priority || "anchor").toString()}`,
+    `Status: ${(anchor.status || "").toString() || "—"}`,
+    `Updated: ${formatDate(anchor.updated_at_ms)}`,
+    `Keys: ${total}`,
+  ]);
+
+  clear(nodes.detailBody);
+  nodes.detailBody.append(
+    renderDetailSection("Anchor", [
+      renderDetailText(anchor.description, "No anchor description yet."),
+    ])
+  );
+
+  const depends = Array.isArray(anchor.depends_on) ? anchor.depends_on : [];
+  if (depends.length) {
+    const items = depends.slice(0, 32).map((dep) => {
+      const id = (dep || "").trim();
+      const row = document.createElement("div");
+      row.className = "list-item";
+      row.textContent = id || "(invalid)";
+      row.addEventListener("click", () => {
+        if (!id) return;
+        state.selectedPlanId = id;
+        render(snapshot);
+        const next = (snapshot.plans || []).find((p) => p && p.id === id);
+        if (next) {
+          renderAnchorDetail(snapshot, next);
+        }
+      });
+      return row;
+    });
+    nodes.detailBody.append(renderDetailSection("Depends on", items));
+  }
+
+  setDetailVisible(true);
+}
+
 function renderPlanDetail(snapshot, plan) {
+  if (normalizeLens(snapshot?.lens || state.lens) === "knowledge") {
+    renderAnchorDetail(snapshot, plan);
+    return;
+  }
+
   const token = startDetailLoad("plan", plan.id);
   nodes.detailKicker.textContent = "Plan";
   nodes.detailTitle.textContent = plan.title || plan.id;
@@ -952,7 +1045,44 @@ function renderPlanDetail(snapshot, plan) {
   loadPlanExtras(plan.id, token, activityHost);
 }
 
+function renderKnowledgeKeyDetail(snapshot, task) {
+  const token = startDetailLoad("task", task.id);
+  void token;
+  nodes.detailKicker.textContent = "Knowledge";
+  nodes.detailTitle.textContent = task.title || task.key || task.id;
+
+  const anchor = (snapshot.plans || []).find((p) => p && p.id === task.plan_id) || null;
+  const cardId = (task.card_id || task.context || "").toString().trim() || null;
+
+  renderDetailMeta([
+    `Key: ${(task.key || task.title || "").toString() || "—"}`,
+    `Anchor: ${anchor?.title || task.plan_id || "—"}`,
+    `card_id: ${cardId || "—"}`,
+    `Updated: ${formatDate(task.updated_at_ms)}`,
+  ]);
+
+  clear(nodes.detailBody);
+  const hints = [];
+  if (cardId) {
+    hints.push(
+      renderDetailText(
+        `This key maps to card_id=${cardId} (open via BranchMind tools).`,
+        ""
+      )
+    );
+  } else {
+    hints.push(renderDetailText(null, "No card id for this key."));
+  }
+  nodes.detailBody.append(renderDetailSection("TL;DR", hints));
+  setDetailVisible(true);
+}
+
 function renderTaskDetail(snapshot, task) {
+  if (normalizeLens(snapshot?.lens || state.lens) === "knowledge") {
+    renderKnowledgeKeyDetail(snapshot, task);
+    return;
+  }
+
   const token = startDetailLoad("task", task.id);
   nodes.detailKicker.textContent = "Task";
   nodes.detailTitle.textContent = task.title || task.id;
@@ -1133,6 +1263,55 @@ function sumTaskCounts(plans) {
   );
 }
 
+function applyLensCopy() {
+  const lens = normalizeLens(state.lens);
+  const isKnowledge = lens === "knowledge";
+
+  if (nodes.summaryPlanLabel) {
+    nodes.summaryPlanLabel.textContent = isKnowledge ? "Anchors" : "Plans";
+  }
+  if (nodes.summaryTaskLabel) {
+    nodes.summaryTaskLabel.textContent = isKnowledge ? "Knowledge" : "Tasks";
+  }
+  if (nodes.goalsHeading) {
+    nodes.goalsHeading.textContent = isKnowledge ? "Anchors" : "Goals";
+  }
+  if (nodes.goalsSubheading) {
+    nodes.goalsSubheading.textContent = isKnowledge
+      ? "Meaning map anchors (a:...)."
+      : "Active plans at a glance.";
+  }
+  if (nodes.planHeading) {
+    nodes.planHeading.textContent = isKnowledge ? "Anchor" : "Plan";
+  }
+  if (nodes.planSubheading) {
+    nodes.planSubheading.textContent = isKnowledge ? "Selected anchor details." : "Selected goal checklist.";
+  }
+  if (nodes.tasksHeading) {
+    nodes.tasksHeading.textContent = isKnowledge ? "Knowledge" : "Tasks";
+  }
+  if (nodes.tasksSubheading) {
+    nodes.tasksSubheading.textContent = isKnowledge
+      ? "Knowledge keys for the selected anchor."
+      : "Workstream for the selected goal.";
+  }
+  if (nodes.hudLegend) {
+    nodes.hudLegend.textContent = isKnowledge
+      ? "Якорь=материк, ключ=точка."
+      : "Цель=материк, кластер=город, задача=точка.";
+  }
+  if (nodes.graphSearch) {
+    nodes.graphSearch.placeholder = isKnowledge
+      ? "Поиск: a:viewer, ключ, текст…"
+      : "Поиск: PLAN-123, TASK-456, текст…";
+  }
+  if (nodes.paletteInput) {
+    nodes.paletteInput.placeholder = isKnowledge
+      ? "Ctrl+K: прыгнуть к… (a:viewer, ключ, текст)"
+      : "Ctrl+K: прыгнуть к… (PLAN-123, TASK-456, текст)";
+  }
+}
+
 function renderSummary(snapshot) {
   renderWorkspaceSelect(snapshot.workspace);
   nodes.updated.textContent = snapshot.generated_at.replace("T", " ").replace("Z", " UTC");
@@ -1204,6 +1383,7 @@ function renderSummary(snapshot) {
 
 function renderGoals(snapshot) {
   clear(nodes.goalList);
+  const isKnowledge = normalizeLens(snapshot?.lens || state.lens) === "knowledge";
   snapshot.plans.forEach((plan) => {
     const item = document.createElement("button");
     item.className = "list-item";
@@ -1218,13 +1398,24 @@ function renderGoals(snapshot) {
 
     const meta = document.createElement("div");
     meta.className = "item-meta";
-    const status = document.createElement("span");
-    status.className = "badge accent";
-    status.textContent = formatStatus(plan.status);
-    const count = document.createElement("span");
-    count.className = "badge dim";
-    count.textContent = `${plan.task_counts.done}/${plan.task_counts.total} done`;
-    meta.append(status, count);
+    if (isKnowledge) {
+      const kind = document.createElement("span");
+      kind.className = "badge accent";
+      kind.textContent = (plan.kind || plan.priority || "anchor").toString();
+      const count = document.createElement("span");
+      count.className = "badge dim";
+      const total = typeof plan?.task_counts?.total === "number" ? plan.task_counts.total : 0;
+      count.textContent = `${total} ключей`;
+      meta.append(kind, count);
+    } else {
+      const status = document.createElement("span");
+      status.className = "badge accent";
+      status.textContent = formatStatus(plan.status);
+      const count = document.createElement("span");
+      count.className = "badge dim";
+      count.textContent = `${plan.task_counts.done}/${plan.task_counts.total} done`;
+      meta.append(status, count);
+    }
 
     item.append(title, meta);
     item.addEventListener("click", () => {
@@ -1239,7 +1430,61 @@ function renderGoals(snapshot) {
 
 function renderChecklist(snapshot) {
   clear(nodes.planChecklist);
+  const isKnowledge = normalizeLens(snapshot?.lens || state.lens) === "knowledge";
   const planId = state.selectedPlanId ?? snapshot.primary_plan_id;
+
+  if (isKnowledge) {
+    const anchor = (snapshot.plans || []).find((plan) => plan && plan.id === planId) || null;
+    if (!anchor) {
+      const empty = document.createElement("div");
+      empty.className = "list-item";
+      empty.textContent = "Select an anchor to see details.";
+      nodes.planChecklist.append(empty);
+      return;
+    }
+
+    const info = document.createElement("div");
+    info.className = "list-item";
+    info.textContent = (anchor.description || "").trim() || "No anchor description.";
+    nodes.planChecklist.append(info);
+
+    const kind = document.createElement("div");
+    kind.className = "list-item";
+    kind.textContent = `kind: ${(anchor.kind || anchor.priority || "anchor").toString()}`;
+    nodes.planChecklist.append(kind);
+
+    const depends = Array.isArray(anchor.depends_on) ? anchor.depends_on : [];
+    if (depends.length) {
+      const header = document.createElement("div");
+      header.className = "list-item";
+      header.textContent = "depends_on:";
+      nodes.planChecklist.append(header);
+
+      depends.slice(0, 24).forEach((dep) => {
+        const id = (dep || "").trim();
+        if (!id) return;
+        const btn = renderListButton(
+          id,
+          () => {
+            state.selectedPlanId = id;
+            render(snapshot);
+            const plan = (snapshot.plans || []).find((p) => p && p.id === id);
+            if (plan) renderPlanDetail(snapshot, plan);
+          },
+          false
+        );
+        nodes.planChecklist.append(btn);
+      });
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "list-item";
+      empty.textContent = "No dependencies recorded.";
+      nodes.planChecklist.append(empty);
+    }
+
+    return;
+  }
+
   const checklist =
     (planId && snapshot.plan_checklists?.[planId]) ||
     (snapshot.plan_checklist?.plan_id === planId ? snapshot.plan_checklist : null);
@@ -1273,13 +1518,14 @@ function renderChecklist(snapshot) {
 
 function renderTasks(snapshot) {
   clear(nodes.taskList);
+  const isKnowledge = normalizeLens(snapshot?.lens || state.lens) === "knowledge";
   const tasks = snapshot.tasks.filter((task) =>
     state.selectedPlanId ? task.plan_id === state.selectedPlanId : true
   );
   if (tasks.length === 0) {
     const empty = document.createElement("div");
     empty.className = "list-item";
-    empty.textContent = "No tasks for this plan.";
+    empty.textContent = isKnowledge ? "No knowledge keys for this anchor." : "No tasks for this plan.";
     nodes.taskList.append(empty);
     return;
   }
@@ -1292,20 +1538,34 @@ function renderTasks(snapshot) {
 
     const meta = document.createElement("div");
     meta.className = "item-meta";
-    const status = document.createElement("span");
-    status.className = "badge accent";
-    status.textContent = formatStatus(task.status);
-    meta.append(status);
-    if (task.blocked) {
-      const blocked = document.createElement("span");
-      blocked.className = "badge dim";
-      blocked.textContent = "blocked";
-      meta.append(blocked);
+    if (isKnowledge) {
+      const kind = document.createElement("span");
+      kind.className = "badge accent";
+      kind.textContent = "knowledge";
+      meta.append(kind);
+      const cardId = (task.card_id || task.context || "").toString().trim();
+      if (cardId) {
+        const card = document.createElement("span");
+        card.className = "badge dim";
+        card.textContent = cardId.length > 14 ? `${cardId.slice(0, 14)}…` : cardId;
+        meta.append(card);
+      }
+    } else {
+      const status = document.createElement("span");
+      status.className = "badge accent";
+      status.textContent = formatStatus(task.status);
+      meta.append(status);
+      if (task.blocked) {
+        const blocked = document.createElement("span");
+        blocked.className = "badge dim";
+        blocked.textContent = "blocked";
+        meta.append(blocked);
+      }
+      const priority = document.createElement("span");
+      priority.className = "badge dim";
+      priority.textContent = formatStatus(task.priority);
+      meta.append(priority);
     }
-    const priority = document.createElement("span");
-    priority.className = "badge dim";
-    priority.textContent = formatStatus(task.priority);
-    meta.append(priority);
 
     item.append(title, meta);
     item.addEventListener("click", () => {
@@ -1989,6 +2249,7 @@ function boundsOfNodes(nodes) {
 }
 
 function buildDisplayModelFlagship(snapshot, view, lodOverride) {
+  const isKnowledge = normalizeLens(snapshot?.lens || "work") === "knowledge";
   const { planNodes, planTokens } = buildPlanNodesFlagship(snapshot);
   const planById = new Map(planNodes.map((node) => [node.id, node]));
 
@@ -2006,9 +2267,15 @@ function buildDisplayModelFlagship(snapshot, view, lodOverride) {
       const shown = Array.isArray(snapshot?.plans) ? snapshot.plans.length : 0;
       const total = Number.isFinite(snapshot?.plans_total) ? snapshot.plans_total : null;
       if (total && total > shown) {
-        bits.push(`Карта неполная: целей ${total}, показано ${shown}.`);
+        bits.push(
+          isKnowledge
+            ? `Карта неполная: якорей ${total}, показано ${shown}.`
+            : `Карта неполная: целей ${total}, показано ${shown}.`
+        );
       } else {
-        bits.push(`Карта неполная: целей показано ${shown}.`);
+        bits.push(
+          isKnowledge ? `Карта неполная: якорей показано ${shown}.` : `Карта неполная: целей показано ${shown}.`
+        );
       }
     }
     if (truncated.tasks) {
@@ -2017,9 +2284,13 @@ function buildDisplayModelFlagship(snapshot, view, lodOverride) {
         ? snapshot.tasks_total
         : sumTaskCounts(Array.isArray(snapshot?.plans) ? snapshot.plans : []).total;
       if (total && total > shown) {
-        bits.push(`Карта неполная: задач ${total}, показано ${shown}.`);
+        bits.push(
+          isKnowledge
+            ? `Карта неполная: ключей ${total}, показано ${shown}.`
+            : `Карта неполная: задач ${total}, показано ${shown}.`
+        );
       } else {
-        bits.push("Карта неполная: список задач урезан.");
+        bits.push(isKnowledge ? "Карта неполная: список ключей урезан." : "Карта неполная: список задач урезан.");
       }
     }
     bits.push("Совет: Ctrl+K — быстрый прыжок.");
@@ -2035,6 +2306,21 @@ function buildDisplayModelFlagship(snapshot, view, lodOverride) {
       tokens: planTokens.get(plan.id) || new Set(),
     }));
     buildKnnEdges(items, 2, 0.34, 0.0).forEach((edge) => edges.push(edge));
+
+    if (isKnowledge) {
+      const ids = new Set(planNodes.map((node) => node.id));
+      (snapshot.plans || []).forEach((anchor) => {
+        const from = (anchor?.id || "").trim();
+        if (!from || !ids.has(from)) return;
+        const deps = Array.isArray(anchor?.depends_on) ? anchor.depends_on : [];
+        deps.forEach((dep) => {
+          const to = (dep || "").trim();
+          if (!to || !ids.has(to)) return;
+          edges.push({ from, to, type: "depends", weight: 1 });
+        });
+      });
+    }
+
     return {
       nodes,
       edges,
@@ -2679,7 +2965,8 @@ function ensureGraphHandlers() {
 
 function viewStorageKey(workspace) {
   const ws = (workspace || "").trim() || "auto";
-  return `bm_viewer_view:${activeProjectKey()}:${ws}`;
+  const lens = state.lens || "work";
+  return `bm_viewer_view:${activeProjectKey()}:${ws}:${lens}`;
 }
 
 function loadStoredViewState(key) {
@@ -3774,6 +4061,12 @@ function renderGraph(snapshot) {
 
 function render(snapshot) {
   state.snapshot = snapshot;
+  const lensFromSnapshot = normalizeLens(snapshot?.lens || state.lens);
+  if (lensFromSnapshot !== state.lens) {
+    setLens(lensFromSnapshot);
+  } else {
+    applyLensCopy();
+  }
   if (!state.selectedPlanId) {
     state.selectedPlanId = snapshot.primary_plan_id || snapshot.plans[0]?.id || null;
   }
@@ -3822,7 +4115,7 @@ async function loadSnapshot() {
   snapshotMutation.pending = true;
   try {
     const response = await fetchWithTimeout(
-      workspaceUrl("/api/snapshot"),
+      workspaceUrlWithParams("/api/snapshot", { lens: state.lens || "work" }),
       { cache: "no-store" },
       7000
     );
@@ -3918,6 +4211,29 @@ if (nodes.workspace) {
     loadAbout();
     await loadSnapshot();
     startLiveEvents();
+  });
+}
+
+if (nodes.lens) {
+  nodes.lens.addEventListener("change", async () => {
+    const next = (nodes.lens.value || "").trim();
+    setLens(next);
+    state.selectedPlanId = null;
+    state.detailSelection = null;
+    clearLocalGraph();
+    graphState.view = null;
+    graphState.model = null;
+    graphState.displayKey = null;
+    graphState.snapshotKey = 0;
+    layoutCache.nodesById.clear();
+    layoutCache.fade.clear();
+    layoutCache.visibleIds.clear();
+    layoutCache.renderIds.clear();
+    state.navStack = [];
+    state.navIndex = -1;
+    updateNavButtons();
+    setDetailVisible(false);
+    await loadSnapshot();
   });
 }
 
@@ -4306,6 +4622,13 @@ function findMatch(snapshot, query) {
     if (task) return { kind: "task", id: task.id, plan_id: task.plan_id };
   }
 
+  // Generic id match (supports anchors / knowledge keys).
+  const idNeedle = q.toLowerCase();
+  const planById = (snapshot.plans || []).find((p) => ((p.id || "") + "").toLowerCase() === idNeedle);
+  if (planById) return { kind: "plan", id: planById.id };
+  const taskById = (snapshot.tasks || []).find((t) => ((t.id || "") + "").toLowerCase() === idNeedle);
+  if (taskById) return { kind: "task", id: taskById.id, plan_id: taskById.plan_id };
+
   const needle = q.toLowerCase();
   const plan = (snapshot.plans || []).find((p) => ((p.title || "") + "").toLowerCase().includes(needle));
   if (plan) return { kind: "plan", id: plan.id };
@@ -4528,6 +4851,7 @@ async function boot() {
   renderProjectSelect();
   await loadWorkspaces();
   renderWorkspaceSelect(null);
+  loadLensFromStorage();
   loadAbout();
   await loadSnapshot();
   startLiveEvents();

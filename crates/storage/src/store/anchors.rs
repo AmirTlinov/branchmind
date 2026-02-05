@@ -217,6 +217,14 @@ pub(in crate::store) fn decode_json_string_list(
 }
 
 impl SqliteStore {
+    pub fn count_anchors(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM anchors WHERE workspace=?1",
+            params![workspace.as_str()],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn anchor_get(
         &mut self,
         workspace: &WorkspaceId,

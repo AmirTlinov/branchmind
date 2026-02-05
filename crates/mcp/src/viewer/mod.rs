@@ -3,6 +3,7 @@
 mod assets;
 mod detail;
 mod events_stream;
+mod knowledge_snapshot;
 mod registry;
 mod snapshot;
 
@@ -890,7 +891,37 @@ fn handle_connection(
                 }
             };
 
-            match snapshot::build_snapshot(store, &request_config, workspace_override.as_deref()) {
+            let lens_raw = extract_query_param_raw(&request.path, "lens")
+                .as_deref()
+                .and_then(decode_query_value)
+                .unwrap_or_else(|| "work".to_string());
+            let lens = lens_raw.trim().to_ascii_lowercase();
+            let lens = match lens.as_str() {
+                "" | "work" => "work",
+                "knowledge" => "knowledge",
+                _ => {
+                    return write_api_error(
+                        &mut stream,
+                        "400 Bad Request",
+                        "INVALID_LENS",
+                        "lens: expected work|knowledge.",
+                        Some("Remove lens=... or pass lens=work|knowledge."),
+                        method == "HEAD",
+                    );
+                }
+            };
+
+            let snapshot_result = if lens == "knowledge" {
+                knowledge_snapshot::build_knowledge_snapshot(
+                    store,
+                    &request_config,
+                    workspace_override.as_deref(),
+                )
+            } else {
+                snapshot::build_snapshot(store, &request_config, workspace_override.as_deref())
+            };
+
+            match snapshot_result {
                 Ok(payload) => {
                     let body = payload.to_string();
                     write_response(

@@ -262,6 +262,7 @@ pub(crate) fn build_snapshot(
         .collect::<Vec<_>>();
 
     Ok(json!({
+        "lens": "work",
         "workspace": workspace.as_str(),
         "workspace_exists": true,
         "project_guard": {
@@ -321,6 +322,7 @@ fn empty_snapshot(
     expected_guard: Option<&str>,
 ) -> Value {
     json!({
+        "lens": "work",
         "workspace": workspace,
         "workspace_exists": false,
         "project_guard": {
