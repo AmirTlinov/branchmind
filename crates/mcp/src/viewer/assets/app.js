@@ -50,6 +50,9 @@ const layoutCache = {
   renderIds: new Set(),
   saveTimer: 0,
   lastViewKey: null,
+  layoutSaveTimer: 0,
+  lastLayoutKey: null,
+  storedPositions: new Map(),
 };
 
 const GRAPH_LIMITS = {
@@ -2969,6 +2972,12 @@ function viewStorageKey(workspace) {
   return `bm_viewer_view:${activeProjectKey()}:${ws}:${lens}`;
 }
 
+function layoutStorageKey(workspace) {
+  const ws = (workspace || "").trim() || "auto";
+  const lens = state.lens || "work";
+  return `bm_viewer_layout:${activeProjectKey()}:${ws}:${lens}`;
+}
+
 function loadStoredViewState(key) {
   try {
     const raw = localStorage.getItem(key);
@@ -2985,6 +2994,42 @@ function loadStoredViewState(key) {
   } catch {
     return null;
   }
+}
+
+function loadStoredLayout(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const nodes = parsed?.nodes;
+    if (!nodes || typeof nodes !== "object") return null;
+
+    const out = new Map();
+    Object.entries(nodes).forEach(([id, pos]) => {
+      const key = (id || "").toString().trim();
+      if (!key) return;
+      const x = Number(pos?.x);
+      const y = Number(pos?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      out.set(key, { x, y });
+    });
+    if (out.size === 0) return null;
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function ensureLayoutRestore(snapshot) {
+  const key = layoutStorageKey(snapshot?.workspace || state.workspaceOverride || "");
+  if (layoutCache.lastLayoutKey === key) return;
+  layoutCache.lastLayoutKey = key;
+  layoutCache.storedPositions.clear();
+  const stored = loadStoredLayout(key);
+  if (!stored) return;
+  stored.forEach((pos, id) => {
+    layoutCache.storedPositions.set(id, pos);
+  });
 }
 
 function scheduleSaveViewState(snapshot) {
@@ -3011,6 +3056,50 @@ function scheduleSaveViewState(snapshot) {
       // ignore storage failures
     }
   }, 320);
+}
+
+function scheduleSaveLayoutPositions(snapshot) {
+  if (!snapshot) return;
+  const key = layoutStorageKey(snapshot?.workspace || state.workspaceOverride || "");
+  if (layoutCache.layoutSaveTimer) {
+    window.clearTimeout(layoutCache.layoutSaveTimer);
+  }
+  layoutCache.layoutSaveTimer = window.setTimeout(() => {
+    layoutCache.layoutSaveTimer = 0;
+    const ids = [];
+    (snapshot.plans || []).forEach((plan) => {
+      if (plan && plan.id) ids.push(plan.id);
+    });
+    (snapshot.tasks || []).forEach((task) => {
+      if (task && task.id) ids.push(task.id);
+    });
+    if (ids.length === 0) return;
+
+    const MAX_NODES = 1400;
+    const nodes = {};
+    for (let i = 0; i < ids.length && i < MAX_NODES; i += 1) {
+      const id = (ids[i] || "").trim();
+      if (!id) continue;
+      const node = layoutCache.nodesById.get(id);
+      if (!node) continue;
+      const x = Math.round((node.x || 0) * 10) / 10;
+      const y = Math.round((node.y || 0) * 10) / 10;
+      nodes[id] = { x, y };
+    }
+    try {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          v: 1,
+          savedAt: Date.now(),
+          dataKey: graphDataKey(snapshot),
+          nodes,
+        })
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, 900);
 }
 
 function ensureGraphViewFlagship(width, height, snapshot) {
@@ -3157,6 +3246,7 @@ function onGraphFrame(ts) {
     drawGraphFlagship(state.snapshot, now);
     drawMinimapFlagship(state.snapshot);
     scheduleSaveViewState(state.snapshot);
+    scheduleSaveLayoutPositions(state.snapshot);
   }
 
   if (again && UI_MODE === "flagship") {
@@ -3274,10 +3364,11 @@ function mergeDisplayModelIntoCache(display) {
     const anchor = spawnAnchorFor(next, id);
     const ax = anchor ? anchor.x : next.tx || 0;
     const ay = anchor ? anchor.y : next.ty || 0;
+    const stored = layoutCache.storedPositions.get(id) || null;
     const node = {
       ...next,
-      x: ax + jitter,
-      y: ay - jitter * 0.7,
+      x: stored ? stored.x : ax + jitter,
+      y: stored ? stored.y : ay - jitter * 0.7,
       vx: 0,
       vy: 0,
     };
@@ -3778,6 +3869,7 @@ function renderGraphFlagship(snapshot) {
   graphState.lastCanvasHeight = height;
 
   ensureGraphViewFlagship(width, height, snapshot);
+  ensureLayoutRestore(snapshot);
   if (!graphState.view) return;
 
   const lodBefore = graphState.lod;
@@ -4225,6 +4317,14 @@ if (nodes.lens) {
     graphState.model = null;
     graphState.displayKey = null;
     graphState.snapshotKey = 0;
+    if (layoutCache.saveTimer) {
+      window.clearTimeout(layoutCache.saveTimer);
+      layoutCache.saveTimer = 0;
+    }
+    if (layoutCache.layoutSaveTimer) {
+      window.clearTimeout(layoutCache.layoutSaveTimer);
+      layoutCache.layoutSaveTimer = 0;
+    }
     layoutCache.nodesById.clear();
     layoutCache.fade.clear();
     layoutCache.visibleIds.clear();
