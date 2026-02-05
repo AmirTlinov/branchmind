@@ -912,6 +912,52 @@ function renderLoadMoreButton(label, onClick, disabled) {
   return btn;
 }
 
+function renderTaskListButton(task, sourceSnapshot, opts) {
+  const options = opts && typeof opts === "object" ? opts : {};
+  const includeSnippet = !!options.includeSnippet;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "list-item";
+  btn.style.transform = "none";
+
+  const title = document.createElement("div");
+  title.className = "item-title";
+  title.textContent = task.title || task.id;
+
+  const nodes = [title];
+
+  if (includeSnippet) {
+    const snippetText = (task.description || "").trim();
+    const snippet = document.createElement("div");
+    snippet.className = "detail-snippet";
+    snippet.textContent = snippetText
+      ? snippetText.length > 220
+        ? `${snippetText.slice(0, 220)}…`
+        : snippetText
+      : "No task description.";
+    nodes.push(snippet);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "item-meta";
+
+  const id = document.createElement("span");
+  id.className = "badge dim";
+  id.textContent = task.id;
+
+  const status = document.createElement("span");
+  status.className = "badge accent";
+  status.textContent = formatStatus(task.status);
+  meta.append(id, status);
+
+  nodes.push(meta);
+
+  btn.append(...nodes);
+  btn.addEventListener("click", () => renderTaskDetail(state.snapshot || sourceSnapshot, task));
+  return btn;
+}
+
 function renderDocEntry(entry) {
   const row = document.createElement("div");
   row.className = "list-item detail-entry";
@@ -1143,33 +1189,147 @@ function renderPlanDetail(snapshot, plan) {
     sections.push(renderDetailSection("Checklist", items));
   }
 
-  const relatedTasks = snapshot.tasks.filter((task) => task.plan_id === plan.id).slice(0, 8);
-  if (relatedTasks.length) {
-    const items = relatedTasks.map((task) => {
-      const row = document.createElement("div");
-      row.className = "list-item";
-      const title = document.createElement("div");
-      title.className = "item-title";
-      title.textContent = task.title || task.id;
-      const snippetText = (task.description || "").trim();
-      const snippet = document.createElement("div");
-      snippet.className = "detail-snippet";
-      snippet.textContent = snippetText
-        ? snippetText.length > 220
-          ? `${snippetText.slice(0, 220)}…`
-          : snippetText
-        : "No task description.";
-      const meta = document.createElement("div");
-      meta.className = "item-meta";
-      const status = document.createElement("span");
-      status.className = "badge accent";
-      status.textContent = formatStatus(task.status);
-      meta.append(status);
-      row.append(title, snippet, meta);
-      row.addEventListener("click", () => renderTaskDetail(snapshot, task));
-      return row;
-    });
-    sections.push(renderDetailSection("Tasks", items));
+  const tasksInSnapshot = (snapshot.tasks || []).filter((task) => task.plan_id === plan.id);
+  const tasksTotal = typeof plan?.task_counts?.total === "number" ? plan.task_counts.total : 0;
+  const tasksCap = Math.min(Math.max(tasksTotal, tasksInSnapshot.length), GRAPH_LIMITS.maxTasksInPlan);
+
+  if (tasksTotal > 0 || tasksInSnapshot.length > 0) {
+    const selection = state.detailSelection;
+    if (selection) {
+      selection.graphTasksPager = {
+        kind: "plan",
+        id: plan.id,
+        cursor: null,
+        has_more: true,
+        loading: false,
+        started: false,
+        limit: 200,
+      };
+    }
+
+    const caption = document.createElement("div");
+    caption.className = "detail-caption";
+
+    const listHost = document.createElement("div");
+    listHost.className = "detail-list";
+
+    const loadBtn = renderLoadMoreButton(
+      "Load more tasks",
+      () => {
+        void loadMore(false);
+      },
+      false
+    );
+
+    function loadedCount(snapshotNow) {
+      return (snapshotNow.tasks || []).filter((task) => task.plan_id === plan.id).length;
+    }
+
+    function renderList() {
+      const snapshotNow = state.snapshot || snapshot;
+      const current = state.detailSelection;
+      const pager = current?.graphTasksPager;
+      const started = !!pager?.started;
+
+      const tasks = started
+        ? (snapshotNow.tasks || [])
+            .filter((task) => task.plan_id === plan.id)
+            .slice()
+            .sort((a, b) => (a.id || "").localeCompare(b.id || ""))
+            .slice(0, tasksCap || GRAPH_LIMITS.maxTasksInPlan)
+        : (snapshotNow.tasks || [])
+            .filter((task) => task.plan_id === plan.id)
+            .slice()
+            .sort(
+              (a, b) =>
+                statusRank(a.status) - statusRank(b.status) ||
+                (b.updated_at_ms || 0) - (a.updated_at_ms || 0) ||
+                (a.id || "").localeCompare(b.id || "")
+            )
+            .slice(0, 10);
+
+      clear(listHost);
+      if (!tasks.length) {
+        listHost.append(
+          renderDetailText(null, started ? "No tasks loaded yet." : "No tasks in this snapshot.")
+        );
+      } else {
+        tasks.forEach((task) =>
+          listHost.append(renderTaskListButton(task, snapshotNow, { includeSnippet: true }))
+        );
+      }
+      listHost.append(loadBtn);
+    }
+
+    function updateControls(snapshotNow) {
+      const current = state.detailSelection;
+      const pager = current?.graphTasksPager;
+      if (!pager || pager.kind !== "plan" || pager.id !== plan.id) return;
+
+      const loaded = loadedCount(snapshotNow);
+      const capNow = tasksCap;
+      caption.textContent = capNow ? `Loaded: ${loaded}/${capNow}` : "No tasks.";
+
+      const capReached = capNow > 0 && loaded >= capNow;
+      const canLoadMore = !capReached && pager.has_more;
+      loadBtn.style.display = canLoadMore ? "" : "none";
+      loadBtn.disabled = !!pager.loading;
+      loadBtn.textContent = pager.loading ? "Loading…" : "Load more tasks";
+    }
+
+    async function loadMore(prefetch) {
+      if (!isCurrentDetail(token)) return;
+      const current = state.detailSelection;
+      const pager = current?.graphTasksPager;
+      if (!pager || pager.kind !== "plan" || pager.id !== plan.id) return;
+      if (pager.loading) return;
+
+      const snapshotNow = state.snapshot || snapshot;
+      const loadedNow = loadedCount(snapshotNow);
+      if (tasksCap === 0 || loadedNow >= tasksCap) {
+        pager.has_more = false;
+        pager.started = true;
+        renderList();
+        updateControls(snapshotNow);
+        return;
+      }
+
+      if (!pager.has_more && !prefetch) return;
+
+      pager.loading = true;
+      updateControls(snapshotNow);
+      try {
+        const payload = await fetchGraphPlan(plan.id, { cursor: pager.cursor, limit: pager.limit });
+        ingestGraphOverlay(payload);
+        const merged = mergeGraphOverlay(state.snapshot || snapshotNow);
+        render(merged);
+        pager.cursor = payload?.pagination?.next_cursor || null;
+        pager.has_more = !!payload?.pagination?.has_more;
+        pager.started = true;
+      } catch {
+        // ignore fetch failures; keep existing view
+      } finally {
+        if (isCurrentDetail(token)) {
+          const latest = state.detailSelection?.graphTasksPager;
+          if (latest && latest.kind === "plan" && latest.id === plan.id) {
+            latest.loading = false;
+          }
+        }
+      }
+
+      if (!isCurrentDetail(token)) return;
+      const snapshotFinal = state.snapshot || snapshot;
+      renderList();
+      updateControls(snapshotFinal);
+    }
+
+    renderList();
+    updateControls(snapshot);
+    sections.push(renderDetailSection("Tasks", [caption, listHost]));
+
+    if (tasksInSnapshot.length === 0 && tasksCap > 0) {
+      void loadMore(true);
+    }
   }
 
   const activityHost = document.createElement("div");
@@ -3907,50 +4067,153 @@ function openClusterDetail(snapshot, clusterNode) {
   );
 
   const members = Array.isArray(clusterNode.members) ? clusterNode.members.slice() : [];
-  const renderTaskButton = (task, sourceSnapshot) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "list-item";
-    btn.style.transform = "none";
-    const title = document.createElement("div");
-    title.className = "item-title";
-    title.textContent = task.title || task.id;
-    const meta = document.createElement("div");
-    meta.className = "item-meta";
-    const id = document.createElement("span");
-    id.className = "badge dim";
-    id.textContent = task.id;
-    const status = document.createElement("span");
-    status.className = "badge accent";
-    status.textContent = formatStatus(task.status);
-    meta.append(id, status);
-    btn.append(title, meta);
-    btn.addEventListener("click", () => renderTaskDetail(sourceSnapshot, task));
-    return btn;
-  };
 
-  const sortTasks = (tasks) =>
-    tasks
+  const selection = state.detailSelection;
+  if (selection) {
+    selection.graphTasksPager = {
+      kind: "cluster",
+      id: clusterNode.id,
+      cursor: null,
+      has_more: true,
+      loading: false,
+      started: false,
+      limit: 200,
+      tasks: [],
+      seen: new Set(),
+    };
+  }
+
+  const caption = document.createElement("div");
+  caption.className = "detail-caption";
+
+  const listHost = document.createElement("div");
+  listHost.className = "detail-list";
+
+  const loadBtn = renderLoadMoreButton(
+    "Load more tasks",
+    () => {
+      void loadMore(false);
+    },
+    false
+  );
+
+  function previewTasks(snapshotNow) {
+    return (snapshotNow.tasks || [])
+      .filter((task) => members.includes(task.id))
       .slice()
       .sort(
         (a, b) =>
           statusRank(a.status) - statusRank(b.status) || (a.id || "").localeCompare(b.id || "")
       )
       .slice(0, 10);
+  }
 
-  const localTasks = sortTasks((snapshot.tasks || []).filter((task) => members.includes(task.id)));
-  const tasksSection = renderDetailSection(
-    "Задачи (топ 10)",
-    localTasks.length ? localTasks.map((task) => renderTaskButton(task, snapshot)) : [renderDetailText(null, "Нет задач в этом кластере.")]
-  );
-  sections.push(tasksSection);
+  function renderList() {
+    const snapshotNow = state.snapshot || snapshot;
+    const current = state.detailSelection;
+    const pager = current?.graphTasksPager;
+    const started = !!pager?.started;
+    const tasks = started
+      ? (pager?.tasks || []).slice(0, GRAPH_LIMITS.maxTasksInPlan)
+      : previewTasks(snapshotNow);
+
+    clear(listHost);
+    if (!tasks.length) {
+      const msg = started ? "No tasks loaded yet." : "Нет задач в этом кластере.";
+      listHost.append(renderDetailText(null, msg));
+    } else {
+      tasks.forEach((task) => listHost.append(renderTaskListButton(task, snapshotNow)));
+    }
+    listHost.append(loadBtn);
+  }
+
+  function updateControls(snapshotNow) {
+    const current = state.detailSelection;
+    const pager = current?.graphTasksPager;
+    if (!pager || pager.kind !== "cluster" || pager.id !== clusterNode.id) return;
+
+    const loaded = Array.isArray(pager.tasks) ? pager.tasks.length : 0;
+    const capReached = loaded >= GRAPH_LIMITS.maxTasksInPlan;
+    caption.textContent = pager.started
+      ? `Loaded: ${loaded} tasks`
+      : `Preview: ${previewTasks(snapshotNow).length} tasks`;
+
+    const canLoadMore = !capReached && pager.has_more;
+    loadBtn.style.display = canLoadMore ? "" : "none";
+    loadBtn.disabled = !!pager.loading;
+    loadBtn.textContent = pager.loading ? "Loading…" : "Load more tasks";
+  }
+
+  async function loadMore(prefetch) {
+    if (!isCurrentDetail(token)) return;
+    const current = state.detailSelection;
+    const pager = current?.graphTasksPager;
+    if (!pager || pager.kind !== "cluster" || pager.id !== clusterNode.id) return;
+    if (pager.loading) return;
+
+    if (Array.isArray(pager.tasks) && pager.tasks.length >= GRAPH_LIMITS.maxTasksInPlan) {
+      pager.has_more = false;
+      pager.started = true;
+      renderList();
+      updateControls(state.snapshot || snapshot);
+      return;
+    }
+
+    if (!pager.has_more && !prefetch) return;
+
+    pager.loading = true;
+    updateControls(state.snapshot || snapshot);
+    try {
+      const payload = await fetchGraphCluster(clusterNode.id, {
+        cursor: pager.cursor,
+        limit: pager.limit,
+      });
+      ingestGraphOverlay(payload);
+      const merged = mergeGraphOverlay(state.snapshot || snapshot);
+      render(merged);
+
+      if (!pager.started) {
+        pager.started = true;
+        pager.tasks = [];
+        pager.seen = new Set();
+      }
+
+      const items = Array.isArray(payload?.tasks) ? payload.tasks : [];
+      items.forEach((task) => {
+        if (!task || !task.id) return;
+        if (pager.seen.has(task.id)) return;
+        if (pager.tasks.length >= GRAPH_LIMITS.maxTasksInPlan) return;
+        pager.seen.add(task.id);
+        pager.tasks.push(task);
+      });
+
+      pager.cursor = payload?.pagination?.next_cursor || null;
+      pager.has_more = !!payload?.pagination?.has_more && pager.tasks.length < GRAPH_LIMITS.maxTasksInPlan;
+    } catch {
+      // ignore fetch failures; keep existing view
+    } finally {
+      if (isCurrentDetail(token)) {
+        const latest = state.detailSelection?.graphTasksPager;
+        if (latest && latest.kind === "cluster" && latest.id === clusterNode.id) {
+          latest.loading = false;
+        }
+      }
+    }
+
+    if (!isCurrentDetail(token)) return;
+    const snapshotFinal = state.snapshot || snapshot;
+    renderList();
+    updateControls(snapshotFinal);
+  }
+
+  renderList();
+  updateControls(snapshot);
+  sections.push(renderDetailSection("Задачи", [caption, listHost]));
 
   nodes.detailBody.append(...sections);
   setDetailVisible(true);
   if (!isCurrentDetail(token)) return;
 
-  // Best-effort "cluster expansion" for truncated snapshots:
-  // when the plan task list is incomplete, fetch a bounded cluster page and merge it into the overlay.
   const lens = normalizeLens(snapshot?.lens || state.lens);
   if (lens !== "work") return;
   const planId = (clusterNode.plan_id || "").trim();
@@ -3964,28 +4227,7 @@ function openClusterDetail(snapshot, clusterNode) {
   const likelyTruncated =
     expectedBounded !== null && expectedBounded > 0 && presentTotal < expectedBounded;
   if (!likelyTruncated) return;
-
-  void (async () => {
-    try {
-      const payload = await fetchGraphCluster(clusterNode.id, { limit: 420 });
-      ingestGraphOverlay(payload);
-      const merged = mergeGraphOverlay(state.snapshot || snapshot);
-      render(merged);
-      if (!isCurrentDetail(token)) return;
-
-      const remoteTasks = Array.isArray(payload?.tasks) ? sortTasks(payload.tasks) : [];
-      if (remoteTasks.length === 0) return;
-
-      // Replace the section content in-place (keep header).
-      while (tasksSection.childNodes.length > 1) {
-        tasksSection.removeChild(tasksSection.lastChild);
-      }
-      const sourceSnapshot = state.snapshot || merged || snapshot;
-      remoteTasks.forEach((task) => tasksSection.append(renderTaskButton(task, sourceSnapshot)));
-    } catch {
-      // ignore remote failures
-    }
-  })();
+  void loadMore(true);
 }
 
 function updateHud(snapshot) {
