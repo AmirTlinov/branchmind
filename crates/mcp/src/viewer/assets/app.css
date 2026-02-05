@@ -82,6 +82,7 @@ body {
 
 .sidebar .top {
   position: relative;
+  cursor: grab;
 }
 
 .sidebar-close,
@@ -472,6 +473,7 @@ html[data-ui="legacy"] .graph-overlay {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  cursor: grab;
 }
 
 .detail-actions {
@@ -506,6 +508,11 @@ html[data-ui="legacy"] .graph-overlay {
 .detail-close:hover {
   border-color: rgba(125, 211, 199, 0.6);
   color: var(--ink);
+}
+
+.detail-close:focus-visible {
+  outline: 2px solid rgba(132, 169, 255, 0.85);
+  outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {

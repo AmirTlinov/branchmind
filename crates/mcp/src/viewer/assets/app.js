@@ -1096,8 +1096,11 @@ function syncExplorerWindowDom(opts) {
   applyWindowGeometry(nodes.sidebarPanel, windowUi.explorer);
 
   if (nodes.sidebarPin) {
-    nodes.sidebarPin.textContent = windowUi.explorer.pinned ? "Unpin" : "Pin";
+    const label = windowUi.explorer.pinned ? "Unpin" : "Pin";
+    nodes.sidebarPin.textContent = label;
     nodes.sidebarPin.setAttribute("aria-pressed", windowUi.explorer.pinned ? "true" : "false");
+    nodes.sidebarPin.setAttribute("aria-label", label);
+    nodes.sidebarPin.setAttribute("title", label);
   }
 
   if (opts && opts.persist) {
@@ -1116,8 +1119,11 @@ function syncDetailWindowDom(opts) {
   applyWindowGeometry(nodes.detailPanel, windowUi.detail);
 
   if (nodes.detailPin) {
-    nodes.detailPin.textContent = windowUi.detail.pinned ? "Unpin" : "Pin";
+    const label = windowUi.detail.pinned ? "Unpin" : "Pin";
+    nodes.detailPin.textContent = label;
     nodes.detailPin.setAttribute("aria-pressed", windowUi.detail.pinned ? "true" : "false");
+    nodes.detailPin.setAttribute("aria-label", label);
+    nodes.detailPin.setAttribute("title", label);
   }
 
   if (opts && opts.persist) {
@@ -5186,6 +5192,7 @@ if (nodes.sidebarPanel) {
     },
     true
   );
+  nodes.sidebarPanel.addEventListener("focusin", () => bringWindowToFront("explorer"));
 
   const handle = nodes.sidebarPanel.querySelector(".top");
   if (handle) {
@@ -5201,6 +5208,7 @@ if (nodes.detailPanel) {
     },
     true
   );
+  nodes.detailPanel.addEventListener("focusin", () => bringWindowToFront("detail"));
 
   const handle = nodes.detailPanel.querySelector(".detail-head");
   if (handle) {
@@ -6039,6 +6047,7 @@ if (nodes.paletteInput) {
   nodes.paletteInput.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       setPaletteOpen(false);
       return;
     }
