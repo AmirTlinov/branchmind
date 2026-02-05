@@ -708,12 +708,23 @@ async function fetchJson(path) {
   return payload;
 }
 
+function toUserError(err) {
+  try {
+    const message =
+      err && typeof err === "object" && "message" in err ? err.message : err;
+    const text = ((message || "Request failed") + "").trim() || "Request failed";
+    return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+  } catch {
+    return "Request failed";
+  }
+}
+
 async function fetchGraphPlan(planId, opts) {
   const id = (planId || "").trim();
   if (!id) throw new Error("plan_id: missing");
   const params = { lens: "work" };
   if (opts && typeof opts === "object") {
-    if (opts.cursor) params.cursor = opts.cursor;
+    if (opts.cursor !== null && opts.cursor !== undefined) params.cursor = opts.cursor;
     if (typeof opts.limit === "number") params.limit = opts.limit;
   }
   const url = workspaceUrlWithParams(`/api/graph/plan/${id}`, params);
@@ -725,7 +736,7 @@ async function fetchGraphCluster(clusterId, opts) {
   if (!id) throw new Error("cluster_id: missing");
   const params = { lens: "work" };
   if (opts && typeof opts === "object") {
-    if (opts.cursor) params.cursor = opts.cursor;
+    if (opts.cursor !== null && opts.cursor !== undefined) params.cursor = opts.cursor;
     if (typeof opts.limit === "number") params.limit = opts.limit;
   }
   const url = workspaceUrlWithParams(`/api/graph/cluster/${id}`, params);
@@ -737,7 +748,7 @@ async function fetchGraphLocal(nodeId, opts) {
   if (!id) throw new Error("node_id: missing");
   const params = { lens: "work" };
   if (opts && typeof opts === "object") {
-    if (opts.cursor) params.cursor = opts.cursor;
+    if (opts.cursor !== null && opts.cursor !== undefined) params.cursor = opts.cursor;
     if (typeof opts.limit === "number") params.limit = opts.limit;
     if (typeof opts.hops === "number") params.hops = clamp(opts.hops, 1, 2);
   }
@@ -1202,6 +1213,7 @@ function renderPlanDetail(snapshot, plan) {
         cursor: null,
         has_more: true,
         loading: false,
+        last_error: null,
         started: false,
         limit: 200,
       };
@@ -1268,13 +1280,18 @@ function renderPlanDetail(snapshot, plan) {
 
       const loaded = loadedCount(snapshotNow);
       const capNow = tasksCap;
-      caption.textContent = capNow ? `Loaded: ${loaded}/${capNow}` : "No tasks.";
+      const baseCaption = capNow ? `Loaded: ${loaded}/${capNow}` : "No tasks.";
+      caption.textContent = pager.last_error ? `${baseCaption} — ${pager.last_error}` : baseCaption;
 
       const capReached = capNow > 0 && loaded >= capNow;
       const canLoadMore = !capReached && pager.has_more;
       loadBtn.style.display = canLoadMore ? "" : "none";
       loadBtn.disabled = !!pager.loading;
-      loadBtn.textContent = pager.loading ? "Loading…" : "Load more tasks";
+      loadBtn.textContent = pager.loading
+        ? "Loading…"
+        : pager.last_error
+          ? "Retry loading tasks"
+          : "Load more tasks";
     }
 
     async function loadMore(prefetch) {
@@ -1297,17 +1314,31 @@ function renderPlanDetail(snapshot, plan) {
       if (!pager.has_more && !prefetch) return;
 
       pager.loading = true;
+      pager.last_error = null;
       updateControls(snapshotNow);
       try {
         const payload = await fetchGraphPlan(plan.id, { cursor: pager.cursor, limit: pager.limit });
+        if (!isCurrentDetail(token)) return;
         ingestGraphOverlay(payload);
         const merged = mergeGraphOverlay(state.snapshot || snapshotNow);
         render(merged);
-        pager.cursor = payload?.pagination?.next_cursor || null;
-        pager.has_more = !!payload?.pagination?.has_more;
         pager.started = true;
-      } catch {
-        // ignore fetch failures; keep existing view
+
+        const pagination = payload?.pagination || {};
+        const hasMore = !!pagination.has_more;
+        const nextCursor = pagination.next_cursor ?? null;
+        if (hasMore && (nextCursor === null || nextCursor === "")) {
+          pager.last_error = "Paging stalled: server returned has_more without next_cursor.";
+          pager.cursor = null;
+          pager.has_more = false;
+          return;
+        }
+        pager.cursor = nextCursor;
+        pager.has_more = hasMore;
+      } catch (err) {
+        if (isCurrentDetail(token)) {
+          pager.last_error = toUserError(err);
+        }
       } finally {
         if (isCurrentDetail(token)) {
           const latest = state.detailSelection?.graphTasksPager;
@@ -4076,6 +4107,7 @@ function openClusterDetail(snapshot, clusterNode) {
       cursor: null,
       has_more: true,
       loading: false,
+      last_error: null,
       started: false,
       limit: 200,
       tasks: [],
@@ -4134,14 +4166,19 @@ function openClusterDetail(snapshot, clusterNode) {
 
     const loaded = Array.isArray(pager.tasks) ? pager.tasks.length : 0;
     const capReached = loaded >= GRAPH_LIMITS.maxTasksInPlan;
-    caption.textContent = pager.started
+    const baseCaption = pager.started
       ? `Loaded: ${loaded} tasks`
       : `Preview: ${previewTasks(snapshotNow).length} tasks`;
+    caption.textContent = pager.last_error ? `${baseCaption} — ${pager.last_error}` : baseCaption;
 
     const canLoadMore = !capReached && pager.has_more;
     loadBtn.style.display = canLoadMore ? "" : "none";
     loadBtn.disabled = !!pager.loading;
-    loadBtn.textContent = pager.loading ? "Loading…" : "Load more tasks";
+    loadBtn.textContent = pager.loading
+      ? "Loading…"
+      : pager.last_error
+        ? "Retry loading tasks"
+        : "Load more tasks";
   }
 
   async function loadMore(prefetch) {
@@ -4162,12 +4199,14 @@ function openClusterDetail(snapshot, clusterNode) {
     if (!pager.has_more && !prefetch) return;
 
     pager.loading = true;
+    pager.last_error = null;
     updateControls(state.snapshot || snapshot);
     try {
       const payload = await fetchGraphCluster(clusterNode.id, {
         cursor: pager.cursor,
         limit: pager.limit,
       });
+      if (!isCurrentDetail(token)) return;
       ingestGraphOverlay(payload);
       const merged = mergeGraphOverlay(state.snapshot || snapshot);
       render(merged);
@@ -4187,10 +4226,22 @@ function openClusterDetail(snapshot, clusterNode) {
         pager.tasks.push(task);
       });
 
-      pager.cursor = payload?.pagination?.next_cursor || null;
-      pager.has_more = !!payload?.pagination?.has_more && pager.tasks.length < GRAPH_LIMITS.maxTasksInPlan;
-    } catch {
-      // ignore fetch failures; keep existing view
+      const pagination = payload?.pagination || {};
+      const hasMore = !!pagination.has_more;
+      const nextCursor = pagination.next_cursor ?? null;
+      if (hasMore && (nextCursor === null || nextCursor === "")) {
+        pager.last_error = "Paging stalled: server returned has_more without next_cursor.";
+        pager.cursor = null;
+        pager.has_more = false;
+        return;
+      }
+
+      pager.cursor = nextCursor;
+      pager.has_more = hasMore && pager.tasks.length < GRAPH_LIMITS.maxTasksInPlan;
+    } catch (err) {
+      if (isCurrentDetail(token)) {
+        pager.last_error = toUserError(err);
+      }
     } finally {
       if (isCurrentDetail(token)) {
         const latest = state.detailSelection?.graphTasksPager;
