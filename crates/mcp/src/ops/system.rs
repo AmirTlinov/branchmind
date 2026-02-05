@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
 use crate::ops::{
-    BudgetPolicy, CommandRegistry, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError,
-    OpResponse, Safety, SchemaSource, Stability, Tier, ToolName, schema_bundle_for_cmd,
+    Action, ActionPriority, BudgetPolicy, CommandRegistry, CommandSpec, ConfirmLevel, DocRef,
+    Envelope, OpError, OpResponse, Safety, SchemaSource, Stability, Tier, ToolName,
+    schema_bundle_for_cmd,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
     // system.schema.get (custom)
@@ -128,6 +129,38 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         op_aliases: vec!["migration.lookup".to_string()],
         handler_name: None,
         handler: Some(handle_migration_lookup),
+    });
+
+    // system.tutorial (custom)
+    specs.push(CommandSpec {
+        cmd: "system.tutorial".to_string(),
+        domain_tool: ToolName::SystemOps,
+        tier: Tier::Gold,
+        stability: Stability::Stable,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#system.tutorial".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: true,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Custom {
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": []
+            }),
+            example_minimal_args: json!({}),
+        },
+        op_aliases: Vec::new(),
+        handler_name: None,
+        handler: Some(handle_tutorial),
     });
 
     // Minimal system tools exposed via cmd=system.<name>.
@@ -376,6 +409,169 @@ fn handle_cmd_list(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse
             }
         }),
     )
+}
+
+fn handle_tutorial(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+    let args_obj = env.args.as_object().cloned().unwrap_or_default();
+    let limit = args_obj
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(3)
+        .clamp(1, 5);
+    let max_chars = args_obj
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+
+    let mut summary = "Пошаговый старт: 1) status → контекст, 2) tasks.macro.start → первая задача, 3) tasks.snapshot → фокус.".to_string();
+    let mut truncated = false;
+    if let Some(max_chars) = max_chars {
+        let (max_chars, clamped) = crate::clamp_budget_max(max_chars);
+        let suffix = "...";
+        if summary.len() > max_chars {
+            let budget = max_chars.saturating_sub(suffix.len());
+            summary = crate::truncate_string_bytes(&summary, budget) + suffix;
+            truncated = true;
+        }
+        if clamped {
+            truncated = true;
+        }
+    }
+
+    let workspace = env.workspace.as_deref();
+    let mut steps = vec![
+        json!({
+            "id": "status",
+            "title": "Проверить состояние",
+            "tool": "status",
+            "purpose": "Быстрый статус workspace и NextEngine.",
+            "action_id": "tutorial::status"
+        }),
+        json!({
+            "id": "start-task",
+            "title": "Создать первую задачу",
+            "tool": "tasks",
+            "cmd": "tasks.macro.start",
+            "purpose": "Создаёт задачу по базовому шаблону.",
+            "action_id": "tutorial::tasks.macro.start"
+        }),
+        json!({
+            "id": "snapshot",
+            "title": "Сделать снимок",
+            "tool": "tasks",
+            "cmd": "tasks.snapshot",
+            "purpose": "Закрепить фокус и получить следующий шаг.",
+            "action_id": "tutorial::tasks.snapshot"
+        }),
+    ];
+    if limit < steps.len() {
+        steps.truncate(limit);
+        truncated = true;
+    }
+
+    let mut actions = Vec::<Action>::new();
+    for (idx, step) in steps.iter().enumerate() {
+        let action_id = step
+            .get("action_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("tutorial::step")
+            .to_string();
+        let priority = match idx {
+            0 => ActionPriority::High,
+            1 => ActionPriority::Medium,
+            _ => ActionPriority::Low,
+        };
+        let tool = step
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .unwrap_or("system")
+            .to_string();
+
+        let args = match step.get("id").and_then(|v| v.as_str()) {
+            Some("status") => {
+                let mut obj = serde_json::Map::new();
+                if let Some(ws) = workspace {
+                    obj.insert("workspace".to_string(), Value::String(ws.to_string()));
+                }
+                obj.insert(
+                    "budget_profile".to_string(),
+                    Value::String("portal".to_string()),
+                );
+                obj.insert("view".to_string(), Value::String("compact".to_string()));
+                Value::Object(obj)
+            }
+            Some("start-task") => {
+                let mut obj = serde_json::Map::new();
+                if let Some(ws) = workspace {
+                    obj.insert("workspace".to_string(), Value::String(ws.to_string()));
+                }
+                obj.insert("op".to_string(), Value::String("call".to_string()));
+                obj.insert(
+                    "cmd".to_string(),
+                    Value::String("tasks.macro.start".to_string()),
+                );
+                obj.insert(
+                    "args".to_string(),
+                    json!({
+                        "task_title": "First task",
+                        "template": "basic-task"
+                    }),
+                );
+                obj.insert(
+                    "budget_profile".to_string(),
+                    Value::String("portal".to_string()),
+                );
+                obj.insert("view".to_string(), Value::String("compact".to_string()));
+                Value::Object(obj)
+            }
+            Some("snapshot") => {
+                let mut obj = serde_json::Map::new();
+                if let Some(ws) = workspace {
+                    obj.insert("workspace".to_string(), Value::String(ws.to_string()));
+                }
+                obj.insert("op".to_string(), Value::String("call".to_string()));
+                obj.insert(
+                    "cmd".to_string(),
+                    Value::String("tasks.snapshot".to_string()),
+                );
+                obj.insert("args".to_string(), json!({ "view": "smart" }));
+                obj.insert(
+                    "budget_profile".to_string(),
+                    Value::String("portal".to_string()),
+                );
+                obj.insert("view".to_string(), Value::String("compact".to_string()));
+                Value::Object(obj)
+            }
+            _ => json!({}),
+        };
+
+        let why = step
+            .get("purpose")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Guided onboarding step.")
+            .to_string();
+
+        actions.push(Action {
+            action_id,
+            priority,
+            tool,
+            args,
+            why,
+            risk: "Низкий".to_string(),
+        });
+    }
+
+    let result = json!({
+        "title": "Guided onboarding",
+        "summary": summary,
+        "steps": steps,
+        "truncated": truncated
+    });
+
+    let mut resp = OpResponse::success(env.cmd.clone(), result);
+    resp.actions = actions;
+    resp
 }
 
 fn handle_migration_lookup(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {

@@ -2,6 +2,13 @@
 
 use serde_json::{Value, json};
 
+fn think_type_enum() -> Vec<Value> {
+    bm_core::think::SUPPORTED_THINK_CARD_TYPES
+        .iter()
+        .map(|value| Value::String(value.to_string()))
+        .collect()
+}
+
 pub(super) fn definitions() -> Vec<Value> {
     vec![
         json!({
@@ -11,7 +18,7 @@ pub(super) fn definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string" },
-                    "type": { "type": "string" },
+                    "type": { "type": "string", "enum": think_type_enum() },
                     "max_chars": { "type": "integer" }
                 },
                 "required": ["workspace", "type"]

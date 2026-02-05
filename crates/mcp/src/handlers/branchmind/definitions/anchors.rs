@@ -2,6 +2,13 @@
 
 use serde_json::{Value, json};
 
+fn think_card_type_enum() -> Vec<Value> {
+    bm_core::think::SUPPORTED_THINK_CARD_TYPES
+        .iter()
+        .map(|value| Value::String(value.to_string()))
+        .collect()
+}
+
 pub(crate) fn anchors_definitions() -> Vec<Value> {
     vec![
         json!({
@@ -54,7 +61,7 @@ pub(crate) fn anchors_definitions() -> Vec<Value> {
                     "parent_id": { "type": ["string", "null"] },
                     "depends_on": { "type": "array", "items": { "type": "string" } },
                     "content": { "type": "string" },
-                    "card_type": { "type": "string" },
+                    "card_type": { "type": "string", "enum": think_card_type_enum() },
                     "step": { "type": "string" },
                     "visibility": { "type": "string", "enum": ["draft", "canon"] },
                     "pin": { "type": "boolean" }

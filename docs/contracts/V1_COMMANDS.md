@@ -48,6 +48,26 @@ Initialize a workspace (legacy `init`).
 
 Help / quick reference (legacy `help`).
 
+## system.tutorial
+
+Guided onboarding (actions-first).
+
+Inputs (selected):
+
+- `limit` (int, optional): max onboarding steps returned (default 3).
+- `max_chars` (int, optional): max chars for the tutorial summary text.
+
+Output (selected):
+
+- `{ title, summary, steps:[...], truncated }`
+
+Notes:
+
+- Steps follow the golden path: `status → tasks.macro.start → tasks.snapshot`.
+- `actions[]` includes executable calls for each returned step (bounded by `limit`).
+- If `workspace` is not set, actions rely on the default workspace (or call `workspace.use` first).
+- `truncated=true` when `limit` or `max_chars` cuts the tutorial output.
+
 ## system.skill
 
 Skill discovery / info (legacy `skill`).
@@ -191,6 +211,8 @@ Notes:
 - Defaults are product-UX oriented:
   - `include_drafts=true` (management view; show what’s in the KB, not only what’s published)
   - `include_history=false` (latest-only; no duplicate historical versions unless explicitly requested)
+- Use `think.knowledge.recall` for fast “what do we know about X?” recall; use `include_history=true`
+  here when you need audit/history across versions.
 
 ## think.knowledge.recall
 
@@ -198,7 +220,8 @@ Fast knowledge recall by anchor (bounded, recency-first).
 
 Notes:
 - Intended for “I’m touching component X → pull relevant knowledge” UX.
-- Uses the storage knowledge index (not a full tag scan).
+- Anchor-first and lightweight: uses the knowledge key index + graph fetch (not a full tag scan).
+- Defaults to `include_drafts=false` (canon-first); for draft-heavy audits use `think.knowledge.query`.
 
 ## think.knowledge.lint
 
