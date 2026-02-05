@@ -562,6 +562,7 @@ async function loadWorkspaces() {
 
 const nodes = {
   shell: document.querySelector(".shell"),
+  topbar: document.querySelector(".topbar"),
   project: document.getElementById("project"),
   lens: document.getElementById("lens"),
   workspace: document.getElementById("workspace"),
@@ -1052,13 +1053,22 @@ function persistDetailWindowState() {
   }
 }
 
+function safeTopInsetPx() {
+  const margin = 12;
+  const rect = nodes.topbar?.getBoundingClientRect?.();
+  if (!rect) return margin;
+  const inset = Math.round(rect.bottom) + margin;
+  return clamp(inset, margin, 140);
+}
+
 function clampWindowToViewport(el, win) {
   if (!el) return win;
   const rect = el.getBoundingClientRect();
   const margin = 12;
 
-  const maxY = Math.max(margin, window.innerHeight - rect.height - margin);
-  const nextY = clamp(win.y, margin, maxY);
+  const minY = safeTopInsetPx();
+  const maxY = Math.max(minY, window.innerHeight - rect.height - margin);
+  const nextY = clamp(win.y, minY, maxY);
 
   if (win.anchor === "right") {
     const maxX = Math.max(margin, window.innerWidth - rect.width - margin);
@@ -1170,11 +1180,14 @@ function startWindowDrag(kind, el, event) {
   const rect = el.getBoundingClientRect();
   const win = kind === "explorer" ? windowUi.explorer : windowUi.detail;
 
+  el.classList.add("is-dragging");
+
   windowUi.dragging = {
     kind,
     pointerId: event.pointerId,
     startClientX: event.clientX,
     startClientY: event.clientY,
+    safeTopInset: safeTopInsetPx(),
     startAnchor: win.anchor,
     startX: win.x,
     startY: win.y,
@@ -1198,19 +1211,20 @@ function handleWindowDragMove(event) {
   const dx = event.clientX - drag.startClientX;
   const dy = event.clientY - drag.startClientY;
   const margin = 12;
+  const minY = typeof drag.safeTopInset === "number" ? drag.safeTopInset : margin;
 
   if (drag.kind === "explorer") {
     const maxX = Math.max(margin, window.innerWidth - drag.width - margin);
-    const maxY = Math.max(margin, window.innerHeight - drag.height - margin);
+    const maxY = Math.max(minY, window.innerHeight - drag.height - margin);
     windowUi.explorer.anchor = "left";
     windowUi.explorer.x = clamp(drag.startX + dx, margin, maxX);
-    windowUi.explorer.y = clamp(drag.startY + dy, margin, maxY);
+    windowUi.explorer.y = clamp(drag.startY + dy, minY, maxY);
     syncExplorerWindowDom({ persist: false, clamp: false });
     return;
   }
 
-  const maxY = Math.max(margin, window.innerHeight - drag.height - margin);
-  windowUi.detail.y = clamp(drag.startY + dy, margin, maxY);
+  const maxY = Math.max(minY, window.innerHeight - drag.height - margin);
+  windowUi.detail.y = clamp(drag.startY + dy, minY, maxY);
 
   if (drag.startAnchor === "right") {
     const maxX = Math.max(margin, window.innerWidth - drag.width - margin);
@@ -1230,6 +1244,12 @@ function handleWindowDragEnd(event) {
   if (!drag || !event) return;
   if (drag.pointerId !== event.pointerId) return;
   windowUi.dragging = null;
+
+  if (drag.kind === "explorer") {
+    nodes.sidebarPanel?.classList.remove("is-dragging");
+  } else {
+    nodes.detailPanel?.classList.remove("is-dragging");
+  }
 
   if (drag.kind === "explorer") {
     syncExplorerWindowDom({ persist: true, clamp: true });
@@ -1570,7 +1590,7 @@ function renderAnchorDetail(snapshot, anchor) {
     nodes.detailBody.append(renderDetailSection("Depends on", items));
   }
 
-  setDetailVisible(true);
+  setDetailVisible(true, { focus: false });
 }
 
 function renderPlanDetail(snapshot, plan) {
@@ -1816,7 +1836,7 @@ function renderPlanDetail(snapshot, plan) {
   } else {
     sections.forEach((section) => nodes.detailBody.append(section));
   }
-  setDetailVisible(true);
+  setDetailVisible(true, { focus: false });
 
   loadPlanExtras(plan.id, token, activityHost);
 }
@@ -1850,7 +1870,7 @@ function renderKnowledgeKeyDetail(snapshot, task) {
     hints.push(renderDetailText(null, "No card id for this key."));
   }
   nodes.detailBody.append(renderDetailSection("TL;DR", hints));
-  setDetailVisible(true);
+  setDetailVisible(true, { focus: false });
 }
 
 function renderTaskDetail(snapshot, task) {
@@ -1919,7 +1939,7 @@ function renderTaskDetail(snapshot, task) {
     empty.textContent = "No related tasks to show.";
     nodes.detailBody.append(empty);
   }
-  setDetailVisible(true);
+  setDetailVisible(true, { focus: false });
 
   loadTaskExtras(task.id, token, stepsHost, activityHost);
 }
@@ -4702,7 +4722,7 @@ function openClusterDetail(snapshot, clusterNode) {
   sections.push(renderDetailSection("Задачи", [caption, listHost]));
 
   nodes.detailBody.append(...sections);
-  setDetailVisible(true);
+  setDetailVisible(true, { focus: false });
   if (!isCurrentDetail(token)) return;
 
   const lens = normalizeLens(snapshot?.lens || state.lens);
