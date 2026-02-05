@@ -561,6 +561,7 @@ async function loadWorkspaces() {
 }
 
 const nodes = {
+  shell: document.querySelector(".shell"),
   project: document.getElementById("project"),
   lens: document.getElementById("lens"),
   workspace: document.getElementById("workspace"),
@@ -616,6 +617,7 @@ const nodes = {
   detailClose: document.getElementById("detail-close"),
   detailPin: document.getElementById("detail-pin"),
   palette: document.getElementById("palette"),
+  palettePanel: document.querySelector(".palette-panel"),
   paletteInput: document.getElementById("palette-input"),
   paletteResults: document.getElementById("palette-results"),
 };
@@ -1115,7 +1117,8 @@ function syncDetailWindowDom(opts) {
   }
   nodes.detailPanel.classList.toggle("is-open", !!windowUi.detail.open);
   nodes.detailPanel.classList.toggle("is-pinned", !!windowUi.detail.pinned);
-  nodes.detailPanel.setAttribute("aria-hidden", windowUi.detail.open ? "false" : "true");
+  const ariaHidden = paletteIsOpen() ? "true" : windowUi.detail.open ? "false" : "true";
+  nodes.detailPanel.setAttribute("aria-hidden", ariaHidden);
   applyWindowGeometry(nodes.detailPanel, windowUi.detail);
 
   if (nodes.detailPin) {
@@ -5330,6 +5333,8 @@ const paletteState = {
   open: false,
   items: [],
   index: 0,
+  restoreFocusEl: null,
+  background: null,
 };
 
 const paletteRemote = {
@@ -5535,15 +5540,148 @@ function navForward() {
   applyNavEntry(state.navStack[state.navIndex]);
 }
 
+function paletteModalTargets() {
+  const targets = [];
+  if (nodes.shell) targets.push(nodes.shell);
+  if (nodes.detailPanel) targets.push(nodes.detailPanel);
+  return targets;
+}
+
+function setPaletteBackgroundDisabled(disabled) {
+  const desired = !!disabled;
+  const targets = paletteModalTargets();
+
+  if (desired) {
+    try {
+      const active = document.activeElement;
+      paletteState.restoreFocusEl =
+        active && typeof active === "object" && "focus" in active ? active : null;
+    } catch {
+      paletteState.restoreFocusEl = null;
+    }
+
+    paletteState.background = targets.map((el) => ({
+      el,
+      inert: !!el.inert,
+      ariaHidden: el.getAttribute("aria-hidden"),
+    }));
+
+    targets.forEach((el) => {
+      try {
+        el.inert = true;
+      } catch {
+        // ignore inert failures
+      }
+      el.setAttribute("aria-hidden", "true");
+    });
+    return;
+  }
+
+  const background = Array.isArray(paletteState.background) ? paletteState.background : [];
+  background.forEach((entry) => {
+    if (!entry || !entry.el) return;
+    const el = entry.el;
+    try {
+      el.inert = !!entry.inert;
+    } catch {
+      // ignore inert failures
+    }
+    if (entry.ariaHidden === null) {
+      el.removeAttribute("aria-hidden");
+    } else {
+      el.setAttribute("aria-hidden", entry.ariaHidden);
+    }
+  });
+  paletteState.background = null;
+}
+
+function restorePaletteFocus() {
+  const el = paletteState.restoreFocusEl;
+  paletteState.restoreFocusEl = null;
+
+  window.setTimeout(() => {
+    try {
+      if (el && typeof el.focus === "function" && document.contains(el)) {
+        el.focus();
+        return;
+      }
+    } catch {
+      // ignore
+    }
+    nodes.btnFocus?.focus?.();
+  }, 0);
+}
+
+function paletteFocusableElements() {
+  const panel = nodes.palettePanel || nodes.palette;
+  if (!panel) return [];
+  const candidates = Array.from(
+    panel.querySelectorAll(
+      "input, button, select, textarea, a[href], [tabindex]:not([tabindex='-1'])"
+    )
+  );
+  return candidates.filter((el) => {
+    if (!el || !(el instanceof HTMLElement)) return false;
+    if (el.hasAttribute("disabled")) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    return el.getClientRects().length > 0;
+  });
+}
+
+function handlePaletteModalKeydown(event) {
+  if (!paletteIsOpen() || !event) return;
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    setPaletteOpen(false);
+    return;
+  }
+
+  if (event.key !== "Tab") return;
+
+  const focusables = paletteFocusableElements();
+  const input = nodes.paletteInput;
+  if (!focusables.length) {
+    event.preventDefault();
+    input?.focus?.();
+    return;
+  }
+
+  const active = document.activeElement;
+  const index = focusables.findIndex((el) => el === active);
+  const last = focusables.length - 1;
+  const backwards = !!event.shiftKey;
+
+  let nextIndex = index;
+  if (backwards) {
+    nextIndex = index <= 0 ? last : index - 1;
+  } else {
+    nextIndex = index < 0 || index >= last ? 0 : index + 1;
+  }
+
+  event.preventDefault();
+  focusables[nextIndex]?.focus?.();
+}
+
 function setPaletteOpen(open) {
   if (!nodes.palette || !nodes.paletteInput || !nodes.paletteResults) return;
   cancelPaletteRemoteSearch();
   const desired = !!open;
+  if (desired === paletteState.open) {
+    if (desired) {
+      window.setTimeout(() => {
+        nodes.paletteInput?.focus?.();
+      }, 0);
+    }
+    return;
+  }
   paletteState.open = desired;
   paletteState.items = [];
   paletteState.index = 0;
 
   if (desired) {
+    setPaletteBackgroundDisabled(true);
     nodes.palette.hidden = false;
     nodes.palette.classList.add("is-open");
     nodes.palette.setAttribute("aria-hidden", "false");
@@ -5556,6 +5694,8 @@ function setPaletteOpen(open) {
     nodes.palette.hidden = true;
     nodes.palette.classList.remove("is-open");
     nodes.palette.setAttribute("aria-hidden", "true");
+    setPaletteBackgroundDisabled(false);
+    restorePaletteFocus();
   }
 }
 
@@ -6017,6 +6157,8 @@ if (nodes.palette) {
       setPaletteOpen(false);
     }
   });
+
+  nodes.palette.addEventListener("keydown", handlePaletteModalKeydown, true);
 }
 
 window.addEventListener(
