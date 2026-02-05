@@ -191,6 +191,7 @@ const PROJECT_STORAGE_KEY = "bm_viewer_project";
 const WORKSPACE_STORAGE_KEY = "bm_viewer_workspace";
 const WORKSPACE_STORAGE_PREFIX = "bm_viewer_workspace:";
 const LENS_STORAGE_KEY = "bm_viewer_lens";
+const SIDEBAR_OPEN_STORAGE_PREFIX = "bm_viewer_sidebar_open:";
 
 function queryFlag(name) {
   try {
@@ -264,6 +265,10 @@ function workspaceStorageKey() {
   return `${WORKSPACE_STORAGE_PREFIX}${activeProjectKey()}`;
 }
 
+function sidebarOpenStorageKey() {
+  return `${SIDEBAR_OPEN_STORAGE_PREFIX}${activeProjectKey()}`;
+}
+
 function setProjectOverride(value) {
   const next = (value || "").trim();
   state.projectOverride = next || null;
@@ -332,6 +337,24 @@ function loadLensFromStorage() {
   }
   const fromQuery = queryParam("lens");
   setLens(fromQuery || stored || state.lens || "work");
+}
+
+function loadSidebarOpenFromStorage() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(sidebarOpenStorageKey());
+  } catch {
+    stored = null;
+  }
+  const raw = ((stored || "") + "").trim().toLowerCase();
+  if (!raw) return null;
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function applySidebarOpenPreference({ defaultOpen } = {}) {
+  const preferred = loadSidebarOpenFromStorage();
+  const open = preferred === null ? defaultOpen !== false : preferred;
+  setSidebarVisible(open, { persist: false, focus: false });
 }
 
 async function loadProjects() {
@@ -805,11 +828,31 @@ function sidebarIsOpen() {
   return !!nodes.sidebarPanel?.classList.contains("is-open");
 }
 
-function setSidebarVisible(open) {
+function setSidebarVisible(open, opts) {
   if (!nodes.sidebarPanel) return;
   const desired = !!open;
   nodes.sidebarPanel.classList.toggle("is-open", desired);
   nodes.sidebarPanel.setAttribute("aria-hidden", desired ? "false" : "true");
+
+  const persist = !(opts && typeof opts === "object" && opts.persist === false);
+  if (persist) {
+    try {
+      localStorage.setItem(sidebarOpenStorageKey(), desired ? "1" : "0");
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  const focus = !(opts && typeof opts === "object" && opts.focus === false);
+  if (focus) {
+    window.setTimeout(() => {
+      if (desired) {
+        nodes.sidebarClose?.focus?.();
+      } else {
+        nodes.btnExplorer?.focus?.();
+      }
+    }, 0);
+  }
 }
 
 function renderDetailMeta(lines) {
@@ -4761,6 +4804,7 @@ if (nodes.project) {
     }
     workspaceMutation.recoveredGuardMismatch = false;
     loadWorkspaceOverrideFromStorage();
+    applySidebarOpenPreference({ defaultOpen: true });
     state.selectedPlanId = null;
     state.detailSelection = null;
     clearLocalGraph();
@@ -5538,6 +5582,20 @@ if (nodes.palette) {
   });
 }
 
+window.addEventListener(
+  "mousedown",
+  (event) => {
+    if (!sidebarIsOpen()) return;
+    if (paletteIsOpen()) return;
+
+    const target = event.target;
+    if (nodes.sidebarPanel && target && nodes.sidebarPanel.contains(target)) return;
+    if (nodes.btnExplorer && target && nodes.btnExplorer.contains(target)) return;
+    setSidebarVisible(false, { focus: false });
+  },
+  true
+);
+
 if (nodes.paletteInput) {
   nodes.paletteInput.addEventListener("input", () => {
     if (!state.snapshot) return;
@@ -5679,6 +5737,7 @@ function startLiveEvents() {
 async function boot() {
   await loadProjects();
   renderProjectSelect();
+  applySidebarOpenPreference({ defaultOpen: true });
   await loadWorkspaces();
   renderWorkspaceSelect(null);
   loadLensFromStorage();
@@ -5696,6 +5755,7 @@ async function refreshProjects() {
   try {
     await loadProjects();
     renderProjectSelect();
+    applySidebarOpenPreference({ defaultOpen: true });
     if (before !== state.projectOverride) {
       await loadWorkspaces();
       renderWorkspaceSelect(state.snapshot?.workspace || null);
