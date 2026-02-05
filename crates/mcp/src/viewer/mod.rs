@@ -2,6 +2,7 @@
 
 mod assets;
 mod detail;
+mod events_stream;
 mod registry;
 mod snapshot;
 
@@ -11,6 +12,7 @@ pub(crate) use registry::sync_catalog_from_scan;
 pub(crate) use registry::{PresenceConfig, list_projects, lookup_project, start_presence_writer};
 
 use crate::{now_ms_i64, now_rfc3339};
+use bm_core::ids::WorkspaceId;
 use bm_storage::{SqliteStore, StoreError};
 #[cfg(unix)]
 use nix::sys::signal::{Signal, kill};
@@ -389,16 +391,23 @@ fn run_viewer(
     shutdown: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     listener.set_nonblocking(true)?;
+    let mut event_streams = Vec::<events_stream::EventsStreamClient>::new();
     while !shutdown.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let _ = handle_connection(stream, stores, &config, &shutdown);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let _ =
+                        handle_connection(stream, stores, &config, &shutdown, &mut event_streams);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    break;
+                }
+                Err(_) => break,
             }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(_) => continue,
         }
+
+        tick_event_streams(&mut event_streams, stores);
+        std::thread::sleep(Duration::from_millis(25));
     }
     Ok(())
 }
@@ -408,6 +417,7 @@ fn handle_connection(
     stores: &mut ViewerStores,
     config: &ViewerConfig,
     shutdown: &Arc<AtomicBool>,
+    event_streams: &mut Vec<events_stream::EventsStreamClient>,
 ) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
@@ -691,6 +701,158 @@ fn handle_connection(
                 body.as_bytes(),
                 false,
             )
+        }
+        "/api/events" => {
+            if method != "GET" {
+                return write_response(
+                    &mut stream,
+                    "405 Method Not Allowed",
+                    "text/plain; charset=utf-8",
+                    b"Method not allowed.",
+                    false,
+                );
+            }
+            if project_param_invalid {
+                return write_api_error(
+                    &mut stream,
+                    "400 Bad Request",
+                    "INVALID_PROJECT",
+                    "project: invalid project guard.",
+                    Some("Use a value like repo:0123abcd… from /api/projects."),
+                    false,
+                );
+            }
+            if project_unknown {
+                return write_api_error(
+                    &mut stream,
+                    "404 Not Found",
+                    "UNKNOWN_PROJECT",
+                    "Unknown project.",
+                    Some("Pick one of the active projects returned by /api/projects."),
+                    false,
+                );
+            }
+
+            let store = match stores.store_for(&request_storage_dir) {
+                Ok(store) => store,
+                Err(err) => {
+                    return write_api_error(
+                        &mut stream,
+                        "503 Service Unavailable",
+                        "PROJECT_UNAVAILABLE",
+                        "Unable to open project store in read-only mode.",
+                        Some(&format!("{err}")),
+                        false,
+                    );
+                }
+            };
+
+            let Some(workspace_raw) = workspace_override
+                .as_deref()
+                .or(request_config.workspace.as_deref())
+            else {
+                return write_api_error(
+                    &mut stream,
+                    "400 Bad Request",
+                    "WORKSPACE_REQUIRED",
+                    "Viewer requires a default workspace.",
+                    Some("Start the server with --workspace (or BRANCHMIND_WORKSPACE)."),
+                    false,
+                );
+            };
+            let workspace = match WorkspaceId::try_new(workspace_raw.to_string()) {
+                Ok(workspace) => workspace,
+                Err(_) => {
+                    return write_api_error(
+                        &mut stream,
+                        "400 Bad Request",
+                        "INVALID_WORKSPACE",
+                        "workspace: expected WorkspaceId.",
+                        Some("Use an alphanumeric workspace id (e.g. my-workspace)."),
+                        false,
+                    );
+                }
+            };
+
+            let since_override = extract_query_param_raw(&request.path, "since")
+                .as_deref()
+                .and_then(decode_query_value);
+            let since_event_id = since_override.or_else(|| request.last_event_id.clone());
+
+            let poll_ms = extract_query_param_raw(&request.path, "poll_ms")
+                .as_deref()
+                .and_then(decode_query_value)
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(250)
+                .clamp(50, 2000);
+            let keepalive_ms = extract_query_param_raw(&request.path, "keepalive_ms")
+                .as_deref()
+                .and_then(decode_query_value)
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(15_000)
+                .clamp(5_000, 60_000);
+            let max_events = extract_query_param_raw(&request.path, "max_events")
+                .as_deref()
+                .and_then(decode_query_value)
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(400)
+                .clamp(50, 2000);
+            let max_stream_ms = extract_query_param_raw(&request.path, "max_stream_ms")
+                .as_deref()
+                .and_then(decode_query_value)
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(120_000)
+                .clamp(10_000, 600_000);
+
+            let last_event_id = if let Some(since_event_id) = since_event_id.as_deref() {
+                // Validate the cursor by forcing the store to parse it.
+                if store
+                    .list_events(&workspace, Some(since_event_id), 1)
+                    .is_err()
+                {
+                    return write_api_error(
+                        &mut stream,
+                        "400 Bad Request",
+                        "INVALID_SINCE",
+                        "since: expected evt_<16-digit-seq> (or use Last-Event-ID).",
+                        Some("Use the last id received from /api/events (SSE)."),
+                        false,
+                    );
+                }
+                since_event_id.to_string()
+            } else {
+                let latest_seq = match store.events_latest_seq(&workspace) {
+                    Ok(seq) => seq,
+                    Err(err) => {
+                        return write_api_error(
+                            &mut stream,
+                            "503 Service Unavailable",
+                            "PROJECT_UNAVAILABLE",
+                            "Project store is initializing.",
+                            Some(&format!("{err}")),
+                            false,
+                        );
+                    }
+                };
+                format!("evt_{:016}", latest_seq)
+            };
+
+            let opts = events_stream::EventsStreamStartOptions {
+                poll_ms,
+                keepalive_ms,
+                max_events,
+                max_stream_ms,
+                project_guard: request_config.project_guard.clone(),
+            };
+            let client = events_stream::EventsStreamClient::start(
+                stream,
+                request_storage_dir.clone(),
+                workspace,
+                last_event_id,
+                opts,
+            )?;
+            event_streams.push(client);
+            Ok(())
         }
         "/api/snapshot" => {
             if project_param_invalid {
@@ -1007,9 +1169,27 @@ fn handle_connection(
     }
 }
 
+fn tick_event_streams(
+    event_streams: &mut Vec<events_stream::EventsStreamClient>,
+    stores: &mut ViewerStores,
+) {
+    if event_streams.is_empty() {
+        return;
+    }
+    let now_ms = now_ms_i64();
+    event_streams.retain_mut(|client| {
+        let store = match stores.store_for(&client.storage_dir) {
+            Ok(store) => store,
+            Err(_) => return false,
+        };
+        client.tick(store, now_ms).unwrap_or(false)
+    });
+}
+
 struct HttpRequest {
     method: String,
     path: String,
+    last_event_id: Option<String>,
     body: Vec<u8>,
 }
 
@@ -1060,12 +1240,19 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<HttpRequest>> 
     let path = parts.next().unwrap_or("/").to_string();
 
     let mut content_length: usize = 0;
+    let mut last_event_id: Option<String> = None;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
             continue;
         };
         if name.trim().eq_ignore_ascii_case("content-length") {
             content_length = value.trim().parse::<usize>().unwrap_or(0);
+        }
+        if name.trim().eq_ignore_ascii_case("last-event-id") {
+            let value = value.trim();
+            if !value.is_empty() {
+                last_event_id = Some(value.to_string());
+            }
         }
     }
 
@@ -1100,7 +1287,12 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<HttpRequest>> 
         body.truncate(content_length);
     }
 
-    Ok(Some(HttpRequest { method, path, body }))
+    Ok(Some(HttpRequest {
+        method,
+        path,
+        last_event_id,
+        body,
+    }))
 }
 
 fn normalize_path(raw: &str) -> String {

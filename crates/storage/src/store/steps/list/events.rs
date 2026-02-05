@@ -5,6 +5,14 @@ use bm_core::ids::WorkspaceId;
 use rusqlite::params;
 
 impl SqliteStore {
+    pub fn events_latest_seq(&self, workspace: &WorkspaceId) -> Result<i64, StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM events WHERE workspace = ?1",
+            params![workspace.as_str()],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn list_events_for_task(
         &self,
         workspace: &WorkspaceId,

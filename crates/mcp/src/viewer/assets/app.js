@@ -75,6 +75,8 @@ const autostartMutation = { pending: false };
 const workspaceMutation = { recoveredGuardMismatch: false };
 const projectsMutation = { pending: false };
 const navMutation = { applying: false };
+const snapshotMutation = { pending: false, queued: false, timer: 0, lastRequestedAt: 0 };
+const liveMutation = { source: null, open: false, lastEventId: null, lastMessageAt: 0, failures: 0 };
 
 const PROJECT_STORAGE_KEY = "bm_viewer_project";
 const WORKSPACE_STORAGE_KEY = "bm_viewer_workspace";
@@ -3813,6 +3815,11 @@ function renderError(payload) {
 }
 
 async function loadSnapshot() {
+  if (snapshotMutation.pending) {
+    snapshotMutation.queued = true;
+    return;
+  }
+  snapshotMutation.pending = true;
   try {
     const response = await fetchWithTimeout(
       workspaceUrl("/api/snapshot"),
@@ -3841,6 +3848,12 @@ async function loadSnapshot() {
     renderError({
       error: { code: "NETWORK_ERROR", message: "Snapshot unavailable." },
     });
+  } finally {
+    snapshotMutation.pending = false;
+    if (snapshotMutation.queued) {
+      snapshotMutation.queued = false;
+      void loadSnapshot();
+    }
   }
 }
 
@@ -3878,13 +3891,15 @@ if (nodes.project) {
     renderProjectSelect();
     await loadWorkspaces();
     renderWorkspaceSelect(null);
+    stopLiveEvents();
     loadAbout();
-    loadSnapshot();
+    await loadSnapshot();
+    startLiveEvents();
   });
 }
 
 if (nodes.workspace) {
-  nodes.workspace.addEventListener("change", () => {
+  nodes.workspace.addEventListener("change", async () => {
     const next = (nodes.workspace.value || "").trim();
     if (!next) {
       setWorkspaceOverride(null);
@@ -3899,8 +3914,10 @@ if (nodes.workspace) {
     state.navIndex = -1;
     updateNavButtons();
     setDetailVisible(false);
+    stopLiveEvents();
     loadAbout();
-    loadSnapshot();
+    await loadSnapshot();
+    startLiveEvents();
   });
 }
 
@@ -4434,13 +4451,86 @@ window.addEventListener("keydown", (event) => {
 
 updateNavButtons();
 
+function stopLiveEvents() {
+  const source = liveMutation.source;
+  liveMutation.source = null;
+  liveMutation.open = false;
+  liveMutation.lastEventId = null;
+  if (!source) return;
+  try {
+    source.close();
+  } catch {
+    // ignore close failures
+  }
+}
+
+function requestSnapshotRefresh() {
+  const now = Date.now();
+  const minIntervalMs = 700;
+  const since = now - (snapshotMutation.lastRequestedAt || 0);
+  const delay = since < minIntervalMs ? minIntervalMs - since : 120;
+  if (snapshotMutation.timer) {
+    window.clearTimeout(snapshotMutation.timer);
+  }
+  snapshotMutation.timer = window.setTimeout(() => {
+    snapshotMutation.timer = 0;
+    snapshotMutation.lastRequestedAt = Date.now();
+    loadSnapshot();
+  }, delay);
+}
+
+function startLiveEvents() {
+  stopLiveEvents();
+  if (typeof window.EventSource !== "function") {
+    return;
+  }
+  const url = workspaceUrl("/api/events");
+  let source = null;
+  try {
+    source = new EventSource(url);
+  } catch {
+    return;
+  }
+
+  liveMutation.source = source;
+
+  source.addEventListener("ready", (event) => {
+    liveMutation.open = true;
+    liveMutation.failures = 0;
+    if (event && event.lastEventId) {
+      liveMutation.lastEventId = event.lastEventId;
+    }
+  });
+
+  source.addEventListener("bm_event", (event) => {
+    liveMutation.lastMessageAt = Date.now();
+    if (event && event.lastEventId) {
+      liveMutation.lastEventId = event.lastEventId;
+    }
+    requestSnapshotRefresh();
+  });
+
+  source.addEventListener("eof", (event) => {
+    if (event && event.lastEventId) {
+      liveMutation.lastEventId = event.lastEventId;
+    }
+    // Server budgets intentionally close the stream; EventSource will reconnect.
+  });
+
+  source.onerror = () => {
+    liveMutation.open = false;
+    liveMutation.failures += 1;
+  };
+}
+
 async function boot() {
   await loadProjects();
   renderProjectSelect();
   await loadWorkspaces();
   renderWorkspaceSelect(null);
   loadAbout();
-  loadSnapshot();
+  await loadSnapshot();
+  startLiveEvents();
 }
 
 void boot();
@@ -4463,8 +4553,9 @@ async function refreshProjects() {
 
 window.setInterval(() => {
   if (document.visibilityState !== "visible") return;
+  if (liveMutation.open) return;
   loadSnapshot();
-}, 6000);
+}, 20000);
 
 window.setInterval(() => {
   if (document.visibilityState !== "visible") return;
@@ -4475,5 +4566,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     void refreshProjects();
     loadSnapshot();
+    startLiveEvents();
+  } else {
+    stopLiveEvents();
   }
 });

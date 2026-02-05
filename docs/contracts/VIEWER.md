@@ -250,6 +250,32 @@ Notes:
 - If a project guard mismatch is detected, the snapshot returns a typed error payload instead.
 - If `project=` is invalid or unknown, the snapshot returns a typed error payload.
 
+### `GET /api/events` (SSE)
+
+Returns a **local-only** Server-Sent Events stream of new store events for the selected workspace.
+
+This endpoint is designed to make the viewer feel “live” without aggressive polling. The client
+subscribes via `EventSource` and refreshes `/api/snapshot` when meaningful events arrive.
+
+Optional query params:
+
+- `workspace=<WorkspaceId>`: override workspace for this request (read-only view selection).
+- `project=<project_guard>`: switch the stream to another active project (read-only).
+- `since=<evt_0000000000000000>`: start streaming events strictly after this id.
+  - If omitted, the stream starts at “now” (tails the current head; does not replay history).
+- `poll_ms=<int>`: server poll interval (default: 250; clamped to 50..2000).
+- `keepalive_ms=<int>`: keepalive comment interval (default: 15000; clamped to 5000..60000).
+- `max_events=<int>`: max events per connection before the server closes it (default: 400; clamped to 50..2000).
+- `max_stream_ms=<int>`: max connection lifetime in ms before the server closes it (default: 120000; clamped to 10000..600000).
+
+Response:
+
+- `Content-Type: text/event-stream`
+- Events:
+  - `event: ready` (sent immediately; includes an `id:` so EventSource can resume via `Last-Event-ID`)
+  - `event: bm_event` (one per new store event)
+  - `event: eof` (server budget reached; client should reconnect)
+
 ### `GET /api/plan/<PLAN-ID>`
 
 Returns **read-only** details for a single plan, plus its latest local notes/thoughts.
