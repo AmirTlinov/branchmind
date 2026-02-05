@@ -29,6 +29,7 @@ const graphState = {
   animationFrame: 0,
   settle: null,
   cameraAnim: null,
+  lodDebounceTimer: 0,
   lastCanvasWidth: 0,
   lastCanvasHeight: 0,
 };
@@ -52,7 +53,10 @@ const GRAPH_CONST = {
   worldTaskRadiusBase: 140,
   tile: 0.45,
   lodClustersAt: 0.9,
+  lodClustersOutAt: 0.84,
   lodTasksAt: 1.35,
+  lodTasksOutAt: 1.25,
+  lodDebounceMs: 120,
   showTaskLabelsAt: 1.75,
   showTaskSimilarEdgesAt: 1.55,
   fadeMs: 260,
@@ -1471,6 +1475,46 @@ function computeLod(scale) {
   return "tasks";
 }
 
+function computeLodHysteresis(scale, prevLod) {
+  const s = typeof scale === "number" ? scale : 1;
+  const prev = (prevLod || "").toString();
+
+  if (!prev || (prev !== "overview" && prev !== "clusters" && prev !== "tasks")) {
+    return computeLod(s);
+  }
+
+  if (prev === "overview") {
+    return computeLod(s);
+  }
+
+  if (prev === "clusters") {
+    if (s < GRAPH_CONST.lodClustersOutAt) return "overview";
+    if (s >= GRAPH_CONST.lodTasksAt) return "tasks";
+    return "clusters";
+  }
+
+  // prev === "tasks"
+  if (s < GRAPH_CONST.lodClustersOutAt) return "overview";
+  if (s < GRAPH_CONST.lodTasksOutAt) return "clusters";
+  return "tasks";
+}
+
+function scheduleLodDebouncedRebuild(snapshot) {
+  if (graphState.lodDebounceTimer) {
+    window.clearTimeout(graphState.lodDebounceTimer);
+    graphState.lodDebounceTimer = 0;
+  }
+  const expectedKey = graphDataKey(snapshot);
+  const expectedLod = graphState.lod;
+  graphState.lodDebounceTimer = window.setTimeout(() => {
+    graphState.lodDebounceTimer = 0;
+    if (!state.snapshot) return;
+    if (graphDataKey(state.snapshot) !== expectedKey) return;
+    if (graphState.lod !== expectedLod) return;
+    renderGraphFlagship(state.snapshot);
+  }, GRAPH_CONST.lodDebounceMs);
+}
+
 function lodLabel(lod) {
   switch (lod) {
     case "clusters":
@@ -1826,12 +1870,12 @@ function boundsOfNodes(nodes) {
   return { minX, minY, maxX, maxY };
 }
 
-function buildDisplayModelFlagship(snapshot, view) {
+function buildDisplayModelFlagship(snapshot, view, lodOverride) {
   const { planNodes, planTokens } = buildPlanNodesFlagship(snapshot);
   const planById = new Map(planNodes.map((node) => [node.id, node]));
 
   const selectedPlanId = ensureSelectedPlanId(snapshot);
-  const lod = computeLod(view?.scale || 1);
+  const lod = (lodOverride || "").toString() || computeLod(view?.scale || 1);
 
   const nodes = planNodes.slice();
   const edges = [];
@@ -2625,10 +2669,10 @@ function onGraphFrame(ts) {
     graphState.view.offsetX = anim.from.offsetX + (anim.to.offsetX - anim.from.offsetX) * e;
     graphState.view.offsetY = anim.from.offsetY + (anim.to.offsetY - anim.from.offsetY) * e;
     graphState.view.scale = anim.from.scale + (anim.to.scale - anim.from.scale) * e;
-    graphState.lod = computeLod(graphState.view.scale);
+    graphState.lod = computeLodHysteresis(graphState.view.scale, prevLod);
     const lodChanged = prevLod && prevLod !== graphState.lod;
     if (lodChanged && state.snapshot && UI_MODE === "flagship") {
-      const display = buildDisplayModelFlagship(state.snapshot, graphState.view);
+      const display = buildDisplayModelFlagship(state.snapshot, graphState.view, graphState.lod);
       mergeDisplayModelIntoCache(display);
       const snapshotKey = graphDataKey(state.snapshot);
       graphState.displayKey = `${snapshotKey}:${display.selectedPlanId || "none"}:${display.lod}`;
@@ -2716,6 +2760,62 @@ function mergeDisplayModelIntoCache(display) {
 
   layoutCache.renderIds = new Set([...nextIds, ...Array.from(layoutCache.fade.keys())]);
 
+  // Spawn anchors for premium semantic zoom:
+  // - clusters spawn from their parent plan (“continent” → “cities”)
+  // - tasks spawn from their previous cluster (“city” → “streets”), when available
+  // - clusters (on collapse) spawn from the centroid of their member tasks, when available
+  const taskAnchorById = new Map();
+  layoutCache.nodesById.forEach((node) => {
+    if (!node || node.kind !== "cluster") return;
+    const members = Array.isArray(node.members) ? node.members : [];
+    members.forEach((memberId) => {
+      if (memberId && !taskAnchorById.has(memberId)) {
+        taskAnchorById.set(memberId, { x: node.x, y: node.y });
+      }
+    });
+  });
+
+  const planAnchor = (planId) => {
+    const id = (planId || "").trim();
+    if (!id) return null;
+    const plan = layoutCache.nodesById.get(id);
+    if (!plan) return null;
+    return { x: plan.x, y: plan.y };
+  };
+
+  const centroidAnchor = (members) => {
+    const ids = Array.isArray(members) ? members : [];
+    if (ids.length === 0) return null;
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
+    for (let i = 0; i < ids.length; i += 1) {
+      const id = ids[i];
+      const node = id ? layoutCache.nodesById.get(id) : null;
+      if (!node || node.kind !== "task") continue;
+      sumX += node.x;
+      sumY += node.y;
+      count += 1;
+    }
+    if (!count) return null;
+    return { x: sumX / count, y: sumY / count };
+  };
+
+  const spawnAnchorFor = (next, id) => {
+    if (!next) return null;
+    const kind = (next.kind || "").toString();
+    if (kind === "cluster") {
+      return centroidAnchor(next.members) || planAnchor(next.plan_id || next.planId || "");
+    }
+    if (kind === "task") {
+      return taskAnchorById.get(id) || planAnchor(next.plan_id || next.planId || "");
+    }
+    if (kind === "plan") {
+      return null;
+    }
+    return null;
+  };
+
   (display?.nodes || []).forEach((next) => {
     const id = (next?.id || "").trim();
     if (!id) return;
@@ -2735,10 +2835,13 @@ function mergeDisplayModelIntoCache(display) {
       return;
     }
     const jitter = (hashToUnit(`${id}-spawn`) - 0.5) * 26;
+    const anchor = spawnAnchorFor(next, id);
+    const ax = anchor ? anchor.x : next.tx || 0;
+    const ay = anchor ? anchor.y : next.ty || 0;
     const node = {
       ...next,
-      x: (next.tx || 0) + jitter,
-      y: (next.ty || 0) - jitter * 0.7,
+      x: ax + jitter,
+      y: ay - jitter * 0.7,
       vx: 0,
       vy: 0,
     };
@@ -2782,6 +2885,12 @@ function settleLayoutOnce() {
   const keys = Array.from(buckets.keys()).sort();
   const getBucket = (cx, cy) => buckets.get(`${cx},${cy}`);
   const applyPair = (a, b) => {
+    // Mental map invariant: plans (“continents”) must not drift when we expand/collapse
+    // clusters/tasks. Allow plan↔plan repulsion, but skip plan↔(cluster/task).
+    const aPlan = a && a.kind === "plan";
+    const bPlan = b && b.kind === "plan";
+    if (aPlan !== bPlan) return;
+
     let dx = a.x - b.x;
     let dy = a.y - b.y;
     const dist2 = dx * dx + dy * dy + 0.01;
@@ -2875,7 +2984,7 @@ function drawGraphFlagship(snapshot, now) {
     view.offsetY * ratio
   );
 
-  const lod = graphState.lod || model.lod || "overview";
+  const lod = model.lod || graphState.lod || "overview";
   const selectedPlanId = model.selectedPlanId || snapshot.primary_plan_id || null;
   const focus = snapshot.focus || { kind: "none" };
   const focusId = (focus.id || "").trim() || null;
@@ -3158,7 +3267,8 @@ function updateHud(snapshot) {
   const projectLabel = (state.currentProjectLabel || "").trim() || "current";
   const where = `${projectLabel} · ${workspace}`;
   nodes.hudWhere.textContent = where;
-  nodes.hudLod.textContent = lodLabel(graphState.lod);
+  const lod = graphState.model?.lod || graphState.lod;
+  nodes.hudLod.textContent = lodLabel(lod);
 
   const focus = snapshot?.focus || { kind: "none" };
   if (focus.kind === "none" || !focus.id) {
@@ -3196,6 +3306,10 @@ function updateHud(snapshot) {
 function renderGraphFlagship(snapshot) {
   const canvas = nodes.graph;
   if (!canvas) return;
+  if (graphState.lodDebounceTimer) {
+    window.clearTimeout(graphState.lodDebounceTimer);
+    graphState.lodDebounceTimer = 0;
+  }
 
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(1, rect.width);
@@ -3218,7 +3332,7 @@ function renderGraphFlagship(snapshot) {
   if (!graphState.view) return;
 
   const lodBefore = graphState.lod;
-  graphState.lod = computeLod(graphState.view.scale);
+  graphState.lod = computeLodHysteresis(graphState.view.scale, lodBefore);
 
   const snapshotKey = graphDataKey(snapshot);
   const selectedPlanId = ensureSelectedPlanId(snapshot);
@@ -3226,7 +3340,7 @@ function renderGraphFlagship(snapshot) {
   const needsModel = !graphState.model || graphState.displayKey !== displayKey;
 
   if (needsModel) {
-    const display = buildDisplayModelFlagship(snapshot, graphState.view);
+    const display = buildDisplayModelFlagship(snapshot, graphState.view, graphState.lod);
     mergeDisplayModelIntoCache(display);
     graphState.displayKey = displayKey;
     graphState.snapshotKey = snapshotKey;
@@ -3239,7 +3353,7 @@ function renderGraphFlagship(snapshot) {
     startSettleAnimation();
   } else if (lodBefore !== graphState.lod) {
     // LOD changed via zoom: rebuild visible nodes, but keep positions.
-    const display = buildDisplayModelFlagship(snapshot, graphState.view);
+    const display = buildDisplayModelFlagship(snapshot, graphState.view, graphState.lod);
     mergeDisplayModelIntoCache(display);
     graphState.displayKey = `${snapshotKey}:${selectedPlanId || "none"}:${graphState.lod}`;
     startSettleAnimation();
@@ -3401,10 +3515,12 @@ function ensureGraphHandlersFlagship() {
       view.offsetX = mouseX - world.x * view.scale;
       view.offsetY = mouseY - world.y * view.scale;
       const lodBefore = graphState.lod;
-      graphState.lod = computeLod(view.scale);
-      if (lodBefore !== graphState.lod) {
-        renderGraphFlagship(state.snapshot);
-        return;
+      const nextLod = computeLodHysteresis(view.scale, lodBefore);
+      if (lodBefore !== nextLod) {
+        graphState.lod = nextLod;
+        // Premium semantic zoom: do not rebuild instantly on threshold crossings. Give the
+        // gesture a brief window to “settle” so we avoid flicker when hovering near a boundary.
+        scheduleLodDebouncedRebuild(state.snapshot);
       }
       drawGraphFlagship(state.snapshot, performance.now());
       drawMinimapFlagship(state.snapshot);
