@@ -79,6 +79,15 @@ const autostartMutation = { pending: false };
 const workspaceMutation = { recoveredGuardMismatch: false };
 const projectsMutation = { pending: false };
 const navMutation = { applying: false };
+
+const windowUi = {
+  zCounter: 80,
+  explorer: { open: false, pinned: false, anchor: "left", x: 32, y: 32, z: 60 },
+  detail: { open: false, pinned: false, anchor: "right", x: 32, y: 32, z: 70 },
+  dragging: null,
+  lastExplorerKey: null,
+  lastDetailKey: null,
+};
 const snapshotMutation = { pending: false, queued: false, timer: 0, lastRequestedAt: 0 };
 const liveMutation = { source: null, open: false, lastEventId: null, lastMessageAt: 0, failures: 0 };
 
@@ -192,6 +201,7 @@ const WORKSPACE_STORAGE_KEY = "bm_viewer_workspace";
 const WORKSPACE_STORAGE_PREFIX = "bm_viewer_workspace:";
 const LENS_STORAGE_KEY = "bm_viewer_lens";
 const SIDEBAR_OPEN_STORAGE_PREFIX = "bm_viewer_sidebar_open:";
+const DETAIL_WINDOW_STORAGE_PREFIX = "bm_viewer_detail_window:";
 
 function queryFlag(name) {
   try {
@@ -265,8 +275,29 @@ function workspaceStorageKey() {
   return `${WORKSPACE_STORAGE_PREFIX}${activeProjectKey()}`;
 }
 
-function sidebarOpenStorageKey() {
+function activeWorkspaceKey() {
+  const ws = ((state.workspaceOverride || state.snapshot?.workspace || "auto") + "").trim();
+  return ws || "auto";
+}
+
+function activeLensKey() {
+  return normalizeLens(state.lens || state.snapshot?.lens || "work");
+}
+
+function windowScopeKey() {
+  return `${activeProjectKey()}:${activeWorkspaceKey()}:${activeLensKey()}`;
+}
+
+function legacySidebarOpenStorageKey() {
   return `${SIDEBAR_OPEN_STORAGE_PREFIX}${activeProjectKey()}`;
+}
+
+function sidebarOpenStorageKey() {
+  return `${SIDEBAR_OPEN_STORAGE_PREFIX}${windowScopeKey()}`;
+}
+
+function detailWindowStorageKey() {
+  return `${DETAIL_WINDOW_STORAGE_PREFIX}${windowScopeKey()}`;
 }
 
 function setProjectOverride(value) {
@@ -339,22 +370,93 @@ function loadLensFromStorage() {
   setLens(fromQuery || stored || state.lens || "work");
 }
 
-function loadSidebarOpenFromStorage() {
+function parseStoredBool(value) {
+  const raw = ((value || "") + "").trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
+  return null;
+}
+
+function parseStoredWindowState(value) {
+  const raw = ((value || "") + "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {
+    // ignore
+  }
+  const open = parseStoredBool(raw);
+  if (open === null) return null;
+  return { open };
+}
+
+function loadExplorerWindowStateFromStorage() {
   let stored = null;
   try {
     stored = localStorage.getItem(sidebarOpenStorageKey());
+    if (!stored) {
+      const legacy = localStorage.getItem(legacySidebarOpenStorageKey());
+      if (legacy) {
+        stored = legacy;
+        localStorage.setItem(sidebarOpenStorageKey(), legacy);
+      }
+    }
   } catch {
     stored = null;
   }
-  const raw = ((stored || "") + "").trim().toLowerCase();
-  if (!raw) return null;
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  const parsed = parseStoredWindowState(stored) || {};
+  const open = typeof parsed.open === "boolean" ? parsed.open : null;
+  const pinned = typeof parsed.pinned === "boolean" ? parsed.pinned : false;
+  const anchor = parsed.anchor === "right" ? "right" : "left";
+  const x = typeof parsed.x === "number" ? parsed.x : windowUi.explorer.x;
+  const y = typeof parsed.y === "number" ? parsed.y : windowUi.explorer.y;
+  const z = typeof parsed.z === "number" ? parsed.z : windowUi.explorer.z;
+  return { open, pinned, anchor, x, y, z };
 }
 
-function applySidebarOpenPreference({ defaultOpen } = {}) {
-  const preferred = loadSidebarOpenFromStorage();
-  const open = preferred === null ? defaultOpen !== false : preferred;
-  setSidebarVisible(open, { persist: false, focus: false });
+function loadDetailWindowStateFromStorage() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(detailWindowStorageKey());
+  } catch {
+    stored = null;
+  }
+  const parsed = parseStoredWindowState(stored) || {};
+  const open = typeof parsed.open === "boolean" ? parsed.open : null;
+  const pinned = typeof parsed.pinned === "boolean" ? parsed.pinned : false;
+  const anchor = parsed.anchor === "left" ? "left" : "right";
+  const x = typeof parsed.x === "number" ? parsed.x : windowUi.detail.x;
+  const y = typeof parsed.y === "number" ? parsed.y : windowUi.detail.y;
+  const z = typeof parsed.z === "number" ? parsed.z : windowUi.detail.z;
+  return { open, pinned, anchor, x, y, z };
+}
+
+function applyExplorerWindowPreference({ defaultOpen } = {}) {
+  const stored = loadExplorerWindowStateFromStorage();
+  windowUi.explorer.pinned = stored.pinned;
+  windowUi.explorer.anchor = stored.anchor;
+  windowUi.explorer.x = stored.x;
+  windowUi.explorer.y = stored.y;
+  windowUi.explorer.z = stored.z;
+
+  const open = stored.pinned ? true : stored.open === null ? defaultOpen !== false : stored.open;
+  setSidebarPinned(stored.pinned, { persist: false });
+  setSidebarVisible(open, { persist: false, focus: false, clamp: true });
+}
+
+function applyDetailWindowPreference({ defaultOpen } = {}) {
+  const stored = loadDetailWindowStateFromStorage();
+  windowUi.detail.pinned = stored.pinned;
+  windowUi.detail.anchor = stored.anchor;
+  windowUi.detail.x = stored.x;
+  windowUi.detail.y = stored.y;
+  windowUi.detail.z = stored.z;
+
+  const open = stored.pinned ? true : stored.open === null ? defaultOpen === true : stored.open;
+  setDetailPinned(stored.pinned, { persist: false });
+  setDetailVisible(open, { persist: false, focus: false, clamp: true });
 }
 
 async function loadProjects() {
@@ -497,12 +599,14 @@ const nodes = {
   btnExplorer: document.getElementById("btn-explorer"),
   sidebarPanel: document.getElementById("sidebar-panel"),
   sidebarClose: document.getElementById("sidebar-close"),
+  sidebarPin: document.getElementById("sidebar-pin"),
   detailPanel: document.getElementById("detail-panel"),
   detailKicker: document.getElementById("detail-kicker"),
   detailTitle: document.getElementById("detail-title"),
   detailMeta: document.getElementById("detail-meta"),
   detailBody: document.getElementById("detail-body"),
   detailClose: document.getElementById("detail-close"),
+  detailPin: document.getElementById("detail-pin"),
   palette: document.getElementById("palette"),
   paletteInput: document.getElementById("palette-input"),
   paletteResults: document.getElementById("palette-results"),
@@ -818,10 +922,24 @@ async function fetchWithTimeout(path, options, timeoutMs) {
   }
 }
 
-function setDetailVisible(open) {
+function setDetailVisible(open, opts) {
   if (!nodes.detailPanel) return;
-  nodes.detailPanel.classList.toggle("is-open", open);
-  nodes.detailPanel.setAttribute("aria-hidden", open ? "false" : "true");
+  const desired = !!open;
+  windowUi.detail.open = desired;
+  if (desired) {
+    windowUi.detail.z = bumpWindowZ();
+  }
+  syncDetailWindowDom({ persist: !(opts && opts.persist === false), clamp: !(opts && opts.clamp === false) });
+  const focus = !(opts && opts.focus === false);
+  if (focus) {
+    window.setTimeout(() => {
+      if (desired) {
+        nodes.detailClose?.focus?.();
+      } else {
+        nodes.btnFocus?.focus?.();
+      }
+    }, 0);
+  }
 }
 
 function sidebarIsOpen() {
@@ -829,19 +947,12 @@ function sidebarIsOpen() {
 }
 
 function setSidebarVisible(open, opts) {
-  if (!nodes.sidebarPanel) return;
   const desired = !!open;
-  nodes.sidebarPanel.classList.toggle("is-open", desired);
-  nodes.sidebarPanel.setAttribute("aria-hidden", desired ? "false" : "true");
-
-  const persist = !(opts && typeof opts === "object" && opts.persist === false);
-  if (persist) {
-    try {
-      localStorage.setItem(sidebarOpenStorageKey(), desired ? "1" : "0");
-    } catch {
-      // ignore storage failures
-    }
+  windowUi.explorer.open = desired;
+  if (desired) {
+    windowUi.explorer.z = bumpWindowZ();
   }
+  syncExplorerWindowDom({ persist: !(opts && opts.persist === false), clamp: !(opts && opts.clamp === false) });
 
   const focus = !(opts && typeof opts === "object" && opts.focus === false);
   if (focus) {
@@ -853,6 +964,261 @@ function setSidebarVisible(open, opts) {
       }
     }, 0);
   }
+}
+
+function detailIsOpen() {
+  return !!nodes.detailPanel?.classList.contains("is-open");
+}
+
+function explorerIsPinned() {
+  return !!nodes.sidebarPanel?.classList.contains("is-pinned");
+}
+
+function detailIsPinned() {
+  return !!nodes.detailPanel?.classList.contains("is-pinned");
+}
+
+function setSidebarPinned(pinned, opts) {
+  windowUi.explorer.pinned = !!pinned;
+  if (windowUi.explorer.pinned) {
+    windowUi.explorer.open = true;
+  }
+  syncExplorerWindowDom({ persist: !(opts && opts.persist === false), clamp: true });
+}
+
+function setDetailPinned(pinned, opts) {
+  windowUi.detail.pinned = !!pinned;
+  if (windowUi.detail.pinned) {
+    windowUi.detail.open = true;
+  }
+  syncDetailWindowDom({ persist: !(opts && opts.persist === false), clamp: true });
+}
+
+function closeExplorerWindow(opts) {
+  setSidebarPinned(false, { persist: false });
+  setSidebarVisible(false, opts);
+}
+
+function closeDetailWindow(opts) {
+  setDetailPinned(false, { persist: false });
+  setDetailVisible(false, opts);
+}
+
+function persistExplorerWindowState() {
+  try {
+    localStorage.setItem(
+      sidebarOpenStorageKey(),
+      JSON.stringify({
+        v: 1,
+        open: !!windowUi.explorer.open,
+        pinned: !!windowUi.explorer.pinned,
+        anchor: windowUi.explorer.anchor,
+        x: Math.round(windowUi.explorer.x || 0),
+        y: Math.round(windowUi.explorer.y || 0),
+        z: Math.round(windowUi.explorer.z || 0),
+      })
+    );
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function persistDetailWindowState() {
+  try {
+    localStorage.setItem(
+      detailWindowStorageKey(),
+      JSON.stringify({
+        v: 1,
+        open: !!windowUi.detail.open,
+        pinned: !!windowUi.detail.pinned,
+        anchor: windowUi.detail.anchor,
+        x: Math.round(windowUi.detail.x || 0),
+        y: Math.round(windowUi.detail.y || 0),
+        z: Math.round(windowUi.detail.z || 0),
+      })
+    );
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function clampWindowToViewport(el, win) {
+  if (!el) return win;
+  const rect = el.getBoundingClientRect();
+  const margin = 12;
+
+  const maxY = Math.max(margin, window.innerHeight - rect.height - margin);
+  const nextY = clamp(win.y, margin, maxY);
+
+  if (win.anchor === "right") {
+    const maxX = Math.max(margin, window.innerWidth - rect.width - margin);
+    const nextX = clamp(win.x, margin, maxX);
+    return { ...win, x: nextX, y: nextY };
+  }
+  const maxX = Math.max(margin, window.innerWidth - rect.width - margin);
+  const nextX = clamp(win.x, margin, maxX);
+  return { ...win, x: nextX, y: nextY };
+}
+
+function applyWindowGeometry(el, win) {
+  if (!el) return;
+  const x = typeof win.x === "number" ? win.x : 0;
+  const y = typeof win.y === "number" ? win.y : 0;
+  el.style.top = `${Math.round(y)}px`;
+  if (win.anchor === "right") {
+    el.style.right = `${Math.round(x)}px`;
+    el.style.left = "auto";
+  } else {
+    el.style.left = `${Math.round(x)}px`;
+    el.style.right = "auto";
+  }
+  if (typeof win.z === "number") {
+    el.style.zIndex = `${Math.round(win.z)}`;
+  }
+}
+
+function syncExplorerWindowDom(opts) {
+  if (!nodes.sidebarPanel) return;
+  if (opts && opts.clamp) {
+    windowUi.explorer = clampWindowToViewport(nodes.sidebarPanel, windowUi.explorer);
+  }
+  nodes.sidebarPanel.classList.toggle("is-open", !!windowUi.explorer.open);
+  nodes.sidebarPanel.classList.toggle("is-pinned", !!windowUi.explorer.pinned);
+  nodes.sidebarPanel.setAttribute("aria-hidden", windowUi.explorer.open ? "false" : "true");
+  applyWindowGeometry(nodes.sidebarPanel, windowUi.explorer);
+
+  if (nodes.sidebarPin) {
+    nodes.sidebarPin.textContent = windowUi.explorer.pinned ? "Unpin" : "Pin";
+    nodes.sidebarPin.setAttribute("aria-pressed", windowUi.explorer.pinned ? "true" : "false");
+  }
+
+  if (opts && opts.persist) {
+    persistExplorerWindowState();
+  }
+}
+
+function syncDetailWindowDom(opts) {
+  if (!nodes.detailPanel) return;
+  if (opts && opts.clamp) {
+    windowUi.detail = clampWindowToViewport(nodes.detailPanel, windowUi.detail);
+  }
+  nodes.detailPanel.classList.toggle("is-open", !!windowUi.detail.open);
+  nodes.detailPanel.classList.toggle("is-pinned", !!windowUi.detail.pinned);
+  nodes.detailPanel.setAttribute("aria-hidden", windowUi.detail.open ? "false" : "true");
+  applyWindowGeometry(nodes.detailPanel, windowUi.detail);
+
+  if (nodes.detailPin) {
+    nodes.detailPin.textContent = windowUi.detail.pinned ? "Unpin" : "Pin";
+    nodes.detailPin.setAttribute("aria-pressed", windowUi.detail.pinned ? "true" : "false");
+  }
+
+  if (opts && opts.persist) {
+    persistDetailWindowState();
+  }
+}
+
+function bumpWindowZ() {
+  windowUi.zCounter += 1;
+  if (windowUi.zCounter > 900) {
+    windowUi.zCounter = 80;
+    windowUi.explorer.z = 60;
+    windowUi.detail.z = 70;
+  }
+  return windowUi.zCounter;
+}
+
+function bringWindowToFront(kind) {
+  if (kind === "explorer") {
+    windowUi.explorer.z = bumpWindowZ();
+    syncExplorerWindowDom({ persist: false, clamp: false });
+    return;
+  }
+  if (kind === "detail") {
+    windowUi.detail.z = bumpWindowZ();
+    syncDetailWindowDom({ persist: false, clamp: false });
+  }
+}
+
+function isInteractiveElement(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return !!target.closest("button, input, select, textarea, a, [role='button']");
+}
+
+function startWindowDrag(kind, el, event) {
+  if (!el || !event) return;
+  if (event.button !== 0) return;
+  const target = event.target;
+  if (isInteractiveElement(target)) return;
+
+  const rect = el.getBoundingClientRect();
+  const win = kind === "explorer" ? windowUi.explorer : windowUi.detail;
+
+  windowUi.dragging = {
+    kind,
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startAnchor: win.anchor,
+    startX: win.x,
+    startY: win.y,
+    width: rect.width,
+    height: rect.height,
+  };
+
+  try {
+    el.setPointerCapture(event.pointerId);
+  } catch {
+    // ignore
+  }
+  event.preventDefault();
+}
+
+function handleWindowDragMove(event) {
+  const drag = windowUi.dragging;
+  if (!drag || !event) return;
+  if (drag.pointerId !== event.pointerId) return;
+
+  const dx = event.clientX - drag.startClientX;
+  const dy = event.clientY - drag.startClientY;
+  const margin = 12;
+
+  if (drag.kind === "explorer") {
+    const maxX = Math.max(margin, window.innerWidth - drag.width - margin);
+    const maxY = Math.max(margin, window.innerHeight - drag.height - margin);
+    windowUi.explorer.anchor = "left";
+    windowUi.explorer.x = clamp(drag.startX + dx, margin, maxX);
+    windowUi.explorer.y = clamp(drag.startY + dy, margin, maxY);
+    syncExplorerWindowDom({ persist: false, clamp: false });
+    return;
+  }
+
+  const maxY = Math.max(margin, window.innerHeight - drag.height - margin);
+  windowUi.detail.y = clamp(drag.startY + dy, margin, maxY);
+
+  if (drag.startAnchor === "right") {
+    const maxX = Math.max(margin, window.innerWidth - drag.width - margin);
+    windowUi.detail.anchor = "right";
+    windowUi.detail.x = clamp(drag.startX - dx, margin, maxX);
+  } else {
+    const maxX = Math.max(margin, window.innerWidth - drag.width - margin);
+    windowUi.detail.anchor = "left";
+    windowUi.detail.x = clamp(drag.startX + dx, margin, maxX);
+  }
+
+  syncDetailWindowDom({ persist: false, clamp: false });
+}
+
+function handleWindowDragEnd(event) {
+  const drag = windowUi.dragging;
+  if (!drag || !event) return;
+  if (drag.pointerId !== event.pointerId) return;
+  windowUi.dragging = null;
+
+  if (drag.kind === "explorer") {
+    syncExplorerWindowDom({ persist: true, clamp: true });
+    return;
+  }
+  syncDetailWindowDom({ persist: true, clamp: true });
 }
 
 function renderDetailMeta(lines) {
@@ -4788,11 +5154,55 @@ window.addEventListener("resize", () => {
       renderGraphFlagship(state.snapshot);
     }
   }
+  syncExplorerWindowDom({ persist: true, clamp: true });
+  syncDetailWindowDom({ persist: true, clamp: true });
 });
 
 if (nodes.detailClose) {
-  nodes.detailClose.addEventListener("click", () => setDetailVisible(false));
+  nodes.detailClose.addEventListener("click", () => closeDetailWindow());
 }
+
+if (nodes.detailPin) {
+  nodes.detailPin.addEventListener("click", () => setDetailPinned(!windowUi.detail.pinned));
+}
+
+if (nodes.sidebarPin) {
+  nodes.sidebarPin.addEventListener("click", () => setSidebarPinned(!windowUi.explorer.pinned));
+}
+
+if (nodes.sidebarPanel) {
+  nodes.sidebarPanel.addEventListener(
+    "pointerdown",
+    () => {
+      bringWindowToFront("explorer");
+    },
+    true
+  );
+
+  const handle = nodes.sidebarPanel.querySelector(".top");
+  if (handle) {
+    handle.addEventListener("pointerdown", (event) => startWindowDrag("explorer", nodes.sidebarPanel, event));
+  }
+}
+
+if (nodes.detailPanel) {
+  nodes.detailPanel.addEventListener(
+    "pointerdown",
+    () => {
+      bringWindowToFront("detail");
+    },
+    true
+  );
+
+  const handle = nodes.detailPanel.querySelector(".detail-head");
+  if (handle) {
+    handle.addEventListener("pointerdown", (event) => startWindowDrag("detail", nodes.detailPanel, event));
+  }
+}
+
+window.addEventListener("pointermove", handleWindowDragMove, true);
+window.addEventListener("pointerup", handleWindowDragEnd, true);
+window.addEventListener("pointercancel", handleWindowDragEnd, true);
 
 if (nodes.project) {
   nodes.project.addEventListener("change", async () => {
@@ -4804,7 +5214,8 @@ if (nodes.project) {
     }
     workspaceMutation.recoveredGuardMismatch = false;
     loadWorkspaceOverrideFromStorage();
-    applySidebarOpenPreference({ defaultOpen: true });
+    applyExplorerWindowPreference({ defaultOpen: true });
+    applyDetailWindowPreference({ defaultOpen: false });
     state.selectedPlanId = null;
     state.detailSelection = null;
     clearLocalGraph();
@@ -5559,9 +5970,19 @@ if (nodes.btnZoomIn) nodes.btnZoomIn.addEventListener("click", () => zoomFlagshi
 if (nodes.btnZoomOut) nodes.btnZoomOut.addEventListener("click", () => zoomFlagship(0.87));
 if (nodes.btnRefresh) nodes.btnRefresh.addEventListener("click", () => loadSnapshot());
 if (nodes.btnExplorer)
-  nodes.btnExplorer.addEventListener("click", () => setSidebarVisible(!sidebarIsOpen()));
+  nodes.btnExplorer.addEventListener("click", () => {
+    if (sidebarIsOpen()) {
+      if (windowUi.explorer.pinned) {
+        bringWindowToFront("explorer");
+        return;
+      }
+      closeExplorerWindow();
+      return;
+    }
+    setSidebarVisible(true);
+  });
 if (nodes.sidebarClose)
-  nodes.sidebarClose.addEventListener("click", () => setSidebarVisible(false));
+  nodes.sidebarClose.addEventListener("click", () => closeExplorerWindow());
 
 if (nodes.graphSearch) {
   nodes.graphSearch.addEventListener("keydown", (event) => {
@@ -5587,11 +6008,12 @@ window.addEventListener(
   (event) => {
     if (!sidebarIsOpen()) return;
     if (paletteIsOpen()) return;
+    if (windowUi.explorer.pinned) return;
 
     const target = event.target;
     if (nodes.sidebarPanel && target && nodes.sidebarPanel.contains(target)) return;
     if (nodes.btnExplorer && target && nodes.btnExplorer.contains(target)) return;
-    setSidebarVisible(false, { focus: false });
+    closeExplorerWindow({ focus: false });
   },
   true
 );
@@ -5652,11 +6074,13 @@ window.addEventListener("keydown", (event) => {
       setPaletteOpen(false);
       return;
     }
-    if (sidebarIsOpen()) {
-      setSidebarVisible(false);
+    if (sidebarIsOpen() && !windowUi.explorer.pinned) {
+      closeExplorerWindow();
       return;
     }
-    setDetailVisible(false);
+    if (detailIsOpen() && !windowUi.detail.pinned) {
+      closeDetailWindow();
+    }
   }
 });
 
@@ -5737,7 +6161,8 @@ function startLiveEvents() {
 async function boot() {
   await loadProjects();
   renderProjectSelect();
-  applySidebarOpenPreference({ defaultOpen: true });
+  applyExplorerWindowPreference({ defaultOpen: true });
+  applyDetailWindowPreference({ defaultOpen: false });
   await loadWorkspaces();
   renderWorkspaceSelect(null);
   loadLensFromStorage();
@@ -5755,7 +6180,8 @@ async function refreshProjects() {
   try {
     await loadProjects();
     renderProjectSelect();
-    applySidebarOpenPreference({ defaultOpen: true });
+    applyExplorerWindowPreference({ defaultOpen: true });
+    applyDetailWindowPreference({ defaultOpen: false });
     if (before !== state.projectOverride) {
       await loadWorkspaces();
       renderWorkspaceSelect(state.snapshot?.workspace || null);

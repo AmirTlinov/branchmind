@@ -19,6 +19,15 @@
           >
             ×
           </button>
+          <button
+            id="sidebar-pin"
+            class="sidebar-pin"
+            type="button"
+            title="Pin"
+            aria-label="Pin"
+          >
+            Pin
+          </button>
           <div class="brand">
             <div class="kicker">BranchMind</div>
             <h1>Project Pulse</h1>
@@ -224,7 +233,10 @@
           <div id="detail-kicker" class="detail-kicker">Selection</div>
           <div id="detail-title" class="detail-title">Select a node</div>
         </div>
-        <button id="detail-close" class="detail-close" type="button">Close</button>
+        <div class="detail-actions">
+          <button id="detail-pin" class="detail-close" type="button" title="Pin">Pin</button>
+          <button id="detail-close" class="detail-close" type="button">Close</button>
+        </div>
       </div>
       <div id="detail-meta" class="detail-meta"></div>
       <div id="detail-body" class="detail-body"></div>
