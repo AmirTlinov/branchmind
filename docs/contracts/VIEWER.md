@@ -308,6 +308,89 @@ Notes:
 - Lens `knowledge` searches anchors/knowledge keys by `id`/`title`/`key` (best-effort match).
 - Ordering is stable (deterministic) and bounded; it is not a full-text index.
 
+### `GET /api/graph/plan/<plan_id>`
+
+Returns a bounded **plan-scoped** subgraph page so the viewer can materialize plan tasks even when
+`/api/snapshot` is truncated.
+
+Optional query params:
+
+- `workspace=<WorkspaceId>`: override workspace for this request (read-only view selection).
+- `project=<project_guard>`: switch the request to another active project (read-only).
+- `lens=work`: only `work` lens is currently supported (default: `work`).
+- `limit=<int>`: max returned tasks (default: 200; clamped to 1..600).
+- `cursor=<string>`: pagination cursor.
+  - For this endpoint, `cursor` is a **TASK id** previously returned as `pagination.next_cursor`.
+  - Semantics: return tasks with `id > cursor` (stable `id ASC` ordering).
+
+Response (high-level):
+
+```json
+{
+  "generated_at": "RFC3339",
+  "generated_at_ms": 0,
+  "lens": "work",
+  "workspace": "string",
+  "workspace_exists": true,
+  "plan": { "id": "PLAN-123", "title": "string", "task_counts": { "total": 0 } },
+  "tasks_total": 0,
+  "tasks": [{ "id": "TASK-456", "plan_id": "PLAN-123", "title": "string" }],
+  "pagination": { "cursor": "TASK-0001|null", "limit": 200, "has_more": false, "next_cursor": "TASK-0002|null" }
+}
+```
+
+Notes:
+
+- This endpoint is deterministic and bounded; it is not an export API.
+- The viewer remains read-only; no store mutation occurs.
+
+### `GET /api/graph/cluster/<cluster_id>`
+
+Returns a bounded page of tasks that belong to a **semantic tile cluster**.
+
+Cluster id format:
+
+- `C:<plan_id>:<tileX>:<tileY>` (example: `C:PLAN-123:4:9`).
+
+Tiles are computed from the same deterministic semantic vector that the viewer uses in the graph UI
+(tokenization + FNV-1a hashing), then tiled by `tile=0.45`.
+
+Optional query params:
+
+- `workspace=<WorkspaceId>`: override workspace for this request (read-only view selection).
+- `project=<project_guard>`: switch the request to another active project (read-only).
+- `lens=work`: only `work` lens is currently supported (default: `work`).
+- `limit=<int>`: max returned tasks (default: 200; clamped to 1..600).
+- `cursor=<string>`: pagination cursor.
+  - For this endpoint, `cursor` is the last scanned TASK id (returned as `pagination.next_cursor`).
+
+Notes:
+
+- Cluster paging is **best-effort**: the server must scan tasks in `id ASC` order and apply the same
+  deterministic tile function; it does not keep a cluster index in the store yet.
+- Because the scan is bounded, `pagination.has_more=true` may also mean “scan budget reached”.
+
+### `GET /api/graph/local/<node_id>`
+
+Returns a bounded “Obsidian local graph” view for a node, even when the node is missing from the
+current `/api/snapshot`.
+
+Optional query params:
+
+- `workspace=<WorkspaceId>`: override workspace for this request (read-only view selection).
+- `project=<project_guard>`: switch the request to another active project (read-only).
+- `lens=work`: only `work` lens is currently supported (default: `work`).
+- `hops=1|2`: neighborhood depth (default: 2).
+- `limit=<int>`: max returned tasks (default: 200; clamped to 1..600).
+- `cursor=<string>`: pagination cursor (forwarded to the underlying plan/cluster pager).
+
+Notes:
+
+- Supported node ids: `PLAN-*` and `TASK-*` (for now).
+- For `PLAN-*`, this behaves like `/api/graph/plan/<plan_id>`.
+- For `TASK-*` and `hops=2`, the server returns the root task plus a bounded page of tasks from the
+  same semantic cluster tile (focus + context).
+
 ### `GET /api/events` (SSE)
 
 Returns a **local-only** Server-Sent Events stream of new store events for the selected workspace.

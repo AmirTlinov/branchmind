@@ -136,3 +136,17 @@ pub struct TasksSearchResult {
     pub tasks: Vec<TaskSearchHit>,
     pub has_more: bool,
 }
+
+#[derive(Clone, Debug)]
+pub struct TasksListForPlanCursorRequest {
+    pub plan_id: String,
+    pub cursor: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TasksListForPlanCursorResult {
+    pub tasks: Vec<TaskRow>,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+}

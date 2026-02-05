@@ -3,6 +3,8 @@
 mod assets;
 mod detail;
 mod events_stream;
+mod graph;
+mod graph_http;
 mod knowledge_snapshot;
 mod registry;
 mod search;
@@ -961,6 +963,48 @@ fn handle_connection(
                     )
                 }
             }
+        }
+        path if path.starts_with("/api/graph/plan/") => {
+            graph_http::handle_plan(graph_http::GraphHttpContext {
+                stream: &mut stream,
+                stores,
+                request_storage_dir: request_storage_dir.as_path(),
+                request_config: &request_config,
+                workspace_override: workspace_override.as_deref(),
+                request: &request,
+                method,
+                path,
+                project_param_invalid,
+                project_unknown,
+            })
+        }
+        path if path.starts_with("/api/graph/cluster/") => {
+            graph_http::handle_cluster(graph_http::GraphHttpContext {
+                stream: &mut stream,
+                stores,
+                request_storage_dir: request_storage_dir.as_path(),
+                request_config: &request_config,
+                workspace_override: workspace_override.as_deref(),
+                request: &request,
+                method,
+                path,
+                project_param_invalid,
+                project_unknown,
+            })
+        }
+        path if path.starts_with("/api/graph/local/") => {
+            graph_http::handle_local(graph_http::GraphHttpContext {
+                stream: &mut stream,
+                stores,
+                request_storage_dir: request_storage_dir.as_path(),
+                request_config: &request_config,
+                workspace_override: workspace_override.as_deref(),
+                request: &request,
+                method,
+                path,
+                project_param_invalid,
+                project_unknown,
+            })
         }
         "/api/snapshot" => {
             if project_param_invalid {

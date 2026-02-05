@@ -5,6 +5,7 @@ use bm_core::ids::WorkspaceId;
 use rusqlite::{params, params_from_iter};
 
 const MAX_SEARCH_LIMIT: usize = 200;
+const MAX_CURSOR_LIST_LIMIT: usize = 2000;
 
 impl SqliteStore {
     pub fn list_tasks(
@@ -118,6 +119,84 @@ impl SqliteStore {
             },
         )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn list_tasks_for_plan_cursor(
+        &self,
+        workspace: &WorkspaceId,
+        request: TasksListForPlanCursorRequest,
+    ) -> Result<TasksListForPlanCursorResult, StoreError> {
+        let limit = request.limit.clamp(1, MAX_CURSOR_LIST_LIMIT);
+        let cursor = request.cursor.as_deref();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, revision, parent_plan_id, title, description,
+                   status, status_manual, priority, blocked,
+                   assignee, domain, phase, component, reasoning_mode, context,
+                   criteria_confirmed, tests_confirmed, criteria_auto_confirmed, tests_auto_confirmed,
+                   security_confirmed, perf_confirmed, docs_confirmed,
+                   created_at_ms, updated_at_ms, parked_until_ts_ms, stale_after_ms
+            FROM tasks
+            WHERE workspace = ?1
+              AND parent_plan_id = ?2
+              AND (?3 IS NULL OR id > ?3)
+            ORDER BY id ASC
+            LIMIT ?4
+            "#,
+        )?;
+
+        let fetch_limit = (limit + 1) as i64;
+        let rows = stmt.query_map(
+            params![workspace.as_str(), request.plan_id, cursor, fetch_limit],
+            |row| {
+                Ok(TaskRow {
+                    id: row.get(0)?,
+                    revision: row.get(1)?,
+                    parent_plan_id: row.get(2)?,
+                    title: row.get(3)?,
+                    description: row.get(4)?,
+                    status: row.get(5)?,
+                    status_manual: row.get::<_, i64>(6)? != 0,
+                    priority: row.get(7)?,
+                    blocked: row.get::<_, i64>(8)? != 0,
+                    assignee: row.get(9)?,
+                    domain: row.get(10)?,
+                    phase: row.get(11)?,
+                    component: row.get(12)?,
+                    reasoning_mode: row.get::<_, String>(13)?,
+                    context: row.get(14)?,
+                    criteria_confirmed: row.get::<_, i64>(15)? != 0,
+                    tests_confirmed: row.get::<_, i64>(16)? != 0,
+                    criteria_auto_confirmed: row.get::<_, i64>(17)? != 0,
+                    tests_auto_confirmed: row.get::<_, i64>(18)? != 0,
+                    security_confirmed: row.get::<_, i64>(19)? != 0,
+                    perf_confirmed: row.get::<_, i64>(20)? != 0,
+                    docs_confirmed: row.get::<_, i64>(21)? != 0,
+                    created_at_ms: row.get(22)?,
+                    updated_at_ms: row.get(23)?,
+                    parked_until_ts_ms: row.get(24)?,
+                    stale_after_ms: row.get(25)?,
+                })
+            },
+        )?;
+
+        let mut tasks = rows.collect::<Result<Vec<_>, _>>()?;
+        let has_more = tasks.len() > limit;
+        if has_more {
+            tasks.truncate(limit);
+        }
+        let next_cursor = if has_more {
+            tasks.last().map(|task| task.id.clone())
+        } else {
+            None
+        };
+
+        Ok(TasksListForPlanCursorResult {
+            tasks,
+            has_more,
+            next_cursor,
+        })
     }
 
     pub fn list_tasks_for_plan_by_status(
