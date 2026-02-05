@@ -4,6 +4,8 @@ const state = {
   selectedPlanId: null,
   detailToken: 0,
   detailSelection: null,
+  navStack: [],
+  navIndex: -1,
   projectOverride: null,
   currentProjectGuard: null,
   currentProjectLabel: null,
@@ -30,6 +32,12 @@ const graphState = {
   settle: null,
   cameraAnim: null,
   lodDebounceTimer: 0,
+  local: {
+    centerId: null,
+    hops: 2,
+    ids: new Set(),
+    key: null,
+  },
   lastCanvasWidth: 0,
   lastCanvasHeight: 0,
 };
@@ -66,6 +74,7 @@ const GRAPH_CONST = {
 const autostartMutation = { pending: false };
 const workspaceMutation = { recoveredGuardMismatch: false };
 const projectsMutation = { pending: false };
+const navMutation = { applying: false };
 
 const PROJECT_STORAGE_KEY = "bm_viewer_project";
 const WORKSPACE_STORAGE_KEY = "bm_viewer_workspace";
@@ -302,6 +311,8 @@ const nodes = {
   hudWarning: document.getElementById("hud-warning"),
   graphControls: document.getElementById("graph-controls"),
   graphSearch: document.getElementById("graph-search"),
+  btnBack: document.getElementById("btn-back"),
+  btnForward: document.getElementById("btn-forward"),
   btnHome: document.getElementById("btn-home"),
   btnFit: document.getElementById("btn-fit"),
   btnFocus: document.getElementById("btn-focus"),
@@ -314,6 +325,9 @@ const nodes = {
   detailMeta: document.getElementById("detail-meta"),
   detailBody: document.getElementById("detail-body"),
   detailClose: document.getElementById("detail-close"),
+  palette: document.getElementById("palette"),
+  paletteInput: document.getElementById("palette-input"),
+  paletteResults: document.getElementById("palette-results"),
 };
 
 function renderProjectSelect() {
@@ -1513,6 +1527,99 @@ function scheduleLodDebouncedRebuild(snapshot) {
     if (graphState.lod !== expectedLod) return;
     renderGraphFlagship(state.snapshot);
   }, GRAPH_CONST.lodDebounceMs);
+}
+
+function computeLocalGraphIds(edges, centerId, hops) {
+  const start = (centerId || "").trim();
+  if (!start) return new Set();
+
+  const adjacency = new Map();
+  const add = (a, b) => {
+    const key = (a || "").trim();
+    const val = (b || "").trim();
+    if (!key || !val) return;
+    const list = adjacency.get(key) || new Set();
+    list.add(val);
+    adjacency.set(key, list);
+  };
+
+  (edges || []).forEach((edge) => {
+    if (!edge) return;
+    add(edge.from, edge.to);
+    add(edge.to, edge.from);
+  });
+
+  const depth = clamp(typeof hops === "number" ? hops : 2, 1, 3);
+  const seen = new Set([start]);
+  let frontier = new Set([start]);
+
+  for (let i = 0; i < depth; i += 1) {
+    const next = new Set();
+    frontier.forEach((id) => {
+      const neighbors = adjacency.get(id);
+      if (!neighbors) return;
+      neighbors.forEach((neighbor) => {
+        if (seen.has(neighbor)) return;
+        seen.add(neighbor);
+        next.add(neighbor);
+      });
+    });
+    if (next.size === 0) break;
+    frontier = next;
+  }
+
+  return seen;
+}
+
+function refreshLocalGraph() {
+  const local = graphState.local;
+  const model = graphState.model;
+  if (!local || !model) return;
+
+  const key = graphState.displayKey || null;
+  if (local.key && key && local.key === key) return;
+
+  const centerId = (local.centerId || "").trim();
+  if (!centerId) {
+    local.ids = new Set();
+    local.key = key;
+    return;
+  }
+
+  const exists = (model.nodes || []).some((node) => node && node.id === centerId);
+  if (!exists) {
+    local.centerId = null;
+    local.ids = new Set();
+    local.key = key;
+    return;
+  }
+
+  local.ids = computeLocalGraphIds(model.edges, centerId, local.hops);
+  local.key = key;
+}
+
+function localGraphIsActive() {
+  const local = graphState.local;
+  if (!local) return false;
+  return !!((local.centerId || "").trim());
+}
+
+function clearLocalGraph() {
+  if (!graphState.local) return;
+  graphState.local.centerId = null;
+  graphState.local.ids = new Set();
+  graphState.local.key = null;
+}
+
+function toggleLocalGraph(centerId) {
+  const id = (centerId || "").trim();
+  if (!id) return;
+  if (graphState.local?.centerId === id) {
+    clearLocalGraph();
+  } else if (graphState.local) {
+    graphState.local.centerId = id;
+    graphState.local.key = null;
+  }
 }
 
 function lodLabel(lod) {
@@ -2969,6 +3076,7 @@ function drawGraphFlagship(snapshot, now) {
   const model = graphState.model;
   const view = graphState.view;
   if (!canvas || !model || !view) return;
+  refreshLocalGraph();
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const ratio = graphState.pixelRatio || 1;
@@ -2996,6 +3104,8 @@ function drawGraphFlagship(snapshot, now) {
         : null;
   const selectedId = state.detailSelection ? state.detailSelection.id : null;
   const hoverId = graphState.hoverId;
+  const localActive = localGraphIsActive();
+  const localIds = graphState.local?.ids || new Set();
 
   const nodeById = new Map(model.nodes.map((node) => [node.id, node]));
   const renderIds = Array.from(layoutCache.renderIds);
@@ -3015,6 +3125,8 @@ function drawGraphFlagship(snapshot, now) {
       (selectedId && (edge.from === selectedId || edge.to === selectedId)) ||
       (hoverId && (edge.from === hoverId || edge.to === hoverId)) ||
       (focusId && (edge.from === focusId || edge.to === focusId));
+    const localOk = !localActive || (localIds.has(edge.from) && localIds.has(edge.to));
+    if (!localOk && !connected) return;
 
     if (isSimilar && lod === "overview") {
       // keep overview edges rare
@@ -3025,7 +3137,8 @@ function drawGraphFlagship(snapshot, now) {
     }
 
     const baseAlpha = connected ? (isSimilar ? 0.34 : 0.38) : isSimilar ? 0.12 : 0.1;
-    const alpha = baseAlpha + (connected ? 0.15 : 0);
+    const localFactor = localActive && !localOk ? 0.08 : 1;
+    const alpha = (baseAlpha + (connected ? 0.15 : 0)) * localFactor;
     const color = isSimilar ? "132, 169, 255" : "255, 255, 255";
     ctx.strokeStyle = `rgba(${color}, ${alpha})`;
     ctx.lineWidth = (isSimilar ? 1.1 : 1) / view.scale;
@@ -3045,6 +3158,7 @@ function drawGraphFlagship(snapshot, now) {
     const isFocus = focusId && node.id === focusId;
     const isPrimary =
       node.kind === "plan" && (node.id === selectedPlanId || node.id === focusPlanId);
+    const isLocal = !localActive || localIds.has(node.id);
 
     let alpha = 0.9;
     if (node.kind === "plan") {
@@ -3055,6 +3169,9 @@ function drawGraphFlagship(snapshot, now) {
       alpha = isHover || isSelected ? 0.9 : 0.55;
     }
     alpha *= alphaFade;
+    if (!isLocal) {
+      alpha *= node.kind === "plan" ? 0.18 : 0.1;
+    }
 
     if (node.kind === "plan") {
       ctx.fillStyle = planFillColor(node.status).replace(/0\.\d+\)/, `${alpha})`);
@@ -3132,6 +3249,8 @@ function drawGraphFlagship(snapshot, now) {
     const isSelected = node.id === selectedId;
     const isFocus = focusId && node.id === focusId;
     const isPrimary = node.kind === "plan" && (node.id === selectedPlanId || node.id === focusPlanId);
+    const isLocal = !localActive || localIds.has(node.id);
+    if (!isLocal) return;
 
     let shouldLabel = false;
     if (node.kind === "plan") {
@@ -3289,7 +3408,8 @@ function updateHud(snapshot) {
           : graphState.model?.selectedPlanId
             ? `цель ${graphState.model.selectedPlanId}`
             : "нет";
-  nodes.hudSelected.textContent = selected;
+  const local = graphState.local?.centerId ? `local ${graphState.local.centerId}` : "";
+  nodes.hudSelected.textContent = local ? `${selected} · ${local}` : selected;
 
   if (nodes.hudWarning) {
     const warning = graphState.model?.warning || null;
@@ -3360,6 +3480,7 @@ function renderGraphFlagship(snapshot) {
   }
 
   ensureGraphHandlersFlagship();
+  refreshLocalGraph();
   updateHud(snapshot);
   drawGraphFlagship(snapshot, performance.now());
   drawMinimapFlagship(snapshot);
@@ -3437,14 +3558,12 @@ function ensureGraphHandlersFlagship() {
         if (hit.kind === "plan") {
           state.selectedPlanId = hit.id;
           setDetailVisible(false);
-          startCameraAnimation(
-            {
-              offsetX: graphState.lastCanvasWidth * 0.5 - hit.x * 1.05,
-              offsetY: graphState.lastCanvasHeight * 0.5 - hit.y * 1.05,
-              scale: 1.05,
-            },
-            420
-          );
+          const camera = {
+            offsetX: graphState.lastCanvasWidth * 0.5 - hit.x * 1.05,
+            offsetY: graphState.lastCanvasHeight * 0.5 - hit.y * 1.05,
+            scale: 1.05,
+          };
+          startCameraAnimation(camera, 420);
           const plan =
             (state.snapshot.plans || []).find((p) => p && p.id === hit.id) ||
             ({
@@ -3459,21 +3578,21 @@ function ensureGraphHandlersFlagship() {
             });
           renderPlanDetail(state.snapshot, plan);
           renderGraphFlagship(state.snapshot);
+          pushNavEntry({ camera });
           return;
         }
         if (hit.kind === "cluster") {
           state.selectedPlanId = hit.plan_id || state.selectedPlanId;
           setDetailVisible(false);
-          startCameraAnimation(
-            {
-              offsetX: graphState.lastCanvasWidth * 0.5 - hit.x * 1.45,
-              offsetY: graphState.lastCanvasHeight * 0.5 - hit.y * 1.45,
-              scale: 1.45,
-            },
-            420
-          );
+          const camera = {
+            offsetX: graphState.lastCanvasWidth * 0.5 - hit.x * 1.45,
+            offsetY: graphState.lastCanvasHeight * 0.5 - hit.y * 1.45,
+            scale: 1.45,
+          };
+          startCameraAnimation(camera, 420);
           openClusterDetail(state.snapshot, hit);
           renderGraphFlagship(state.snapshot);
+          pushNavEntry({ camera });
           return;
         }
         if (hit.kind === "task") {
@@ -3483,6 +3602,7 @@ function ensureGraphHandlersFlagship() {
           const task = (state.snapshot.tasks || []).find((t) => t.id === hit.id);
           if (task) {
             renderTaskDetail(state.snapshot, task);
+            pushNavEntry();
           }
         }
       }
@@ -3537,13 +3657,22 @@ function ensureGraphHandlersFlagship() {
     const localX = event.clientX - rect.left;
     const localY = event.clientY - rect.top;
     const hit = hitTestNode(graphState.model, graphState.view, localX, localY);
-    if (hit) return;
+    if (hit) {
+      toggleLocalGraph(hit.id);
+      if (state.snapshot) {
+        renderGraphFlagship(state.snapshot);
+        pushNavEntry();
+      }
+      return;
+    }
     // Double click on empty space: home.
     if (state.snapshot) {
+      clearLocalGraph();
       const bounds = graphState.model.bounds || boundsOfNodes(graphState.model.nodes.filter((n) => n.kind === "plan"));
       fitViewToBounds(graphState.view, bounds, graphState.lastCanvasWidth, graphState.lastCanvasHeight, true);
       graphState.lod = computeLod(graphState.view.scale);
       renderGraphFlagship(state.snapshot);
+      pushNavEntry();
     }
   });
 
@@ -3614,6 +3743,9 @@ function render(snapshot) {
     renderGraph(snapshot);
   } else {
     renderGraphFlagship(snapshot);
+    if (state.navStack.length === 0) {
+      pushNavEntry();
+    }
   }
 }
 
@@ -3698,6 +3830,10 @@ if (nodes.project) {
     loadWorkspaceOverrideFromStorage();
     state.selectedPlanId = null;
     state.detailSelection = null;
+    clearLocalGraph();
+    state.navStack = [];
+    state.navIndex = -1;
+    updateNavButtons();
     setDetailVisible(false);
     renderProjectSelect();
     await loadWorkspaces();
@@ -3718,6 +3854,10 @@ if (nodes.workspace) {
     workspaceMutation.recoveredGuardMismatch = false;
     state.selectedPlanId = null;
     state.detailSelection = null;
+    clearLocalGraph();
+    state.navStack = [];
+    state.navIndex = -1;
+    updateNavButtons();
     setDetailVisible(false);
     loadAbout();
     loadSnapshot();
@@ -3744,6 +3884,273 @@ if (nodes.runnerAutostart) {
   });
 }
 
+const paletteState = {
+  open: false,
+  items: [],
+  index: 0,
+};
+
+function cameraSnapshot() {
+  const view = graphState.view;
+  if (!view) return null;
+  return { offsetX: view.offsetX, offsetY: view.offsetY, scale: view.scale };
+}
+
+function selectionSnapshot() {
+  const sel = state.detailSelection;
+  const kind = (sel?.kind || "").trim();
+  const id = (sel?.id || "").trim();
+  if (!kind || !id) return null;
+  return { kind, id };
+}
+
+function localSnapshot() {
+  if (!localGraphIsActive()) return null;
+  const centerId = (graphState.local?.centerId || "").trim();
+  if (!centerId) return null;
+  return { centerId, hops: graphState.local?.hops || 2 };
+}
+
+function navEntryEquals(a, b) {
+  const aSel = a?.selection || null;
+  const bSel = b?.selection || null;
+  const aLocal = a?.local || null;
+  const bLocal = b?.local || null;
+  const aCam = a?.camera || null;
+  const bCam = b?.camera || null;
+
+  const camKey = (cam) => {
+    if (!cam) return "";
+    const rx = Math.round((cam.offsetX || 0) * 10) / 10;
+    const ry = Math.round((cam.offsetY || 0) * 10) / 10;
+    const rs = Math.round((cam.scale || 0) * 100) / 100;
+    return `${rx},${ry},${rs}`;
+  };
+
+  return (
+    (a?.selectedPlanId || null) === (b?.selectedPlanId || null) &&
+    (aSel?.kind || null) === (bSel?.kind || null) &&
+    (aSel?.id || null) === (bSel?.id || null) &&
+    (aLocal?.centerId || null) === (bLocal?.centerId || null) &&
+    (aLocal?.hops || null) === (bLocal?.hops || null) &&
+    camKey(aCam) === camKey(bCam)
+  );
+}
+
+function updateNavButtons() {
+  const canBack = state.navIndex > 0;
+  const canForward = state.navIndex >= 0 && state.navIndex < state.navStack.length - 1;
+  if (nodes.btnBack) nodes.btnBack.disabled = !canBack;
+  if (nodes.btnForward) nodes.btnForward.disabled = !canForward;
+}
+
+function pushNavEntry(override) {
+  if (navMutation.applying) return;
+  const base = {
+    selectedPlanId: state.selectedPlanId || null,
+    selection: selectionSnapshot(),
+    local: localSnapshot(),
+    camera: cameraSnapshot(),
+  };
+  const entry = { ...base, ...(override || {}) };
+
+  const current = state.navStack[state.navIndex] || null;
+  if (current && navEntryEquals(current, entry)) {
+    updateNavButtons();
+    return;
+  }
+
+  if (state.navIndex < state.navStack.length - 1) {
+    state.navStack.splice(state.navIndex + 1);
+  }
+  state.navStack.push(entry);
+  state.navIndex = state.navStack.length - 1;
+  updateNavButtons();
+}
+
+function applyNavEntry(entry) {
+  if (!entry || !state.snapshot) return;
+  navMutation.applying = true;
+  try {
+    state.selectedPlanId = (entry.selectedPlanId || "").trim() || null;
+
+    if (entry.local?.centerId) {
+      graphState.local.centerId = entry.local.centerId;
+      graphState.local.hops = entry.local.hops || 2;
+      graphState.local.key = null;
+    } else {
+      clearLocalGraph();
+    }
+
+    setDetailVisible(false);
+    state.detailSelection = null;
+
+    renderGraphFlagship(state.snapshot);
+
+    const sel = entry.selection || null;
+    if (sel?.kind === "plan") {
+      const plan = (state.snapshot.plans || []).find((p) => p && p.id === sel.id);
+      if (plan) {
+        renderPlanDetail(state.snapshot, plan);
+      }
+    } else if (sel?.kind === "task") {
+      const task = (state.snapshot.tasks || []).find((t) => t && t.id === sel.id);
+      if (task) {
+        renderTaskDetail(state.snapshot, task);
+      }
+    } else if (sel?.kind === "cluster") {
+      const cluster = layoutCache.nodesById.get(sel.id);
+      if (cluster && cluster.kind === "cluster") {
+        openClusterDetail(state.snapshot, cluster);
+      }
+    }
+
+    if (entry.camera && graphState.view) {
+      startCameraAnimation(entry.camera, 320);
+    }
+  } finally {
+    navMutation.applying = false;
+    updateNavButtons();
+  }
+}
+
+function navBack() {
+  if (state.navIndex <= 0) return;
+  state.navIndex -= 1;
+  applyNavEntry(state.navStack[state.navIndex]);
+}
+
+function navForward() {
+  if (state.navIndex < 0 || state.navIndex >= state.navStack.length - 1) return;
+  state.navIndex += 1;
+  applyNavEntry(state.navStack[state.navIndex]);
+}
+
+function setPaletteOpen(open) {
+  if (!nodes.palette || !nodes.paletteInput || !nodes.paletteResults) return;
+  const desired = !!open;
+  paletteState.open = desired;
+  paletteState.items = [];
+  paletteState.index = 0;
+
+  if (desired) {
+    nodes.palette.hidden = false;
+    nodes.palette.classList.add("is-open");
+    nodes.palette.setAttribute("aria-hidden", "false");
+    nodes.paletteInput.value = "";
+    nodes.paletteResults.textContent = "";
+    window.setTimeout(() => {
+      nodes.paletteInput.focus();
+    }, 0);
+  } else {
+    nodes.palette.hidden = true;
+    nodes.palette.classList.remove("is-open");
+    nodes.palette.setAttribute("aria-hidden", "true");
+  }
+}
+
+function paletteIsOpen() {
+  return !!paletteState.open;
+}
+
+function paletteItemsFor(snapshot, query) {
+  const q = (query || "").trim();
+  const needle = q.toLowerCase();
+  const selectedPlanId = state.selectedPlanId || snapshot.primary_plan_id || "";
+
+  const items = [];
+  (snapshot.plans || []).forEach((plan) => {
+    if (!plan || !plan.id) return;
+    items.push({
+      kind: "plan",
+      id: plan.id,
+      title: plan.title || plan.id,
+      plan_id: plan.id,
+    });
+  });
+  (snapshot.tasks || []).forEach((task) => {
+    if (!task || !task.id) return;
+    items.push({
+      kind: "task",
+      id: task.id,
+      title: task.title || task.id,
+      plan_id: task.plan_id || "",
+    });
+  });
+
+  const scoreOf = (item) => {
+    if (!needle) return 0;
+    const id = (item.id || "").toLowerCase();
+    const title = (item.title || "").toLowerCase();
+    if (id === needle) return -10;
+    if (id.startsWith(needle)) return -6;
+    if (id.includes(needle)) return -4;
+    if (title.includes(needle)) return -2;
+    return 10;
+  };
+
+  const filtered = needle
+    ? items.filter((item) => {
+        const id = (item.id || "").toLowerCase();
+        const title = (item.title || "").toLowerCase();
+        return id.includes(needle) || title.includes(needle);
+      })
+    : items;
+
+  filtered.sort((a, b) => {
+    const diff = scoreOf(a) - scoreOf(b);
+    if (diff !== 0) return diff;
+    const planBiasA = a.kind === "plan" ? -1 : 0;
+    const planBiasB = b.kind === "plan" ? -1 : 0;
+    if (planBiasA !== planBiasB) return planBiasA - planBiasB;
+    const inPlanA = a.plan_id === selectedPlanId ? -1 : 0;
+    const inPlanB = b.plan_id === selectedPlanId ? -1 : 0;
+    if (inPlanA !== inPlanB) return inPlanA - inPlanB;
+    return (a.id || "").localeCompare(b.id || "");
+  });
+
+  return filtered.slice(0, 10);
+}
+
+function renderPaletteResults(items) {
+  if (!nodes.paletteResults) return;
+  clear(nodes.paletteResults);
+
+  if (!items || items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "palette-hint";
+    empty.textContent = "Ничего не найдено.";
+    nodes.paletteResults.append(empty);
+    return;
+  }
+
+  items.forEach((item, index) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "palette-item";
+    if (index === paletteState.index) btn.classList.add("is-active");
+    const title = document.createElement("div");
+    title.className = "palette-item-title";
+    title.textContent = item.title || item.id;
+    const meta = document.createElement("div");
+    meta.className = "palette-item-meta";
+    const id = document.createElement("span");
+    id.className = "badge dim";
+    id.textContent = item.id;
+    const kind = document.createElement("span");
+    kind.className = "badge accent";
+    kind.textContent = item.kind === "plan" ? "PLAN" : "TASK";
+    meta.append(id, kind);
+    btn.append(title, meta);
+    btn.addEventListener("click", () => {
+      setPaletteOpen(false);
+      if (!state.snapshot) return;
+      searchFlagship(item.id);
+    });
+    nodes.paletteResults.append(btn);
+  });
+}
+
 function zoomFlagship(factor) {
   if (UI_MODE !== "flagship") return;
   const view = graphState.view;
@@ -3762,11 +4169,13 @@ function homeFlagship() {
   const view = graphState.view;
   const model = graphState.model;
   if (!view || !model || !state.snapshot) return;
+  clearLocalGraph();
   const bounds =
     model.bounds || boundsOfNodes((model.nodes || []).filter((n) => n.kind === "plan"));
   fitViewToBounds(view, bounds, graphState.lastCanvasWidth, graphState.lastCanvasHeight, true);
   graphState.lod = computeLod(view.scale);
   renderGraphFlagship(state.snapshot);
+  pushNavEntry();
 }
 
 function fitFlagship() {
@@ -3779,6 +4188,7 @@ function fitFlagship() {
   fitViewToBounds(view, bounds, graphState.lastCanvasWidth, graphState.lastCanvasHeight, false);
   graphState.lod = computeLod(view.scale);
   renderGraphFlagship(state.snapshot);
+  pushNavEntry();
 }
 
 function focusFlagship() {
@@ -3793,16 +4203,16 @@ function focusFlagship() {
     state.selectedPlanId = focus.id;
     renderGraphFlagship(snapshot);
     const node = layoutCache.nodesById.get(focus.id);
+    let camera = null;
     if (node) {
-      startCameraAnimation(
-        {
-          offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.05,
-          offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.05,
-          scale: 1.05,
-        },
-        420
-      );
+      camera = {
+        offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.05,
+        offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.05,
+        scale: 1.05,
+      };
+      startCameraAnimation(camera, 420);
     }
+    pushNavEntry(camera ? { camera } : null);
     return;
   }
 
@@ -3812,16 +4222,16 @@ function focusFlagship() {
     }
     renderGraphFlagship(snapshot);
     const node = layoutCache.nodesById.get(focus.id);
+    let camera = null;
     if (node) {
-      startCameraAnimation(
-        {
-          offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.45,
-          offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.45,
-          scale: 1.45,
-        },
-        420
-      );
+      camera = {
+        offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.45,
+        offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.45,
+        scale: 1.45,
+      };
+      startCameraAnimation(camera, 420);
     }
+    pushNavEntry(camera ? { camera } : null);
   }
 }
 
@@ -3856,18 +4266,23 @@ function searchFlagship(query) {
 
   if (match.kind === "plan") {
     state.selectedPlanId = match.id;
+    setDetailVisible(false);
     renderGraphFlagship(snapshot);
     const node = layoutCache.nodesById.get(match.id);
+    let camera = null;
     if (node) {
-      startCameraAnimation(
-        {
-          offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.05,
-          offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.05,
-          scale: 1.05,
-        },
-        420
-      );
+      camera = {
+        offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.05,
+        offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.05,
+        scale: 1.05,
+      };
+      startCameraAnimation(camera, 420);
     }
+    const plan = (snapshot.plans || []).find((p) => p && p.id === match.id);
+    if (plan) {
+      renderPlanDetail(snapshot, plan);
+    }
+    pushNavEntry(camera ? { camera } : null);
     return;
   }
 
@@ -3875,21 +4290,25 @@ function searchFlagship(query) {
     if (match.plan_id) state.selectedPlanId = match.plan_id;
     renderGraphFlagship(snapshot);
     const node = layoutCache.nodesById.get(match.id);
+    let camera = null;
     if (node) {
-      startCameraAnimation(
-        {
-          offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.45,
-          offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.45,
-          scale: 1.45,
-        },
-        420
-      );
+      camera = {
+        offsetX: graphState.lastCanvasWidth * 0.5 - node.x * 1.45,
+        offsetY: graphState.lastCanvasHeight * 0.5 - node.y * 1.45,
+        scale: 1.45,
+      };
+      startCameraAnimation(camera, 420);
     }
     const task = (snapshot.tasks || []).find((t) => t.id === match.id);
-    if (task) renderTaskDetail(snapshot, task);
+    if (task) {
+      renderTaskDetail(snapshot, task);
+      pushNavEntry(camera ? { camera } : null);
+    }
   }
 }
 
+if (nodes.btnBack) nodes.btnBack.addEventListener("click", () => navBack());
+if (nodes.btnForward) nodes.btnForward.addEventListener("click", () => navForward());
 if (nodes.btnHome) nodes.btnHome.addEventListener("click", () => homeFlagship());
 if (nodes.btnFit) nodes.btnFit.addEventListener("click", () => fitFlagship());
 if (nodes.btnFocus) nodes.btnFocus.addEventListener("click", () => focusFlagship());
@@ -3906,11 +4325,74 @@ if (nodes.graphSearch) {
   });
 }
 
+if (nodes.palette) {
+  nodes.palette.addEventListener("click", (event) => {
+    const target = event.target;
+    const action = target?.dataset?.action || "";
+    if (action === "palette-close") {
+      setPaletteOpen(false);
+    }
+  });
+}
+
+if (nodes.paletteInput) {
+  nodes.paletteInput.addEventListener("input", () => {
+    if (!state.snapshot) return;
+    paletteState.items = paletteItemsFor(state.snapshot, nodes.paletteInput.value || "");
+    paletteState.index = 0;
+    renderPaletteResults(paletteState.items);
+  });
+
+  nodes.paletteInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setPaletteOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      paletteState.index = clamp(paletteState.index + 1, 0, Math.max(0, paletteState.items.length - 1));
+      renderPaletteResults(paletteState.items);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      paletteState.index = clamp(paletteState.index - 1, 0, Math.max(0, paletteState.items.length - 1));
+      renderPaletteResults(paletteState.items);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const item = paletteState.items[paletteState.index];
+      if (!item) return;
+      setPaletteOpen(false);
+      searchFlagship(item.id);
+    }
+  });
+}
+
 window.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && (event.key || "").toLowerCase() === "k") {
+    event.preventDefault();
+    setPaletteOpen(true);
+    if (state.snapshot) {
+      paletteState.items = paletteItemsFor(state.snapshot, "");
+      paletteState.index = 0;
+      renderPaletteResults(paletteState.items);
+    }
+    return;
+  }
+
   if (event.key === "Escape") {
+    if (paletteIsOpen()) {
+      setPaletteOpen(false);
+      return;
+    }
     setDetailVisible(false);
   }
 });
+
+updateNavButtons();
 
 async function boot() {
   await loadProjects();

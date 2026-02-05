@@ -279,6 +279,108 @@ html[data-ui="legacy"] .graph-overlay {
   gap: 14px;
 }
 
+.gc-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.palette {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 14vh 18px 18px;
+}
+
+.palette.is-open {
+  display: flex;
+}
+
+.palette-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(6px);
+}
+
+.palette-panel {
+  position: relative;
+  width: min(640px, 96vw);
+  border-radius: 18px;
+  border: 1px solid var(--hairline);
+  background: rgba(12, 16, 22, 0.92);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(18px);
+  padding: 14px 14px 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.palette-input {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 19, 26, 0.7);
+  color: rgba(238, 242, 246, 0.92);
+  border-radius: 999px;
+  padding: 10px 14px;
+  min-height: 40px;
+  width: 100%;
+}
+
+.palette-input:focus-visible {
+  outline: 2px solid rgba(132, 169, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.palette-results {
+  display: grid;
+  gap: 8px;
+  max-height: min(360px, 46vh);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.palette-item {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 19, 26, 0.55);
+  color: rgba(238, 242, 246, 0.92);
+  cursor: pointer;
+  text-align: left;
+}
+
+.palette-item:hover {
+  border-color: rgba(125, 211, 199, 0.55);
+}
+
+.palette-item.is-active {
+  border-color: rgba(132, 169, 255, 0.85);
+  background: rgba(132, 169, 255, 0.12);
+}
+
+.palette-item-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.palette-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted-2);
+  font-size: 12px;
+}
+
+.palette-hint {
+  color: var(--muted-2);
+  font-size: 12px;
+  padding-left: 6px;
+}
+
 .detail-head {
   display: flex;
   align-items: flex-start;

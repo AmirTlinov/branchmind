@@ -143,6 +143,24 @@
               aria-label="Graph controls"
             >
               <div class="graph-controls-row">
+                <button
+                  id="btn-back"
+                  class="gc-btn gc-btn-icon"
+                  type="button"
+                  title="Назад"
+                  aria-label="Back"
+                >
+                  ←
+                </button>
+                <button
+                  id="btn-forward"
+                  class="gc-btn gc-btn-icon"
+                  type="button"
+                  title="Вперёд"
+                  aria-label="Forward"
+                >
+                  →
+                </button>
                 <button id="btn-home" class="gc-btn" type="button" title="Домой">Домой</button>
                 <button id="btn-fit" class="gc-btn" type="button" title="Fit">Fit</button>
                 <button id="btn-focus" class="gc-btn" type="button" title="К фокусу">
@@ -192,6 +210,22 @@
       <div id="detail-meta" class="detail-meta"></div>
       <div id="detail-body" class="detail-body"></div>
     </aside>
+
+    <div id="palette" class="palette" hidden aria-hidden="true">
+      <div class="palette-backdrop" data-action="palette-close"></div>
+      <section class="palette-panel" role="dialog" aria-modal="true" aria-label="Command palette">
+        <input
+          id="palette-input"
+          class="palette-input"
+          type="search"
+          placeholder="Ctrl+K: прыгнуть к… (PLAN-123, TASK-456, текст)"
+          aria-label="Search"
+          autocomplete="off"
+        />
+        <div id="palette-results" class="palette-results" aria-label="Results"></div>
+        <div class="palette-hint">Enter — перейти · Esc — закрыть · ↑/↓ — выбрать</div>
+      </section>
+    </div>
 
     <noscript>
       <div class="noscript">Enable JavaScript to view the snapshot.</div>
