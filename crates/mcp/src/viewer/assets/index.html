@@ -8,8 +8,17 @@
   </head>
   <body>
     <div class="shell">
-      <aside class="sidebar">
+      <aside id="sidebar-panel" class="sidebar" aria-label="Explorer" aria-hidden="true">
         <header class="top">
+          <button
+            id="sidebar-close"
+            class="sidebar-close"
+            type="button"
+            title="Close"
+            aria-label="Close"
+          >
+            ×
+          </button>
           <div class="brand">
             <div class="kicker">BranchMind</div>
             <h1>Project Pulse</h1>
@@ -167,6 +176,9 @@
                   aria-label="Forward"
                 >
                   →
+                </button>
+                <button id="btn-explorer" class="gc-btn" type="button" title="Панели">
+                  Панели
                 </button>
                 <button id="btn-home" class="gc-btn" type="button" title="Домой">Домой</button>
                 <button id="btn-fit" class="gc-btn" type="button" title="Fit">Fit</button>

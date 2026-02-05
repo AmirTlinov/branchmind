@@ -37,36 +37,83 @@ body {
 }
 
 .shell {
-  display: grid;
-  grid-template-columns: clamp(260px, 28vw, 380px) 1fr;
+  position: fixed;
+  inset: 0;
+  display: block;
   width: 100vw;
   height: 100vh;
 }
 
 .sidebar {
-  position: relative;
-  z-index: 2;
-  padding: 40px 28px 60px 32px;
+  position: fixed;
+  top: 32px;
+  left: 32px;
+  z-index: 6;
+  width: clamp(320px, 34vw, 520px);
+  max-width: calc(100vw - 64px);
+  max-height: calc(100vh - 64px);
+  padding: 32px 26px 42px 30px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: rgba(12, 16, 22, 0.92);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(18px);
   overflow-y: auto;
-  height: 100vh;
   min-height: 0;
+  display: none;
+}
+
+.sidebar.is-open {
+  display: block;
+}
+
+.sidebar .top {
+  position: relative;
+}
+
+.sidebar-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 19, 26, 0.7);
+  color: rgba(238, 242, 246, 0.92);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.sidebar-close:hover {
+  border-color: rgba(125, 211, 199, 0.55);
+  color: var(--ink);
+}
+
+.sidebar-close:focus-visible {
+  outline: 2px solid rgba(132, 169, 255, 0.85);
+  outline-offset: 2px;
 }
 
 .main {
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 1;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  height: 100vh;
   overflow: hidden;
   min-width: 0;
   min-height: 0;
 }
 
 .topbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 4;
   display: flex;
   justify-content: flex-end;
-  padding: 32px 32px 18px;
+  padding: 20px 28px 0;
   pointer-events: none;
 }
 
@@ -87,7 +134,8 @@ body {
 }
 
 .graph-shell {
-  position: relative;
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   z-index: 0;
@@ -263,7 +311,7 @@ html[data-ui="legacy"] .graph-overlay {
   right: 32px;
   width: min(360px, 30vw);
   max-height: calc(100vh - 64px);
-  z-index: 4;
+  z-index: 7;
   padding: 18px 20px;
   border-radius: 18px;
   border: 1px solid var(--hairline);
@@ -287,7 +335,7 @@ html[data-ui="legacy"] .graph-overlay {
 .palette {
   position: fixed;
   inset: 0;
-  z-index: 6;
+  z-index: 10;
   display: none;
   align-items: flex-start;
   justify-content: center;

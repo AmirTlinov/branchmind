@@ -471,6 +471,9 @@ const nodes = {
   btnZoomIn: document.getElementById("btn-zoom-in"),
   btnZoomOut: document.getElementById("btn-zoom-out"),
   btnRefresh: document.getElementById("btn-refresh"),
+  btnExplorer: document.getElementById("btn-explorer"),
+  sidebarPanel: document.getElementById("sidebar-panel"),
+  sidebarClose: document.getElementById("sidebar-close"),
   detailPanel: document.getElementById("detail-panel"),
   detailKicker: document.getElementById("detail-kicker"),
   detailTitle: document.getElementById("detail-title"),
@@ -796,6 +799,17 @@ function setDetailVisible(open) {
   if (!nodes.detailPanel) return;
   nodes.detailPanel.classList.toggle("is-open", open);
   nodes.detailPanel.setAttribute("aria-hidden", open ? "false" : "true");
+}
+
+function sidebarIsOpen() {
+  return !!nodes.sidebarPanel?.classList.contains("is-open");
+}
+
+function setSidebarVisible(open) {
+  if (!nodes.sidebarPanel) return;
+  const desired = !!open;
+  nodes.sidebarPanel.classList.toggle("is-open", desired);
+  nodes.sidebarPanel.setAttribute("aria-hidden", desired ? "false" : "true");
 }
 
 function renderDetailMeta(lines) {
@@ -5500,6 +5514,10 @@ if (nodes.btnFocus) nodes.btnFocus.addEventListener("click", () => focusFlagship
 if (nodes.btnZoomIn) nodes.btnZoomIn.addEventListener("click", () => zoomFlagship(1.15));
 if (nodes.btnZoomOut) nodes.btnZoomOut.addEventListener("click", () => zoomFlagship(0.87));
 if (nodes.btnRefresh) nodes.btnRefresh.addEventListener("click", () => loadSnapshot());
+if (nodes.btnExplorer)
+  nodes.btnExplorer.addEventListener("click", () => setSidebarVisible(!sidebarIsOpen()));
+if (nodes.sidebarClose)
+  nodes.sidebarClose.addEventListener("click", () => setSidebarVisible(false));
 
 if (nodes.graphSearch) {
   nodes.graphSearch.addEventListener("keydown", (event) => {
@@ -5574,6 +5592,10 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     if (paletteIsOpen()) {
       setPaletteOpen(false);
+      return;
+    }
+    if (sidebarIsOpen()) {
+      setSidebarVisible(false);
       return;
     }
     setDetailVisible(false);
