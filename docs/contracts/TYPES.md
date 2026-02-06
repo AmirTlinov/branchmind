@@ -130,7 +130,7 @@ DX note (workspace allowlist, optional):
 - The server may be configured with an allowlist of workspace ids (`BRANCHMIND_WORKSPACE_ALLOWLIST`).
 - When an allowlist is set, any `workspace` outside the list becomes a typed error.
 
-### AgentId (multi-agent lanes, v0.5)
+### AgentId (multi-agent lanes)
 
 A short stable identifier for an agent instance when multiple agents work in the same workspace.
 
@@ -158,7 +158,7 @@ DX note (default agent_id, optional):
   - stable resume is meaning-first (anchors + canon/pins),
   - draft expansion is an explicit opt-in for audit/sync (`include_drafts=true` / `all_lanes=true`; legacy lane tags are treated as drafts).
 
-### AnchorId (meaning map, v0.6)
+### AnchorId (meaning map)
 
 A stable semantic identifier for an architecture area (boundary/component/contract/etc).
 
@@ -176,7 +176,7 @@ Notes:
 - No hierarchy in the id: use explicit relations instead.
 - IDs are stable across refactors (do not embed file paths).
 
-### Visibility tags (draft vs canon, v0.1)
+### Visibility tags (draft vs canon)
 
 Visibility is expressed via plain tags (lowercased):
 
@@ -234,7 +234,7 @@ Stable opaque identifiers.
 { "type": "string", "pattern": "^(STEP|NODE)-[A-Za-z0-9]{8,}$" }
 ```
 
-### StepPath (v0)
+### StepPath
 
 Human-oriented, index-based step addressing.
 
@@ -242,12 +242,12 @@ Human-oriented, index-based step addressing.
 { "type": "string", "pattern": "^s:[0-9]+(\\.s:[0-9]+)*$" }
 ```
 
-### GraphNodeId / GraphType / GraphRel (v0)
+### GraphNodeId / GraphType / GraphRel
 
 Graph identifiers are **validated and canonicalized** by the server. They are intentionally
 string-based on the MCP surface, but treated as typed domain values internally.
 
-Constraints (v0):
+Constraints:
 
 - `GraphNodeId`:
   - non-empty, max 256 chars
@@ -261,14 +261,14 @@ Constraints (v0):
   - must not contain `|`
   - must not contain control characters
 
-### ConflictId (v0)
+### ConflictId
 
 Graph merge conflicts are first-class entities with deterministic IDs.
 
 ```json
 { "type": "string", "pattern": "^CONFLICT-[0-9a-f]{32}$" }
 
-## Task enums (v0.2)
+## Task enums
 
 ### TaskStatus
 
@@ -296,7 +296,7 @@ Delegation lifecycle state.
 { "type": "array", "items": { "type": "string" } }
 ```
 
-Tag conventions (v0.6):
+Tag conventions:
 
 - Pins:
   - `pinned` — force-show in relevance-first views (low-noise resume surface).
@@ -308,7 +308,7 @@ Tag conventions (v0.6):
 - Lanes (legacy / optional):
   - `lane:shared`, `lane:agent:<agent_id>` — may be present on older artifacts or in explicit multi-agent workflows.
 
-## Evidence artifacts (v0.2)
+## Evidence artifacts
 
 Artifacts are bounded and sanitized on output.
 
@@ -327,7 +327,7 @@ Artifacts are bounded and sanitized on output.
 }
 ```
 
-## Patch operation (v0.2)
+## Patch operation
 
 ```json
 {
@@ -429,7 +429,7 @@ When `error.code="INVALID_INPUT"`, the server may attach `error.hints[]` to help
 argument payloads with minimal retries.
 
 Each hint is an object with a stable `kind` plus kind-specific fields.
-Current kinds (v0.3):
+Current kinds:
 
 - `type`: `{ kind:"type", field, expected, items? }`
 - `missing_required`: `{ kind:"missing_required", field }`

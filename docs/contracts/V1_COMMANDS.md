@@ -5,7 +5,7 @@ for public-facing operations, with schema discovery via `system` → `schema.get
 
 ## Command index {#cmd-index}
 
-Advanced/legacy commands may share this anchor. Use `system` → `schema.get(cmd)` for exact
+Advanced/internal commands may share this anchor. Use `system` → `schema.get(cmd)` for exact
 arguments, examples, and budget defaults.
 
 ---
@@ -32,21 +32,17 @@ Return a small, low-noise summary of the v1 UX surface:
 - cmd registry count (and cmd-by-domain counts),
 - unplugged ops (if any) to detect “advertised but not dispatchable” drift.
 
-## system.migration.lookup
-
-Map old tool name → `cmd` and return a minimal call example.
-
 ## system.storage
 
-Low-level storage introspection (legacy `storage`). Intended for debugging / internal ops.
+Low-level storage introspection (internal). Intended for debugging / internal ops.
 
 ## system.init
 
-Initialize a workspace (legacy `init`).
+Initialize a workspace (internal).
 
 ## system.help
 
-Help / quick reference (legacy `help`).
+Help / quick reference.
 
 ## system.tutorial
 

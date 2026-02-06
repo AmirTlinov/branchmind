@@ -1,68 +1,41 @@
-# Contracts — Skills & Behavior Packs (v0)
+# Contracts — Skills (v1)
 
-This document defines the **built-in skills** shipped with BranchMind and exposed via the `skill`
-tool.
+BranchMind ships **built-in skill packs**: deterministic, budget-safe behavior profiles that help
+AI agents stay consistent (proof-first, low-noise, recall-first).
 
-Skills are **versioned, deterministic behavior packs** intended to shape an AI agent’s workflow
-without turning the system into bureaucracy.
-
-Design requirements:
-
-- **Budget-safe**: a skill must remain useful under small `max_chars`.
-- **Deterministic**: stable ordering; no random IDs; no timestamps in the payload.
-- **Composable**: profiles are focused; deeper detail is available via longer `max_chars` (not extra
-  flags).
-- **Runnable**: every profile contains a tight loop (“what to do next”) and proof discipline.
-
----
-
-## Tool: `skill`
-
-Returns a profile-specific behavior pack as **raw text** (BM‑L1 line protocol).
-
-### Input (JSON)
+Skills are exposed via the `system` portal as a command:
 
 ```json
-{
-  "profile": "daily",
-  "max_chars": 2000
-}
+{ "op": "call", "cmd": "system.skill", "args": { "profile": "daily", "max_chars": 2000 } }
 ```
 
-Fields:
+Schemas are discoverable at runtime:
 
-- `profile` (optional, string):
+```text
+system op=schema.get args={cmd:"system.skill"}
+```
+
+## Input (selected)
+
+- `profile` (string, optional)
   - Allowed: `daily | strict | research | teamlead`
   - Default: `daily`
-- `max_chars` (optional, integer):
+- `max_chars` (int, optional)
   - Output budget for the returned text.
-  - When present, the server clamps it to internal safety limits.
+  - The server clamps it to internal safety caps.
 
-### Output
+## Output
 
-The tool returns a **single text payload** (not a structured JSON object) and marks the response as
-`line_protocol=true`.
+The command returns a **single text payload** (BM‑L1 line protocol) and sets `line_protocol=true`.
 
 Semantic contract for the text:
 
-- The first line identifies the pack:
+- First line identifies the pack:
   - `skill profile=<profile> version=<skill_pack_version>`
-- The pack always includes a “next loop” section that is actionable without extra context.
-- If truncated, the payload ends with `...` and still preserves the first-line identity.
+- The pack includes a tight “next loop” section that is actionable without extra context.
+- If truncated, the payload stays useful under the declared `max_chars`.
 
-### Errors
-
-- `INVALID_INPUT`: arguments not an object, unknown `profile`, or invalid `max_chars` type.
-
-### Determinism
+## Determinism
 
 Given the same build + `profile` + `max_chars`, the output must be byte-identical.
 
----
-
-## Runner integration (non-normative)
-
-The external job runner (e.g. `bm_runner`) may inject a selected skill pack into delegated agent
-prompts to make behavior consistent across sessions and terminals.
-
-This does not change server determinism: the runner is out-of-process and opt-in.

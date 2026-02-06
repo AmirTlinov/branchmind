@@ -1,4 +1,4 @@
-# Contracts - Local Viewer (v0)
+# Contracts — Local Viewer (optional, v1)
 
 This document defines the **optional local read-only HTTP viewer** surface.
 It is not part of the MCP tool surface, but it is still a contract.
@@ -31,7 +31,7 @@ Notes:
 - In shared mode, the proxy owns the session-scoped viewer and **always** spawns daemons with
   `--no-viewer`. This ensures the viewer lifetime matches the proxy process lifetime.
 
-## Endpoints (v0)
+## Endpoints
 
 ### `GET /`
 

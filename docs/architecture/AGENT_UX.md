@@ -77,9 +77,9 @@ If you change portal output formatting, recovery, or toolset curation, the chang
 Canonical smoke scenarios (must stay green in tests):
 
 - `status` in `toolset=daily` → 1 state line + 1 next action command line.
-- `tasks_macro_start` → `tasks_snapshot` → both are 2-line “state + command”.
-- `tasks_macro_close_step` without focus in an empty workspace → typed error + portal recovery command (`tasks_macro_start`).
-- `tasks_macro_close_step` on a proof-required step without proof → typed error (`PROOF_REQUIRED`) + a single portal recovery command (retry with `proof=...`).
+- `tasks op=call cmd=tasks.macro.start` → `tasks op=call cmd=tasks.snapshot` → both are 2-line “state + command”.
+- `tasks op=call cmd=tasks.macro.close.step` without focus in an empty workspace → typed error + portal recovery command (`tasks op=call cmd=tasks.macro.start`).
+- `tasks op=call cmd=tasks.macro.close.step` on a proof-required step without proof → typed error (`PROOF_REQUIRED`) + a single portal recovery command (retry with `proof=...`).
 - Hidden action recommended (e.g. decompose) → 1 state line + 2 commands (disclosure then action).
 - Tiny budget snapshot → `WARNING: BUDGET_*` appears and output remains small.
 

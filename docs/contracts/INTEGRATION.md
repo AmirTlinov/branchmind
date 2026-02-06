@@ -1,4 +1,4 @@
-# Contracts — Tasks ↔ Reasoning Integration (v0)
+# Contracts — Tasks ↔ Reasoning Integration (v1)
 
 This document defines what makes the system a **single organism** rather than two unrelated toolsets.
 
@@ -14,11 +14,11 @@ Branching note:
 
 - Task mutations always ingest into the **canonical** `reasoning_ref.branch` (and its `trace_doc`), regardless of any reasoning checkout/what-if branches.
 
-## Human-authored note mirroring (tasks_note → notes_doc)
+## Human-authored note mirroring (`cmd=tasks.note` → `notes_doc`)
 
 Some task operations carry meaningful human-authored text (progress notes).
 
-To avoid losing that meaning between sessions, `tasks_note` must be mirrored into reasoning memory:
+To avoid losing that meaning between sessions, `cmd=tasks.note` must be mirrored into reasoning memory:
 
 - The note content is appended as a `doc_entries.kind="note"` entry into the target's `notes_doc`.
 - The mirror is written atomically with the task event (same transaction).
@@ -26,7 +26,7 @@ To avoid losing that meaning between sessions, `tasks_note` must be mirrored int
 
 Recommended metadata (stored in `meta_json`) for the mirrored note:
 
-- `source="tasks_note"`
+- `source="tasks.note"`
 - `task_id`, `step_id`, `path`
 - `note_seq` (step note seq)
 - `event_id` (the corresponding task event id)
@@ -48,9 +48,9 @@ Properties:
 
 - Created lazily (on first need) and persisted.
 - Survives server restarts.
-- Returned in `tasks_radar` and `tasks_resume`-like payloads.
+- Returned in task resume/snapshot views (e.g. `cmd=tasks.snapshot`, `cmd=tasks.resume.super`).
 
-## Task → graph projection (v0)
+## Task → graph projection
 
 To make the system a **single organism**, task mutations project into the task's `graph_doc`
 atomically and deterministically.
@@ -62,7 +62,7 @@ Projection rules:
   - Step: `step:<STEP-XXXXXXXX>`
 - Node types: `task`, `step`.
 - Edge type: `contains` (task → step, parent step → child step).
-- Step node status is derived from step completion (`open` | `done`); task nodes omit status in v0.
+- Step node status is derived from step completion (`open` | `done`); task nodes omit status (v1 baseline).
 - Deletions emit a `graph_node_delete` op and write tombstones for the node **and** all connected
   edges (no dangling edges in the effective view).
 - Idempotency is guaranteed via `source_event_id = event_id + graph_key` (nodes/edges) and
@@ -92,7 +92,7 @@ Projection rules:
 
 ## Sync event stream
 
-Every mutating `tasks_*` response must include an append-only list of events:
+Every mutating `cmd=tasks.*` operation must emit an append-only list of events (budgeted):
 
 ```json
 {
@@ -117,7 +117,7 @@ Requirements:
 - Events are written atomically with the task mutation.
 - Events are ingested into the reasoning subsystem (trace + optional graph nodes) deterministically.
 
-Typical task-step event types (v0):
+Typical task-step event types:
 
 - `steps_added`
 - `step_defined`
@@ -125,7 +125,7 @@ Typical task-step event types (v0):
 - `step_verified`
 - `step_done`
 
-Additional event types (v0.2 parity):
+Additional event types:
 
 - `task_patched`
 - `task_completed`

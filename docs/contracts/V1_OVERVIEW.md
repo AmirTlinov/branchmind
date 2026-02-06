@@ -1,9 +1,9 @@
 # Contracts — v1 Overview (actions-first, cmd-first)
 
 BranchMind v1 стандартизирует MCP‑поверхность вокруг **10 инструментов**, **cmd‑registry** и
-**actions‑first** UX. Старые имена инструментов **не являются частью контракта v1**:
-`tools/list` показывает только 10 порталов, а любые legacy tool names возвращают `UNKNOWN_TOOL`.
-Для миграции используйте `system op=migration.lookup` и таблицу в `V1_MIGRATION.md`.
+**actions‑first** UX. В v1 существует только **строгая 10‑портальная поверхность**:
+`tools/list` показывает только 10 порталов, а любые другие имена инструментов возвращают
+`UNKNOWN_TOOL`.
 Для совместимости некоторых MCP‑клиентов сервер может принимать namespace‑префиксы в имени
 инструмента (например, `branchmind.status` / `branchmind/status`).
 Также некоторые клиенты отправляют `"arguments": null` для вызовов без аргументов — сервер
@@ -32,6 +32,23 @@ BranchMind v1 стандартизирует MCP‑поверхность вок
 - Golden‑ops доступны через `op` (см. `V1_COMMANDS.md`).
 - Long‑tail всегда через `op="call" + cmd`.
 
+## Progressive disclosure (tools/list toolset lens)
+
+`tools/list` принимает опциональный параметр:
+
+```json
+{ "toolset": "core|daily|full" }
+```
+
+Инварианты:
+
+- **Список инструментов всегда одинаковый** (те же 10 порталов).
+- Меняется только “линза раскрытия” для схем порталов:
+  - `core` рекламирует только `tier=gold` ops (минимальный шум),
+  - `daily` рекламирует `gold + advanced`,
+  - `full` рекламирует `gold + advanced + internal`.
+- Независимо от toolset, long‑tail остаётся доступен через `op="call" + cmd`.
+
 ## actions‑first
 
 Единственный механизм “что дальше” — `actions[]`.
@@ -39,7 +56,7 @@ BranchMind v1 стандартизирует MCP‑поверхность вок
 - `suggestions[]` в v1 всегда `[]`.
 - Любой `INVALID_INPUT` возвращает минимум 2 действия:
   - `system` → `schema.get(cmd)`
-  - `*_ops` → минимальный валидный пример вызова
+  - соответствующий портал → минимальный валидный пример вызова
 
 ## Budget profiles
 
@@ -55,6 +72,5 @@ BranchMind v1 стандартизирует MCP‑поверхность вок
 ## Документы v1
 
 - `V1_COMMANDS.md` — cmd registry + golden ops
-- `V1_MIGRATION.md` — маппинг старых имён на `cmd`
 - `DELEGATION.md` — multi‑executor delegation
 - `TYPES.md` — envelope v1
