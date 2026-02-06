@@ -150,7 +150,6 @@ fn open_code_ref_reads_repo_lines() {
 
     let mut server = new_server(store);
     let resp = server.tool_branchmind_open(json!({
-        "workspace": "demo",
         "id": "code:src/lib.rs#L2-L3"
     }));
 
@@ -166,6 +165,35 @@ fn open_code_ref_reads_repo_lines() {
     assert!(content.contains("    3 | line3"));
     let code_ref = result.get("ref").and_then(|v| v.as_str()).unwrap_or("");
     assert!(code_ref.starts_with("code:src/lib.rs#L2-L3@sha256:"));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn open_uses_default_workspace_when_omitted() {
+    let base = temp_dir();
+    let repo_root = base.join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join("src")).unwrap();
+    fs::write(repo_root.join("src/lib.rs"), "x\ny\nz\n").unwrap();
+
+    let storage_dir = repo_root.join(".agents").join("mcp").join(".branchmind");
+    let mut store = SqliteStore::open(&storage_dir).unwrap();
+    let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+    store.workspace_init(&workspace).unwrap();
+
+    let mut server = new_server(store);
+    let resp = server.tool_branchmind_open(json!({
+        "id": "code:src/lib.rs#L1-L2"
+    }));
+
+    assert!(
+        resp.get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    );
+    let result = resp.get("result").cloned().unwrap_or_default();
+    assert_eq!(result.get("kind").and_then(|v| v.as_str()), Some("code"));
 
     let _ = fs::remove_dir_all(&base);
 }

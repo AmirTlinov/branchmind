@@ -264,10 +264,87 @@ impl McpServer {
         let Some(args_obj) = args.as_object() else {
             return ai_error("INVALID_INPUT", "arguments must be an object");
         };
-        let workspace = match require_workspace(args_obj) {
-            Ok(w) => w,
+        let workspace_raw = match optional_string(args_obj, "workspace") {
+            Ok(v) => v,
             Err(resp) => return resp,
         };
+        let workspace_raw = workspace_raw
+            .as_deref()
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string())
+            .or_else(|| {
+                self.workspace_override
+                    .as_deref()
+                    .or(self.default_workspace.as_deref())
+                    .map(|v| v.to_string())
+            });
+        let Some(workspace_raw) = workspace_raw else {
+            return ai_error_with(
+                "INVALID_INPUT",
+                "workspace is required",
+                Some(
+                    "Provide workspace=\"my-workspace\" or configure a default workspace via BRANCHMIND_WORKSPACE.",
+                ),
+                vec![],
+            );
+        };
+        let workspace = match WorkspaceId::try_new(workspace_raw.clone()) {
+            Ok(w) => w,
+            Err(_) => {
+                return ai_error(
+                    "INVALID_INPUT",
+                    "workspace: expected WorkspaceId; fix: workspace=\"my-workspace\"",
+                );
+            }
+        };
+
+        // Even though `open` is read-only, it still must respect workspace safety rails.
+        // Otherwise a locked/allowlisted server could leak data across workspaces.
+        let requested = workspace.as_str().to_string();
+        if self.workspace_lock
+            && let Some(default_workspace) = self.default_workspace.as_deref()
+            && requested != default_workspace
+        {
+            return ai_error_with(
+                "WORKSPACE_LOCKED",
+                "workspace is locked to the configured default workspace",
+                Some("Restart the server without workspace lock to switch workspaces in-session."),
+                vec![suggest_call(
+                    "status",
+                    "Inspect the current workspace policy.",
+                    "low",
+                    json!({}),
+                )],
+            );
+        }
+        if let Some(allowlist) = self.workspace_allowlist.as_ref()
+            && !allowlist.iter().any(|allowed| allowed == &requested)
+        {
+            let mut allowed = allowlist.clone();
+            allowed.sort();
+            let limit = allowed.len().min(5);
+            let preview = allowed
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let hint = if allowed.len() > limit {
+                format!(
+                    "Allowed workspaces (showing {limit} of {}): {preview}",
+                    allowed.len()
+                )
+            } else {
+                format!("Allowed workspaces: {preview}")
+            };
+            return ai_error_with(
+                "WORKSPACE_NOT_ALLOWED",
+                "workspace is not in the allowlist",
+                Some(&hint),
+                Vec::new(),
+            );
+        }
         let id = match require_string(args_obj, "id") {
             Ok(v) => v,
             Err(resp) => return resp,

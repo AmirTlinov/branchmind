@@ -37,7 +37,7 @@ pub(crate) fn core_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "open",
-            "description": "Open a single artifact by stable id/reference (CARD-..., <doc>@<seq>, a:<anchor>, runner:<id>, TASK-..., PLAN-..., JOB-...).",
+            "description": "Open a single artifact by stable id/reference (CARD-..., <doc>@<seq>, a:<anchor>, runner:<id>, code:<path>#L..-L..@sha256:..., TASK-..., PLAN-..., JOB-...).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
