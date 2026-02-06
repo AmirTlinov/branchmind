@@ -22,7 +22,7 @@ Do not guess fields.
 BranchMind v1 surface is portal-first (10 tools). If copied text uses legacy names:
 
 1) run `tools/list` (or `system.ops.summary`) to confirm the surface
-2) find the right cmd via `system.cmd.list(q="tasks.")`
+2) find the right cmd via `system op=cmd.list args={q:"tasks."}`
 3) fetch exact schema via `system.schema.get(cmd="...")`
 
 ## BUDGET_* warnings / truncated output
