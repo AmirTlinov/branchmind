@@ -8,6 +8,11 @@ use super::json::job_row_to_json;
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 300_000;
+// Flagship UX / transport safety:
+// MCP clients and shared proxy layers often enforce per-call deadlines (~20–60s).
+// `jobs.wait` must remain safe to call with large timeout_ms, so we clamp the blocking portion
+// per call to a small deterministic bound.
+const MAX_BLOCKING_PER_CALL_MS: u64 = 2_000;
 const DEFAULT_POLL_MS: u64 = 200;
 const MIN_POLL_MS: u64 = 10;
 const MAX_POLL_MS: u64 = 5_000;
@@ -108,6 +113,8 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
             },
         );
     }
+    let requested_timeout_ms = timeout_ms;
+    let call_timeout_ms = requested_timeout_ms.min(MAX_BLOCKING_PER_CALL_MS);
     let poll_ms = match optional_u64(args_obj, "poll_ms") {
         Ok(v) => v.unwrap_or(DEFAULT_POLL_MS),
         Err(err) => return OpResponse::error(env.cmd.clone(), err),
@@ -122,7 +129,7 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
             },
         );
     }
-    if timeout_ms > 0 && poll_ms < MIN_POLL_MS {
+    if call_timeout_ms > 0 && poll_ms < MIN_POLL_MS {
         return OpResponse::error(
             env.cmd.clone(),
             OpError {
@@ -174,12 +181,12 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
     };
     let mut done = is_terminal(job.status.as_str());
 
-    while !done && timeout_ms > 0 {
+    while !done && call_timeout_ms > 0 {
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        if elapsed_ms >= timeout_ms {
+        if elapsed_ms >= call_timeout_ms {
             break;
         }
-        let remaining_ms = timeout_ms.saturating_sub(elapsed_ms);
+        let remaining_ms = call_timeout_ms.saturating_sub(elapsed_ms);
         let sleep_ms = poll_ms.min(remaining_ms);
         if sleep_ms == 0 {
             break;
@@ -235,11 +242,33 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
             "workspace": workspace.as_str(),
             "done": done,
             "waited_ms": waited_ms,
+            "requested_timeout_ms": requested_timeout_ms,
+            "effective_timeout_ms": call_timeout_ms,
+            "remaining_ms": requested_timeout_ms.saturating_sub(waited_ms),
             "job": job_row_to_json(job)
         }),
     );
 
     if !done {
+        resp.actions.push(Action {
+            action_id: "next::jobs.wait".to_string(),
+            priority: ActionPriority::High,
+            tool: ToolName::JobsOps.as_str().to_string(),
+            args: json!({
+                "workspace": workspace.as_str(),
+                "op": "call",
+                "cmd": "jobs.wait",
+                "args": {
+                    "job": job_id.clone(),
+                    "timeout_ms": requested_timeout_ms,
+                    "poll_ms": poll_ms
+                },
+                "budget_profile": "portal",
+                "view": "compact"
+            }),
+            why: "Job не завершён: подождать ещё (bounded wait) и повторить проверку.".to_string(),
+            risk: "Низкий".to_string(),
+        });
         resp.actions.push(Action {
             action_id: "next::jobs.open".to_string(),
             priority: ActionPriority::Medium,
@@ -251,7 +280,7 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
                 "budget_profile": "portal",
                 "view": "compact"
             }),
-            why: "Истёк timeout: открыть job и проверить прогресс/состояние.".to_string(),
+            why: "Job не завершён: открыть job и проверить прогресс/состояние.".to_string(),
             risk: "Низкий".to_string(),
         });
     }

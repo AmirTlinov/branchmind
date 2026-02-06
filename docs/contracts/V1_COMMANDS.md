@@ -179,10 +179,16 @@ Notes:
 
 ## jobs.wait
 
-Wait for a job to reach a terminal status (DONE/FAILED/CANCELED), bounded by `timeout_ms`.
+Wait for a job to reach a terminal status (DONE/FAILED/CANCELED).
 
 Notes:
-- On timeout, the tool returns `success=true` with `result.done=false` (not an error).
+- Transport-safe by design: the server clamps the blocking portion of the call (see
+  `result.effective_timeout_ms`) so `jobs.wait` stays safe under typical MCP deadlines.
+- `timeout_ms` is a **desired** wait budget, but may be clamped per call. To wait longer, call the
+  command again (actions include a ready-to-run continuation call).
+- On timeout/clamp, the tool returns `success=true` with `result.done=false` (not an error).
+- Output includes: `waited_ms`, `requested_timeout_ms`, `effective_timeout_ms`, `remaining_ms`, and
+  the current `job` row snapshot.
 - Use `system` → `schema.get(cmd)` for the exact arguments.
 
 ## jobs.runner.start
