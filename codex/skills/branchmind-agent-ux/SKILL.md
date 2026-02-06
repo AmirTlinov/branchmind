@@ -1,11 +1,14 @@
 ---
 name: branchmind-agent-ux
-description: "Master workflow for using BranchMind as a discipline engine: deep planning, branching reasoning, evolvable knowledge, delegation, and architecture mapping (v1 portals, actions-first)."
+description: "10-year daily-driver workflow for BranchMind v1 (portals, actions-first): proof-first execution, branching decisions, knowledge hygiene, anchors, and safe delegation."
 ---
 
-# BranchMind Agent UX
+# BranchMind Agent UX (10‑year daily driver)
 
-This skill turns BranchMind into a **discipline engine** for AI agents:
+BranchMind is not a UI project — the **MCP surface is the UX**. Treat it as a deterministic state machine.
+
+This skill turns BranchMind into a **discipline engine** that stays effective under drift, tight budgets,
+and multi‑agent concurrency:
 
 **Observe → Plan → Branch → Decide → Execute → Prove → Close → Remember**
 
@@ -14,6 +17,15 @@ deep planning (edge cases + failure modes), branching idea exploration, durable 
 and safe multi-agent delegation.
 
 ---
+
+## Mental model (4 layers)
+
+Keep these layers separate in your head and artifacts. It prevents “chat memory” collapse over years.
+
+- **Work (`tasks`)** — deliverables, checkpoints, NextEngine (“what next”), proof receipts.
+- **Reasoning (`think` + `docs` + `graph`)** — decisions, alternatives, trace; openable refs, not chat.
+- **Knowledge (`think.knowledge.*`)** — reusable invariants as short cards with stable `(anchor,key)`.
+- **Meaning map (anchors `a:*`)** — semantic coordinates for recall/resume across refactors.
 
 ## Assumptions (required)
 
@@ -34,10 +46,27 @@ and safe multi-agent delegation.
 
 If there is no focus yet:
 - Create one via `tasks.macro.start` (see `references/workflow.md`).
+  - Default: `template="principal-task"` (strict discipline).
+  - Risky/architectural: `template="flagship-task"` (deep discipline: branches + resolved synthesis).
 
 ---
 
-## Hard rules (AI UX invariants)
+## Kernel commands (the “always works” set)
+
+If you remember only these, you can operate BranchMind for a decade without relearning the UX:
+
+- `branchmind.status` — HUD + NextEngine.
+- `branchmind.open id=<ref>` — open anything (TASK/STEP/CARD/notes/code/job).
+- `branchmind.system op=schema.get args={cmd:"..."}` — recover from `INVALID_INPUT` (never guess).
+- `tasks.macro.start` — start with disciplined defaults (small steps, clear verify plan).
+- `tasks.evidence.capture` → `tasks.step.close` *(or `tasks.macro.close.step`)* — proof-first close.
+- `think.knowledge.recall/upsert/lint` — recall-first + durable memory hygiene.
+
+Everything else is progressive disclosure.
+
+---
+
+## Hard rules (10‑year invariants)
 
 1) **Actions-first**
    - Prefer executing server-provided `actions[]` over inventing calls.
@@ -50,11 +79,25 @@ If there is no focus yet:
    - Work is not “done” until proof receipts are attached:
      `CMD:` + `LINK:` (preferred) via `tasks.evidence.capture`, then close the step.
 
-4) **No silent scope drift**
+4) **Refs-first (anti-noise)**
+   - Don’t paste large blobs in chat/notes. Store openable artifacts and send refs.
+   - Prefer `open <ref>` + small budgets over re-requesting huge views.
+
+5) **Budget ladder**
+   - Default: `budget_profile=portal`, `view=compact`.
+   - Escalate only when needed: `default/smart` → `audit/audit`.
+   - If output truncates: re-open the **specific ref** with a larger budget (never “dump all”).
+
+6) **No silent scope drift**
    - Never change targets implicitly. Prefer explicit `task` + `step_id` (or follow actions).
 
-5) **No knowledge junk drawer**
+7) **Single-writer discipline (multi-agent safe)**
+   - If you see `STEP_LEASE_HELD`, don’t fight it. Follow recovery actions (release/wait/takeover).
+
+8) **No knowledge junk drawer**
    - Use `(anchor, key)` upserts for knowledge; lint periodically.
+   - Every durable card must have an `Expiry:` (prevents “old truth” poisoning).
+   - Promote to canon only when reused (≥2) or expensive-to-rediscover.
 
 ---
 
@@ -84,6 +127,14 @@ Escape hatch (macro flow only): `tasks.macro.close.step override={reason,risk}` 
 `WARNING: REASONING_OVERRIDE_APPLIED` and records an explicit debt note.
 
 Templates live in `references/templates.md`.
+
+---
+
+## Cadence (how this stays effective for years)
+
+- **Daily**: `status` → do next action → attach proof → close step → upsert knowledge when you learn.
+- **Weekly**: `think.knowledge.lint` (follow actions) to prevent key drift / duplication.
+- **After upgrades / weird behavior**: check `build=<fingerprint>` in `status`; use `system.daemon.restart` if stale.
 
 ---
 

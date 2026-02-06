@@ -1,5 +1,4 @@
 interface:
   display_name: "BranchMind Agent UX"
-  short_description: "Deep planning + branching + memory"
-  default_prompt: "Use $branchmind-agent-ux to run a deep, proof-first BranchMind workflow (plan → branch → decide → execute → prove → remember)."
-
+  short_description: "Actions-first, proof-first, 10y memory hygiene"
+  default_prompt: "Use $branchmind-agent-ux as a 10-year daily-driver: follow actions[] (never guess schemas), plan/branch/decide when risky, attach proof (CMD/LINK) before closing steps, and upsert durable (anchor,key) knowledge with Expiry."

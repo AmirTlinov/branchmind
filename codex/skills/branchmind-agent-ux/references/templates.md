@@ -2,6 +2,19 @@
 
 Keep artifacts **short** and **reusable**. You want high signal, not essays.
 
+## 0) Step close checklist (proof-first)
+
+Use as the mental checklist before closing any step:
+
+```text
+Deliverable: shipped (or explicitly not needed)
+Proof: CMD: ... | LINK: ...
+Verify: tests run (or explicitly waived with reason)
+Edge cases: listed + covered (or explicitly deferred)
+Rollback signals: defined (when relevant)
+Knowledge: new invariant captured as (anchor,key) card (when discovered)
+```
+
 ## 1) Strict plan frame (paste into a frame/note)
 
 ```text
@@ -56,6 +69,15 @@ Proof: CMD: <...> | LINK: <...> | FILE: <...>
 Expiry: YYYY-MM-DD
 ```
 
+### Knowledge key hygiene (stable identity)
+
+```text
+Key: <subsystem>-<topic>  (avoid misc/general/notes/todo)
+Anchor: a:<component>     (meaning coordinate, not a file path)
+Expiry: YYYY-MM-DD        (required; prevents stale truth)
+Promotion: add v:canon only when reused>=2 or expensive-to-rediscover
+```
+
 ## 6) Delegation brief (for jobs)
 
 ```text
@@ -67,3 +89,13 @@ Proof required (CMD/LINK):
 Refs:
 ```
 
+### Manager → delegate steering message (when attention is needed)
+
+```text
+Context (refs): TASK-... STEP-... CARD-... code:...
+Decision needed:
+Options (2-4):
+Recommended option:
+Stop criteria:
+Proof required (CMD/LINK/ref):
+```
