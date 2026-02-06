@@ -1,0 +1,5 @@
+interface:
+  display_name: "BranchMind Agent UX"
+  short_description: "Deep planning + branching + memory"
+  default_prompt: "Use $branchmind-agent-ux to run a deep, proof-first BranchMind workflow (plan → branch → decide → execute → prove → remember)."
+
