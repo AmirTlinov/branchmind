@@ -121,8 +121,8 @@ Guarantee: BranchMind applies friction only where it pays rent (risk, proof, bou
 low-noise otherwise; skills/playbooks nudge deeper thinking without forcing form-filling.
 
 Mechanisms:
-- skill packs (`daily|strict|research|teamlead`) are short, versionable, truncation-safe,
-- “falsifier + stop criteria” in research mode,
+- skill packs (`daily|strict|deep|teamlead`) are short, versionable, truncation-safe,
+- “falsifier + stop criteria” in deep mode (research accepted as an alias),
 - progressive disclosure (draft/history/backlog only by explicit request).
 
 Evidence: fewer useless CONTINUE loops; autonomy rate trends up; low false-offline rate.
@@ -200,7 +200,7 @@ Design requirements:
 We ship **built-in behavior packs** (versioned, deterministic) so agents behave consistently:
 - `daily`: low-noise compass loop
 - `strict`: DoD/proof discipline; override requires reason+risk
-- `research`: scientific loop + stop criteria + evidence hygiene
+- `deep`: scientific loop + stop criteria + evidence hygiene (research accepted as an alias)
 - `teamlead`: fan-out/fan-in + inbox protocol
 
 These packs must be:
@@ -322,7 +322,7 @@ See also: `docs/architecture/PLANNING_QUALITY.md` (incremental refinement + plan
 
 **F) Skills & playbooks**
 - Define a schema-stable `skill` tool that returns versioned behavior packs.
-- Define profiles (`daily|strict|research|teamlead`) and injection rules for runners.
+- Define profiles (`daily|strict|deep|teamlead`; research accepted as an alias for deep) and injection rules for runners.
 - Define truncation requirements (a skill must remain useful under small budgets).
 
 ### 3.2 Contract discipline (shape locks)
@@ -727,7 +727,7 @@ No stored data should become unreadable; only behavior changes.
 5) Research loop semantics + stop criteria (anchor-scoped)
 6) Superseded + pinned cockpit semantics
 7) Smart view filters + explicit “show drafts” toggles
-8) Tests: no self-contradiction + research slice
+8) Tests: no self-contradiction + deep skill slice (research alias)
 
 **Phase 3 — Planning quality**
 9) Plan lint rules (DoD/tests/bounded steps) + recovery hints
@@ -804,7 +804,7 @@ This is the concrete checklist for implementation work.
 
 #### Phase 6 (Skills)
 - Spec: `skill` tool schema + profiles + version pinning
-- Runner: inject selected skill pack into subagent prompts (teamlead/research/strict)
+- Runner: inject selected skill pack into subagent prompts (teamlead/deep/strict; research alias accepted)
 - DX: packs are short, composable, truncation-safe; include “golden loop” guidance
 - Tests: adherence improves (progress/question + DONE⇒proof); skills remain useful under low budgets
 

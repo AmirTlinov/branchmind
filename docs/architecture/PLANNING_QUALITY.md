@@ -258,7 +258,7 @@ This is how BranchMind improves “genius” ideas:
 To make this repeatable across sessions/subagents:
 
 - `skill(profile=daily)` keeps the compass loop tight.
-- `skill(profile=research)` enforces falsifiers + stop criteria.
+- `skill(profile=deep)` enforces falsifiers + stop criteria (research is accepted as an alias).
 - `skill(profile=teamlead)` enforces feedback protocol and proof-first.
 
 Skills must be:
