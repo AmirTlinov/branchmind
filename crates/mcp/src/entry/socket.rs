@@ -166,7 +166,13 @@ fn handle_connection(
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
 
-    let mut server = build_server(&config)?;
+    // Flagship UX: the shared proxy probes the daemon via `branchmind/daemon_info` before
+    // forwarding the first client request. Building the full server can require opening SQLite
+    // and warming caches, which can exceed the proxy's short probe deadlines on cold machines.
+    //
+    // Handle internal daemon methods without constructing the full server, and build the server
+    // lazily only when we see a real MCP/tool request.
+    let mut server: Option<McpServer> = None;
 
     loop {
         let Some(body) = read_content_length_frame(&mut reader, None)? else {
@@ -214,6 +220,13 @@ fn handle_connection(
                                     }),
                     ))
                 } else {
+                    let server = match server.as_mut() {
+                        Some(server) => server,
+                        None => {
+                            server = Some(build_server(&config)?);
+                            server.as_mut().expect("server must exist after build")
+                        }
+                    };
                     server.handle(request)
                 }
             }

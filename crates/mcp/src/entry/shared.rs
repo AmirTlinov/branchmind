@@ -1244,6 +1244,12 @@ fn recover_daemon(
     // Best-effort: unlink the socket path so a fresh daemon can bind even if the old daemon
     // cannot be terminated (e.g. an older build that doesn't support shutdown).
     let _ = std::fs::remove_file(&config.socket_path);
+    // Determinism / orphan prevention:
+    // Our socket daemon loop exits when the socket path is unlinked. On very fast machines the
+    // proxy may unlink and immediately re-bind via a new daemon, causing the old daemon to miss
+    // the brief “missing file” window and keep running as an orphan. Keep the socket unlinked
+    // for a short, bounded grace period before spawning the replacement.
+    std::thread::sleep(Duration::from_millis(150));
     spawn_daemon(config)?;
 
     if config.viewer_enabled {
