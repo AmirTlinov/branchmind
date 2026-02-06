@@ -23,6 +23,15 @@ Zero-arg invocation enables flagship DX defaults:
 - workspace lock (guards against accidental cross-workspace calls)
 - DX mode defaults (compact outputs + snapshot delta on by default)
 
+### Rebuild / upgrade note (shared daemon UX)
+
+When running in **shared mode**, a long-lived daemon process may survive local rebuilds.
+
+- Starting a **newer** proxy binary automatically replaces a stale daemon (compat matches, but the
+  daemon `build_time_ms` is older than the proxy).
+- If you need an explicit escape hatch, call `system cmd=system.daemon.restart` via the `system`
+  portal (one command; copy/paste safe).
+
 ## OpenCode (recommended)
 
 Configure the server as a local MCP backend and let BranchMind auto-configure everything:

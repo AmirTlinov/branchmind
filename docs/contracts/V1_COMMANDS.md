@@ -43,6 +43,12 @@ Semantics (shared mode):
 - drops its daemon connection.
 - The **next forwarded request** will spawn a fresh daemon via the normal `connect_or_spawn` path.
 
+Auto-heal note (shared mode):
+- The shared proxy also performs **stale-daemon avoidance**: when the compat fingerprint matches
+  but the daemon’s `build_time_ms` is older than the proxy binary, the proxy treats the daemon as
+  incompatible and restarts it automatically (no manual action required).
+- `system.daemon.restart` remains as an explicit escape hatch.
+
 Semantics (non-shared mode):
 - Returns a typed `NOT_SUPPORTED` error with an actionable recovery hint.
 
