@@ -61,8 +61,9 @@ const GRAPH_LIMITS = {
 };
 
 const GRAPH_CONST = {
-  worldPlanRadius: 900,
-  worldTaskRadiusBase: 140,
+  // Make the map feel "physical" and breathable (less dense / less stripe-like).
+  worldPlanRadius: 1050,
+  worldTaskRadiusBase: 160,
   tile: 0.45,
   lodClustersAt: 0.9,
   lodClustersOutAt: 0.84,
@@ -84,6 +85,7 @@ const queryOverrides = { enabled: true };
 
 const windowUi = {
   zCounter: 80,
+  front: "detail",
   explorer: { open: false, pinned: false, anchor: "left", x: 32, y: 32, z: 60 },
   detail: { open: false, pinned: false, anchor: "right", x: 32, y: 32, z: 70 },
   dragging: null,
@@ -1063,6 +1065,7 @@ function setDetailVisible(open, opts) {
   windowUi.detail.open = desired;
   if (desired) {
     windowUi.detail.z = bumpWindowZ();
+    windowUi.front = "detail";
   }
   syncDetailWindowDom({ persist: !(opts && opts.persist === false), clamp: !(opts && opts.clamp === false) });
   const focus = !(opts && opts.focus === false);
@@ -1086,6 +1089,7 @@ function setSidebarVisible(open, opts) {
   windowUi.explorer.open = desired;
   if (desired) {
     windowUi.explorer.z = bumpWindowZ();
+    windowUi.front = "explorer";
   }
   syncExplorerWindowDom({ persist: !(opts && opts.persist === false), clamp: !(opts && opts.clamp === false) });
 
@@ -1242,6 +1246,8 @@ function syncExplorerWindowDom(opts) {
   if (opts && opts.persist) {
     persistExplorerWindowState();
   }
+
+  updatePanelBodyState();
 }
 
 function syncDetailWindowDom(opts) {
@@ -1266,6 +1272,8 @@ function syncDetailWindowDom(opts) {
   if (opts && opts.persist) {
     persistDetailWindowState();
   }
+
+  updatePanelBodyState();
 }
 
 function bumpWindowZ() {
@@ -1280,14 +1288,26 @@ function bumpWindowZ() {
 
 function bringWindowToFront(kind) {
   if (kind === "explorer") {
+    windowUi.front = "explorer";
     windowUi.explorer.z = bumpWindowZ();
     syncExplorerWindowDom({ persist: false, clamp: false });
     return;
   }
   if (kind === "detail") {
+    windowUi.front = "detail";
     windowUi.detail.z = bumpWindowZ();
     syncDetailWindowDom({ persist: false, clamp: false });
   }
+}
+
+function updatePanelBodyState() {
+  const body = document.body;
+  if (!body) return;
+  const narrow = window.innerWidth < 860;
+  body.dataset.narrow = narrow ? "1" : "0";
+  body.dataset.explorerOpen = windowUi.explorer.open ? "1" : "0";
+  body.dataset.detailOpen = windowUi.detail.open ? "1" : "0";
+  body.dataset.front = windowUi.front === "explorer" ? "explorer" : "detail";
 }
 
 function isInteractiveElement(target) {
@@ -1384,11 +1404,28 @@ function handleWindowDragEnd(event) {
 
 function renderDetailMeta(lines) {
   clear(nodes.detailMeta);
-  lines.forEach((line) => {
+  const list = Array.isArray(lines) ? lines.filter((l) => ((l || "") + "").trim()) : [];
+  if (!list.length) return;
+
+  // Meta is optional for humans; default to a collapsed disclosure to keep content first.
+  const details = document.createElement("details");
+  details.className = "detail-meta-details";
+  details.open = false;
+
+  const summary = document.createElement("summary");
+  summary.className = "detail-meta-summary";
+  summary.textContent = "Детали";
+
+  const grid = document.createElement("div");
+  grid.className = "detail-meta-grid";
+  list.forEach((line) => {
     const row = document.createElement("div");
     row.textContent = line;
-    nodes.detailMeta.append(row);
+    grid.append(row);
   });
+
+  details.append(summary, grid);
+  nodes.detailMeta.append(details);
 }
 
 const toastState = { el: null, timer: 0 };
@@ -1692,6 +1729,28 @@ function renderTaskListButton(task, sourceSnapshot, opts) {
   return btn;
 }
 
+function renderKnowledgeKeyRow(task, sourceSnapshot) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "list-item";
+  btn.style.transform = "none";
+
+  const title = document.createElement("div");
+  title.className = "item-title";
+  title.textContent = task.title || task.key || task.id;
+
+  const meta = document.createElement("div");
+  meta.className = "item-meta";
+  const updated = document.createElement("span");
+  updated.className = "badge dim";
+  updated.textContent = formatDate(task.updated_at_ms);
+  meta.append(updated);
+
+  btn.append(title, meta);
+  btn.addEventListener("click", () => renderKnowledgeKeyDetail(state.snapshot || sourceSnapshot, task));
+  return btn;
+}
+
 function renderDocEntry(entry) {
   const row = document.createElement("div");
   row.className = "list-item detail-entry";
@@ -1817,11 +1876,11 @@ function renderAnchorDetail(snapshot, anchor) {
 
   const total = typeof anchor?.task_counts?.total === "number" ? anchor.task_counts.total : 0;
   renderDetailMeta([
-    `ID: ${anchor.id}`,
-    `Kind: ${(anchor.kind || anchor.priority || "anchor").toString()}`,
     `Status: ${(anchor.status || "").toString() || "—"}`,
     `Updated: ${formatDate(anchor.updated_at_ms)}`,
     `Keys: ${total}`,
+    `ID: ${anchor.id}`,
+    `Kind: ${(anchor.kind || anchor.priority || "anchor").toString()}`,
   ]);
 
   clear(nodes.detailBody);
@@ -1832,6 +1891,25 @@ function renderAnchorDetail(snapshot, anchor) {
       renderDetailText(anchor.description, "No anchor description yet."),
     ])
   );
+
+  const keys = (snapshot.tasks || [])
+    .filter((task) => task && (task.plan_id || "").trim() === anchor.id)
+    .slice()
+    .sort(
+      (a, b) =>
+        (b.updated_at_ms || 0) - (a.updated_at_ms || 0) ||
+        (a.title || a.key || a.id || "").localeCompare(b.title || b.key || b.id || "")
+    );
+  if (keys.length) {
+    const items = keys.slice(0, 60).map((task) => renderKnowledgeKeyRow(task, snapshot));
+    nodes.detailBody.append(renderDetailSection("Ключи", items));
+  } else {
+    nodes.detailBody.append(
+      renderDetailSection("Ключи", [
+        renderDetailText(null, "Пока нет knowledge-ключей для этого якоря."),
+      ])
+    );
+  }
 
   const depends = Array.isArray(anchor.depends_on) ? anchor.depends_on : [];
   if (depends.length) {
@@ -1851,7 +1929,7 @@ function renderAnchorDetail(snapshot, anchor) {
       });
       return row;
     });
-    nodes.detailBody.append(renderDetailSection("Depends on", items));
+    nodes.detailBody.append(renderDetailSection("Зависит от", items));
   }
 
   setDetailVisible(true, { focus: false });
@@ -2118,7 +2196,6 @@ function renderKnowledgeKeyDetail(snapshot, task) {
   renderDetailMeta([
     `Key: ${(task.key || task.title || "").toString() || "—"}`,
     `Anchor: ${anchor?.title || task.plan_id || "—"}`,
-    `card_id: ${cardId || "—"}`,
     `Updated: ${formatDate(task.updated_at_ms)}`,
   ]);
 
@@ -2810,12 +2887,30 @@ function semanticVector(tokens, fallbackId) {
   const list = Array.isArray(tokens) ? tokens : Array.from(tokens || []);
   for (let i = 0; i < list.length; i += 1) {
     const token = list[i];
-    x += hashToUnit(`${token}|x`) * 2 - 1;
-    y += hashToUnit(`${token}|y`) * 2 - 1;
+    // Prefix salt keeps x/y independent enough for FNV1a (suffix salt can correlate into stripes).
+    x += hashToUnit(`x|${token}`) * 2 - 1;
+    y += hashToUnit(`y|${token}`) * 2 - 1;
   }
   const scale = Math.sqrt(Math.max(1, list.length));
   x = Math.tanh(x / scale);
   y = Math.tanh(y / scale);
+
+  // Deterministic micro-noise per node id so sparse text still spreads nicely.
+  const fid = (fallbackId || "").toString();
+  const sx = hashToUnit(`sx|${fid}`) * 2 - 1;
+  const sy = hashToUnit(`sy|${fid}`) * 2 - 1;
+  x = clamp(x * 0.85 + sx * 0.15, -1, 1);
+  y = clamp(y * 0.85 + sy * 0.15, -1, 1);
+
+  // Stable micro-rotation: keeps "semantic neighborhood" but breaks global axis lock-in.
+  const rot = (hashToUnit(`rot|${fid}`) - 0.5) * 0.24;
+  const cos = Math.cos(rot);
+  const sin = Math.sin(rot);
+  const rx = x * cos - y * sin;
+  const ry = x * sin + y * cos;
+  x = rx;
+  y = ry;
+
   const len = Math.hypot(x, y);
   if (len < 1e-3) {
     const seed = hashToUnit(fallbackId || "");
@@ -3088,7 +3183,7 @@ function buildPlanNodesFlagship(snapshot) {
     const heat = computeHeat(nowMs, plan?.updated_at_ms || nowMs);
     const radiusScale = clamp(0.55 + (1 - heat) * 0.35, 0.55, 0.9);
     const tx = vec.x * GRAPH_CONST.worldPlanRadius * radiusScale;
-    const ty = vec.y * GRAPH_CONST.worldPlanRadius * radiusScale * 0.82;
+    const ty = vec.y * GRAPH_CONST.worldPlanRadius * radiusScale;
 
     const counts = plan?.task_counts || { total: 0, done: 0, active: 0, backlog: 0, parked: 0 };
     const total = typeof counts.total === "number" ? counts.total : 0;
@@ -3581,7 +3676,7 @@ function buildGraphModel(snapshot, width, height) {
     const heat = computeHeat(plan.updated_at_ms);
     const radiusScale = clamp(0.55 + (1 - heat) * 0.35, 0.55, 0.9);
     const tx = vec.x * semanticX * radiusScale;
-    const ty = vec.y * semanticY * radiusScale * 0.82;
+    const ty = vec.y * semanticY * radiusScale;
     const jitter = (hashToUnit(`${plan.id}-j`) - 0.5) * 18;
     const x = tx + jitter;
     const y = ty - jitter * 0.6;

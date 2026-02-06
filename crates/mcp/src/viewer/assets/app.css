@@ -208,6 +208,13 @@ html[data-ui="legacy"] .graph-overlay {
   user-select: none;
 }
 
+/* Avoid visual clutter: when Explorer ("Project Pulse") is open, HUD overlaps it. */
+body[data-explorer-open="1"] .hud {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .hud-title {
   font-size: 12px;
   letter-spacing: 0.18em;
@@ -592,10 +599,35 @@ html[data-ui="legacy"] .graph-overlay {
 }
 
 .detail-meta {
+  display: block;
+}
+
+.detail-meta-details {
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: rgba(15, 19, 26, 0.6);
+  padding: 10px 12px;
+}
+
+.detail-meta-summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted-2);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.detail-meta-summary::-webkit-details-marker {
+  display: none;
+}
+
+.detail-meta-grid {
   display: grid;
   gap: 6px;
   font-size: 12px;
   color: var(--muted);
+  padding-top: 10px;
 }
 
 .detail-body {
@@ -603,6 +635,19 @@ html[data-ui="legacy"] .graph-overlay {
   gap: 10px;
   overflow: auto;
   max-height: 55vh;
+}
+
+/* Narrow viewport policy: if both panels are open, show only the front-most one. */
+body[data-narrow="1"][data-explorer-open="1"][data-detail-open="1"][data-front="detail"] #sidebar-panel {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+body[data-narrow="1"][data-explorer-open="1"][data-detail-open="1"][data-front="explorer"] #detail-panel {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
 .detail-text {
