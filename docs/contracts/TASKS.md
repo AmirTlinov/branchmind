@@ -139,6 +139,14 @@ Common ones:
 - `tasks.macro.delegate` — create a task slice + create a `JOB-*` for delegated execution
 - `tasks.macro.finish` — finalize the task (often after all steps are closed)
 
+### Built-in task templates (for `tasks.macro.start` / `tasks.scaffold`)
+
+Use `tasks.templates.list` for the SSOT list. As of v1:
+
+- `basic-task` — minimal delivery loop (defaults to `reasoning_mode=normal`)
+- `principal-task` — principal-grade loop (defaults to `reasoning_mode=strict`)
+- `flagship-task` — flagship-grade loop (defaults to `reasoning_mode=deep`)
+
 ---
 
 ## Integration requirement (single organism)

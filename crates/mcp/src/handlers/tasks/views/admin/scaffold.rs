@@ -51,7 +51,7 @@ impl McpServer {
                     "UNKNOWN_ID",
                     "Unknown template id",
                     Some(
-                        "Use built-in template ids: basic-task, principal-task, basic-plan, principal-plan. (Use tasks_templates_list.)",
+                        "Use built-in template ids: basic-task, principal-task, flagship-task, basic-plan, principal-plan. (Use tasks_templates_list.)",
                     ),
                     vec![suggest_call(
                         "tasks_templates_list",

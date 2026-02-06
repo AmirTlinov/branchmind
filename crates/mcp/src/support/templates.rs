@@ -157,6 +157,70 @@ pub(crate) fn built_in_task_templates() -> Vec<TaskTemplate> {
                 ),
             ],
         },
+        TaskTemplate {
+            id: "flagship-task",
+            kind: TaskKind::Task,
+            title: "Flagship delivery task",
+            description: "Flagship-grade loop: deep planning + branching reasoning → resolved synthesis → incremental delivery → proofs → knowledge handoff. (Defaults to deep reasoning discipline.)",
+            plan_steps: Vec::new(),
+            task_steps: vec![
+                template_step(
+                    "Frame the problem (goal, constraints, success criteria, stop criteria)",
+                    &[
+                        "Goal and constraints captured",
+                        "Success + stop criteria are explicit",
+                    ],
+                    &["Seed a brief reasoning capsule (frame + skeptic preflight)"],
+                    &[],
+                ),
+                template_step(
+                    "Branch the reasoning (2+ hypotheses, counter-case, falsifiers)",
+                    &[
+                        "At least 2 hypotheses captured (best + alternative)",
+                        "Counter-position is steelmanned",
+                    ],
+                    &["Add the smallest disconfirming test idea per hypothesis"],
+                    &[],
+                ),
+                template_step(
+                    "Resolve a synthesis decision (tradeoffs, rollback, invariants)",
+                    &[
+                        "A resolved decision exists (winner + tradeoffs)",
+                        "Interfaces and invariants documented",
+                    ],
+                    &["Record rollback/stop rule and what would change your mind"],
+                    &[],
+                ),
+                template_step(
+                    "Implement incrementally (small verified slices)",
+                    &["Core change implemented", "No silent behavior changes"],
+                    &["Add or update targeted tests"],
+                    &[],
+                ),
+                {
+                    let mut step = template_step(
+                        "Verify with proofs (tests, docs, safety, perf)",
+                        &[
+                            "Relevant checks executed and passing",
+                            "Docs updated where needed",
+                        ],
+                        &["Run relevant test suite / checks"],
+                        &[],
+                    );
+                    step.proof_tests_mode = ProofMode::Require;
+                    step
+                },
+                template_step(
+                    "Knowledge + handoff",
+                    &[
+                        "Knowledge cards updated (invariants + pitfalls)",
+                        "Next actions and follow-ups captured",
+                    ],
+                    &["Produce a bounded resume capsule for the next agent"],
+                    &[],
+                ),
+            ],
+        },
     ]
 }
 

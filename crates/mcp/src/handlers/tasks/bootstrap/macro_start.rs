@@ -98,24 +98,32 @@ impl McpServer {
             );
         }
 
-        // Reasoning-first: principal tasks should seed a minimal frame card automatically,
-        // without forcing agents to remember extra calls or verbose inputs.
+        // Reasoning-first: high-discipline task templates should seed a minimal frame card
+        // automatically, without forcing agents to remember extra calls or verbose inputs.
         //
         // The seed is deterministic (derived from the user-provided task title/description)
         // and stays low-noise (one card).
-        let is_principal_task =
-            patched_args.get("template").and_then(|v| v.as_str()) == Some("principal-task");
+        let template_id = patched_args.get("template").and_then(|v| v.as_str());
+        let is_principal_task = template_id == Some("principal-task");
+        let is_flagship_task = template_id == Some("flagship-task");
         let reasoning_mode_missing = patched_args
             .get("reasoning_mode")
             .is_none_or(|v| v.is_null());
-        if is_principal_task && reasoning_mode_missing {
-            patched_args.insert(
-                "reasoning_mode".to_string(),
-                Value::String("strict".to_string()),
-            );
+        if reasoning_mode_missing {
+            if is_flagship_task {
+                patched_args.insert(
+                    "reasoning_mode".to_string(),
+                    Value::String("deep".to_string()),
+                );
+            } else if is_principal_task {
+                patched_args.insert(
+                    "reasoning_mode".to_string(),
+                    Value::String("strict".to_string()),
+                );
+            }
         }
         let think_missing = patched_args.get("think").is_none_or(|v| v.is_null());
-        if is_principal_task && think_missing {
+        if (is_principal_task || is_flagship_task) && think_missing {
             let task_title = patched_args
                 .get("task_title")
                 .and_then(|v| v.as_str())

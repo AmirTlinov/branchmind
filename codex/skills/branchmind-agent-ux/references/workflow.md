@@ -17,6 +17,8 @@ Use the macro. Keep steps small; 1 step = 1 deliverable.
 
 Tool: `mcp__branchmind__tasks`
 
+### Option A — Explicit steps (fully custom)
+
 ```json
 {
   "workspace": "my-workspace",
@@ -44,6 +46,29 @@ Tool: `mcp__branchmind__tasks`
 
 Then:
 - `tasks.snapshot` (or just call `branchmind.status` again and follow the next action).
+
+### Option B — Built-in templates (fast, disciplined defaults)
+
+For “flagship” work (architectural / risky), prefer:
+
+- `template="flagship-task"` → defaults to `reasoning_mode="deep"` (branching + resolved synthesis required).
+
+Example:
+
+```json
+{
+  "workspace": "my-workspace",
+  "op": "call",
+  "cmd": "tasks.macro.start",
+  "args": {
+    "plan_template": "principal-plan",
+    "template": "flagship-task",
+    "task_title": "Implement <feature>"
+  },
+  "budget_profile": "portal",
+  "view": "compact"
+}
+```
 
 ## Strict planning (before coding)
 
@@ -97,4 +122,3 @@ Tool: `mcp__branchmind__system`
 ```
 
 Use the returned `example_valid_call` / `example_minimal_args`.
-

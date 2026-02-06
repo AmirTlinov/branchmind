@@ -127,7 +127,7 @@ pub(super) fn parse_tasks_bootstrap_args(args: Value) -> Result<TasksBootstrapAr
                         "UNKNOWN_ID",
                         "Unknown template id",
                         Some(
-                            "Use built-in template ids: basic-task or principal-task. (Use tasks_templates_list.)",
+                            "Use built-in template ids: basic-task, principal-task, or flagship-task. (Use tasks_templates_list.)",
                         ),
                         vec![suggest_call(
                             "tasks_templates_list",

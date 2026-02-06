@@ -94,3 +94,78 @@ fn tasks_macro_start_principal_templates_smoke() {
         "principal-task should default to strict reasoning_mode"
     );
 }
+
+#[test]
+fn tasks_macro_start_flagship_template_sets_deep_reasoning_mode() {
+    let mut server =
+        Server::start_initialized("tasks_macro_start_flagship_template_sets_deep_reasoning_mode");
+
+    let start = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": {
+                "workspace": "ws_flagship_tpl",
+                "plan_title": "Flagship Plan",
+                "plan_template": "basic-plan",
+                "task_title": "Flagship Task",
+                "template": "flagship-task",
+                "resume_max_chars": 4000
+            } } }
+    }));
+    assert!(
+        !extract_tool_text_str(&start).starts_with("ERROR:"),
+        "macro_start portal must succeed"
+    );
+
+    let context = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.context", "args": { "workspace": "ws_flagship_tpl" } } }
+    }));
+    let context_text = extract_tool_text(&context);
+    assert_eq!(
+        context_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let tasks = context_text
+        .get("result")
+        .and_then(|v| v.get("tasks"))
+        .and_then(|v| v.as_array())
+        .expect("tasks");
+    let task = tasks
+        .iter()
+        .find(|t| t.get("title").and_then(|v| v.as_str()) == Some("Flagship Task"))
+        .expect("task entry");
+    let task_id = task
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let steps_count = task
+        .get("steps_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert_eq!(
+        steps_count, 6,
+        "flagship-task template should create 6 steps"
+    );
+
+    let radar = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.radar", "args": { "workspace": "ws_flagship_tpl", "task": task_id, "max_chars": 2000 } } }
+    }));
+    let radar_text = extract_tool_text(&radar);
+    assert_eq!(
+        radar_text
+            .get("result")
+            .and_then(|v| v.get("target"))
+            .and_then(|v| v.get("reasoning_mode"))
+            .and_then(|v| v.as_str()),
+        Some("deep"),
+        "flagship-task should default to deep reasoning_mode"
+    );
+}
