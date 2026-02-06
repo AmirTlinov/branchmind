@@ -284,7 +284,7 @@ impl McpServer {
             Ok(v) => v.unwrap_or(20).clamp(1, 50),
             Err(resp) => return resp,
         };
-        let max_chars = match optional_usize(args_obj, "max_chars") {
+        let mut max_chars = match optional_usize(args_obj, "max_chars") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -527,6 +527,65 @@ impl McpServer {
                 "cards": cards,
                 "count": cards.len(),
                 "truncated": false
+            })
+        } else if let Some(code_opened) = maybe_open_code_ref(
+            self.store.storage_dir(),
+            &id,
+            max_chars.unwrap_or(CODE_REF_DEFAULT_MAX_CHARS),
+        ) {
+            if max_chars.is_none() {
+                // `open` defaults to unbounded output, but code refs are explicitly designed to be
+                // cheap + bounded. Apply a deterministic default budget when the caller omits it.
+                max_chars = Some(CODE_REF_DEFAULT_MAX_CHARS);
+            }
+
+            let code_opened = match code_opened {
+                Ok(v) => v,
+                Err(err) => {
+                    return ai_error_with(err.code, &err.message, err.recovery.as_deref(), vec![]);
+                }
+            };
+
+            if code_opened.stale {
+                warnings.push(warning(
+                    "CODE_REF_STALE",
+                    "code ref sha256 mismatch (stale anchor)",
+                    "Use the returned ref (with the new sha256) when updating cards/anchors, or narrow the range to re-anchor the intended lines.",
+                ));
+            }
+            if code_opened.truncated {
+                warnings.push(warning(
+                    "CODE_REF_TRUNCATED",
+                    "code ref content truncated to fit budget",
+                    "Increase max_chars or narrow the line range.",
+                ));
+            }
+            if code_opened.reached_eof && code_opened.lines_returned == 0 {
+                warnings.push(warning(
+                    "CODE_REF_EMPTY",
+                    "code ref range returned no lines (past EOF?)",
+                    "Verify the file path and line range; the file may have changed.",
+                ));
+            }
+
+            json!({
+                "workspace": workspace.as_str(),
+                "kind": "code",
+                "ref": code_opened.normalized_ref,
+                "path": code_opened.rel_path,
+                "range": {
+                    "start": code_opened.start_line,
+                    "end": code_opened.end_line
+                },
+                "sha256": code_opened.sha256,
+                "expected_sha256": code_opened.expected_sha256,
+                "stale": code_opened.stale,
+                "stats": {
+                    "lines": code_opened.lines_returned,
+                    "reached_eof": code_opened.reached_eof
+                },
+                "content": code_opened.content,
+                "truncated": code_opened.truncated
             })
         } else if let Some(runner_id) = parse_runner_ref(&id) {
             let now_ms = crate::support::now_ms_i64();
@@ -1057,7 +1116,7 @@ impl McpServer {
                 "INVALID_INPUT",
                 "Unsupported open id format",
                 Some(
-                    "Supported: CARD-..., <doc>@<seq> (e.g. notes@123), a:<anchor>, runner:<id>, TASK-..., PLAN-..., JOB-....",
+                    "Supported: CARD-..., <doc>@<seq> (e.g. notes@123), a:<anchor>, runner:<id>, code:<path>#L<start>-L<end>@sha256:<hex>, TASK-..., PLAN-..., JOB-....",
                 ),
                 vec![],
             );
@@ -1114,6 +1173,7 @@ impl McpServer {
                         changed |= drop_fields_at(v, &["entry"], &["content"]);
                         changed |= drop_fields_at(v, &["entry"], &["payload"]);
                         changed |= drop_fields_at(v, &[], &["prompt"]);
+                        changed |= drop_fields_at(v, &[], &["content"]);
                         changed |= drop_fields_at(v, &["content", "memory"], &["cards"]);
                         changed |=
                             drop_fields_at(v, &["content", "memory", "trace"], &["sequential"]);

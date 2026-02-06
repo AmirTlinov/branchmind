@@ -9,7 +9,7 @@ The v1 surface is **portal-first**:
 - `graph` — graph operations (query/apply/merge)
 - `docs` — read-only-ish document ops (list/show/diff/merge)
 - `vcs` — deterministic VCS helpers (e.g. `vcs.branch.create`)
-- `open` — open any artifact by stable id/ref (`CARD-*`, `notes_doc@seq`, `TASK-*`, `JOB-*`, …)
+- `open` — open any artifact by stable id/ref (`CARD-*`, `notes_doc@seq`, `TASK-*`, `JOB-*`, `code:*`, …)
 
 All of these are still accessed through the 10 v1 portals; nothing else is a tool.
 
@@ -42,6 +42,27 @@ All ops-style portals share the same input shape (see `TYPES.md`):
 ```
 
 Budgets are strict and deterministic. If output is truncated, it must be explicit (`BUDGET_TRUNCATED` warning).
+
+---
+
+## Code refs (repo line anchors)
+
+BranchMind supports stable code references so agents can attach **exact code slices** to decisions,
+evidence, anchors, and handoffs — and re-open them later with one `open` call.
+
+Canonical format:
+
+```text
+code:<repo-relative-path>#L<start>-L<end>@sha256:<64-hex>
+```
+
+Notes:
+
+- `path` must be **repo-relative** (no leading `/`, no `..` traversal).
+- Symlinks are rejected (prevents escaping the repo root).
+- Line numbers are **1-based and inclusive**.
+- Input may omit the sha suffix; `open` returns the normalized ref with the current sha256.
+- If an input sha is present and mismatches current content, `open` emits `CODE_REF_STALE`.
 
 ---
 
@@ -128,4 +149,3 @@ Tasks and memory are not separate products:
 - Conflicts must be discoverable and resolvable via explicit tools/commands.
 
 See `INTEGRATION.md` for the normative contract.
-

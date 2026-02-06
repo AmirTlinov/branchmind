@@ -108,6 +108,23 @@ fn default_project_guard_root_from_storage_dir(storage_dir: &Path) -> PathBuf {
     default_repo_root()
 }
 
+/// Resolve a repo root that is safe to use for filesystem reads.
+///
+/// Returns `None` unless the storage directory is repo-local (`<repo>/.agents/mcp/.branchmind`)
+/// and a `.git` directory exists at the derived root.
+///
+/// Notes:
+/// - This intentionally does **not** execute `git`.
+/// - The viewer and `open id=code:*` rely on this to avoid accidental global filesystem reads.
+pub(crate) fn repo_root_from_storage_dir_strict(storage_dir: &Path) -> Option<PathBuf> {
+    let canonical =
+        std::fs::canonicalize(storage_dir).unwrap_or_else(|_| storage_dir.to_path_buf());
+    if !is_repo_local_storage_dir(&canonical) {
+        return None;
+    }
+    repo_root_from_storage_dir(&canonical)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Toolset {
     Full,

@@ -26,7 +26,9 @@ pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
             OpError {
                 code: "INVALID_INPUT".to_string(),
                 message: "id is required".to_string(),
-                recovery: Some("Provide id (TASK-*/PLAN-*/CARD-*/notes@seq/etc).".to_string()),
+                recovery: Some(
+                    "Provide id (TASK-*/PLAN-*/CARD-*/notes@seq/JOB-*/a:*/code:*).".to_string(),
+                ),
             },
         )
         .into_value();

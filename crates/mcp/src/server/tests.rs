@@ -16,6 +16,33 @@ fn temp_dir() -> PathBuf {
     dir
 }
 
+fn new_server(store: SqliteStore) -> crate::McpServer {
+    let runner_autostart_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let runner_autostart_state =
+        std::sync::Arc::new(std::sync::Mutex::new(crate::RunnerAutostartState::default()));
+    crate::McpServer::new(
+        store,
+        crate::McpServerConfig {
+            toolset: crate::Toolset::Core,
+            response_verbosity: crate::ResponseVerbosity::Full,
+            dx_mode: false,
+            ux_proof_v2_enabled: true,
+            knowledge_autolint_enabled: true,
+            note_promote_enabled: true,
+            default_workspace: Some("demo".to_string()),
+            workspace_explicit: false,
+            workspace_allowlist: None,
+            workspace_lock: true,
+            project_guard: None,
+            project_guard_rebind_enabled: false,
+            default_agent_id: None,
+            runner_autostart_enabled,
+            runner_autostart_dry_run: false,
+            runner_autostart: runner_autostart_state,
+        },
+    )
+}
+
 #[test]
 fn project_guard_mismatch_errors_when_rebind_disabled() {
     let dir = temp_dir();
@@ -106,6 +133,111 @@ fn project_guard_mismatch_rebinds_when_enabled() {
     assert_eq!(stored, "repo:bbbbbbbbbbbbbbbb");
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn open_code_ref_reads_repo_lines() {
+    let base = temp_dir();
+    let repo_root = base.join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join("src")).unwrap();
+    fs::write(repo_root.join("src/lib.rs"), "line1\nline2\nline3\nline4\n").unwrap();
+
+    let storage_dir = repo_root.join(".agents").join("mcp").join(".branchmind");
+    let mut store = SqliteStore::open(&storage_dir).unwrap();
+    let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+    store.workspace_init(&workspace).unwrap();
+
+    let mut server = new_server(store);
+    let resp = server.tool_branchmind_open(json!({
+        "workspace": "demo",
+        "id": "code:src/lib.rs#L2-L3"
+    }));
+
+    assert!(
+        resp.get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    );
+    let result = resp.get("result").cloned().unwrap_or_default();
+    assert_eq!(result.get("kind").and_then(|v| v.as_str()), Some("code"));
+    let content = result.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(content.contains("    2 | line2"));
+    assert!(content.contains("    3 | line3"));
+    let code_ref = result.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(code_ref.starts_with("code:src/lib.rs#L2-L3@sha256:"));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn open_code_ref_warns_on_stale_sha() {
+    let base = temp_dir();
+    let repo_root = base.join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join("src")).unwrap();
+    fs::write(repo_root.join("src/lib.rs"), "a\nb\nc\n").unwrap();
+
+    let storage_dir = repo_root.join(".agents").join("mcp").join(".branchmind");
+    let mut store = SqliteStore::open(&storage_dir).unwrap();
+    let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+    store.workspace_init(&workspace).unwrap();
+
+    let mut server = new_server(store);
+    let stale_ref = format!("code:src/lib.rs#L1-L2@sha256:{}", "0".repeat(64));
+    let resp = server.tool_branchmind_open(json!({
+        "workspace": "demo",
+        "id": stale_ref
+    }));
+
+    assert!(
+        resp.get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    );
+    let warnings = resp
+        .get("warnings")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.get("code").and_then(|v| v.as_str()) == Some("CODE_REF_STALE"))
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn open_code_ref_rejects_traversal() {
+    let base = temp_dir();
+    let repo_root = base.join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    let storage_dir = repo_root.join(".agents").join("mcp").join(".branchmind");
+    let mut store = SqliteStore::open(&storage_dir).unwrap();
+    let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
+    store.workspace_init(&workspace).unwrap();
+
+    let mut server = new_server(store);
+    let resp = server.tool_branchmind_open(json!({
+        "workspace": "demo",
+        "id": "code:../secrets.txt#L1-L2"
+    }));
+
+    assert!(
+        !resp
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true)
+    );
+    let code = resp
+        .get("error")
+        .and_then(|err| err.get("code"))
+        .and_then(|v| v.as_str());
+    assert_eq!(code, Some("INVALID_INPUT"));
+
+    let _ = fs::remove_dir_all(&base);
 }
 
 #[test]
