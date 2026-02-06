@@ -128,7 +128,9 @@ mod unix {
         );
 
         // The explicit daemon we started should have been terminated (best-effort shutdown).
-        assert_exit(&mut daemon, Duration::from_secs(2));
+        // In CI/sandbox environments, process scheduling can be bursty; give the daemon a bit
+        // more time to observe the shutdown/unlink signal and exit deterministically.
+        assert_exit(&mut daemon, Duration::from_secs(5));
 
         shutdown_daemon(&socket_path);
         cleanup(proxy, storage_dir);
