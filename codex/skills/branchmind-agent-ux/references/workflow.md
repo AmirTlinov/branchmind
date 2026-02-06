@@ -107,6 +107,9 @@ template instead of relying on personal willpower.
 
 Goal: produce a short but complete plan artifact, prove you can verify it, then execute.
 
+Plan sizing (MUST): strict plan ≥10k chars; deep plan ≥15k chars. If you can’t reach this without filler,
+your slice is too small — merge/expand it.
+
 Recommended sequence:
 
 0) **Recall-first** (before you touch a component):

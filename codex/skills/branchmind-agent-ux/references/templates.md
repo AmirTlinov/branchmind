@@ -1,6 +1,7 @@
 # Templates (strict + deep)
 
-Keep artifacts **short** and **reusable**. You want high signal, not essays.
+Keep artifacts **short** and **reusable** where possible (cards/branches). Plans are expected to be
+**long and decision-complete** (strict: ≥10k chars; deep: ≥15k chars) but must stay high-signal (no filler).
 
 ## 0) Step close checklist (proof-first)
 
