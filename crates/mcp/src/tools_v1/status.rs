@@ -38,9 +38,10 @@ pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
             action_id: "recover::workspace.use".to_string(),
             priority: ActionPriority::High,
             tool: "workspace".to_string(),
-            args: json!({ "op": "use", "args": { "workspace": "<workspace>" } }),
-            why: "Установить workspace для сессии.".to_string(),
-            risk: "Низкий".to_string(),
+            // Copy/paste-safe default (no placeholders). The user/agent can switch later.
+            args: json!({ "op": "use", "args": { "workspace": "default" } }),
+            why: "Установить workspace=default для сессии (без placeholder args).".to_string(),
+            risk: "Создаст/выберет workspace 'default' если другого не задано.".to_string(),
         });
         return resp.into_value();
     };

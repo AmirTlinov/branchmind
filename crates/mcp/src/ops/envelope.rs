@@ -265,6 +265,11 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
     if let Some(err) = response.error.as_ref()
         && err.code == "INVALID_INPUT"
     {
+        crate::ops::recovery::append_invalid_input_actions(
+            &mut response,
+            &env.cmd,
+            env.workspace.as_deref(),
+        );
         crate::ops::append_schema_actions(&mut response, &env.cmd, env.workspace.as_deref());
     }
     if let Some(err) = response.error.as_ref()

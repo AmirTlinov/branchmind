@@ -155,6 +155,12 @@ pub(crate) fn append_schema_actions(resp: &mut OpResponse, cmd: &str, workspace:
     };
     let example_action_id = format!("recover.example.call::{cmd}");
     if seen.insert(example_action_id.clone()) {
+        // AI-UX invariant: recovery actions should be copy/paste-safe. If the minimal example
+        // contains placeholders, prefer portal-first recovery actions (added elsewhere) + schema.get
+        // instead of emitting a non-runnable "example call".
+        if contains_angle_placeholders(&bundle.example_minimal_args) {
+            return;
+        }
         let mut env = serde_json::Map::new();
         if let Some(ws) = workspace {
             env.insert("workspace".to_string(), Value::String(ws.to_string()));
@@ -173,9 +179,24 @@ pub(crate) fn append_schema_actions(resp: &mut OpResponse, cmd: &str, workspace:
             priority: ActionPriority::High,
             tool: spec.domain_tool.as_str().to_string(),
             args: Value::Object(env),
-            why: "Минимальный валидный пример вызова (placeholders).".to_string(),
+            why: "Минимальный валидный пример вызова.".to_string(),
             risk: "Низкий".to_string(),
         });
+    }
+}
+
+fn contains_angle_placeholders(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(_) => false,
+        Value::Number(_) => false,
+        Value::String(s) => {
+            let s = s.trim();
+            // We only treat `<...>` as placeholders; regular `<` in content is uncommon for args.
+            s.starts_with('<') && s.ends_with('>') && s.len() >= 3
+        }
+        Value::Array(arr) => arr.iter().any(contains_angle_placeholders),
+        Value::Object(map) => map.values().any(contains_angle_placeholders),
     }
 }
 
