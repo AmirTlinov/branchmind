@@ -87,7 +87,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 "type": "object",
                 "properties": {
                     "prefix": { "type": "string" },
-                    "include_hidden": { "type": "boolean", "description": "List all registered cmds (ignores the current toolset filter)." },
+                    "include_hidden": { "type": "boolean", "description": "List all registered cmds (full registry; ignores the kernel/toolset filter)." },
                     "offset": { "type": "integer" },
                     "limit": { "type": "integer" }
                 },
@@ -338,6 +338,42 @@ fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope) -> OpRespo
     resp
 }
 
+fn is_kernel_cmd(spec: &CommandSpec) -> bool {
+    // Kernel surface should stay *small* and stable. It is what agents should discover first.
+    //
+    // Rule:
+    // - Any golden op (cmd with at least one op alias) is kernel.
+    // - Plus a curated set of workflow macros / call-only navigators.
+    if !spec.op_aliases.is_empty() {
+        return true;
+    }
+
+    matches!(
+        spec.cmd.as_str(),
+        // Task workflow (call-only macros + snapshot).
+        "tasks.macro.start"
+            | "tasks.macro.close.step"
+            | "tasks.macro.delegate"
+            | "tasks.macro.finish"
+            | "tasks.snapshot"
+            | "tasks.lint"
+            // Thinking primitives (handlers are kernel even if not golden ops).
+            | "think.card"
+            | "think.playbook"
+            | "think.macro.anchor.note"
+            // Anchor navigation (meaning map).
+            | "think.anchor.list"
+            | "think.anchor.snapshot"
+            // Deterministic discovery and onboarding.
+            | "system.schema.get"
+            | "system.help"
+            | "system.tutorial"
+            | "system.skill"
+            | "system.ops.summary"
+            | "system.cmd.list"
+    )
+}
+
 fn handle_cmd_list(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
     let args_obj = env.args.as_object().cloned().unwrap_or_default();
     let prefix = args_obj
@@ -359,6 +395,7 @@ fn handle_cmd_list(server: &mut crate::McpServer, env: &Envelope) -> OpResponse 
             .specs()
             .iter()
             .filter(|spec| spec.tier.allowed_in_toolset(server.toolset))
+            .filter(|spec| is_kernel_cmd(spec))
             .map(|spec| spec.cmd.clone())
             .collect::<Vec<_>>();
         out.sort();

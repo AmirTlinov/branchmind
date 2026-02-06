@@ -21,7 +21,13 @@ Notes:
 
 ## system.cmd.list
 
-List all registered `cmd` names (SSOT registry).
+List registered `cmd` names (SSOT registry).
+
+UX notes:
+
+- Default behavior is **kernel-first**: returns only the small curated “kernel surface” (golden ops +
+  a handful of workflow macros), and only those available in the current toolset.
+- Use `include_hidden=true` to list the **full registry** (may include advanced/internal commands).
 
 ## system.ops.summary
 

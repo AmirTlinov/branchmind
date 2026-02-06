@@ -249,7 +249,7 @@ fn handler_suggestions_to_actions(
             tool: "system".to_string(),
             args: json!({
                 "op": "cmd.list",
-                "args": { "prefix": prefix },
+                "args": { "prefix": prefix, "include_hidden": true },
                 "budget_profile": "portal"
             }),
             why: format!("Найти правильный cmd для неизвестного action target: {target}."),
