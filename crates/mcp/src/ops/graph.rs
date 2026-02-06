@@ -21,10 +21,17 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             op_aliases.push(suffix.to_string());
         }
 
+        let tier = if suffix == "query" {
+            // Kernel: allow read-only graph querying even in Core toolset.
+            Tier::Gold
+        } else {
+            Tier::Advanced
+        };
+
         specs.push(CommandSpec {
             cmd,
             domain_tool: ToolName::GraphOps,
-            tier: Tier::Advanced,
+            tier,
             stability: Stability::Stable,
             doc_ref: DocRef {
                 path: "docs/contracts/V1_COMMANDS.md".to_string(),

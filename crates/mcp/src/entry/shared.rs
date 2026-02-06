@@ -522,8 +522,9 @@ fn try_handle_locally(
             }
         }
         "tools/list" => {
-            // v1: strict surface = 10 portals. `toolset` is a disclosure lens that changes
-            // only the advertised op enums, never the tool list.
+            // v1: strict surface = 10 portals. `toolset` changes only the advertised op enums
+            // (never the tool list). Cmd availability is enforced separately via Tier gating
+            // in the ops dispatcher, so clients can't accidentally rely on hidden long-tail ops.
             let override_toolset = parsed
                 .as_ref()
                 .and_then(|v| v.get("params"))

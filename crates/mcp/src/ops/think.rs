@@ -366,11 +366,19 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
 
         let cmd = handler_think_cmd(name);
         let op_aliases = Vec::<String>::new();
+        let tier = if matches!(name, "think_card" | "think_playbook" | "macro_anchor_note")
+            || name.starts_with("anchors_")
+            || name.starts_with("anchor_")
+        {
+            Tier::Gold
+        } else {
+            Tier::Advanced
+        };
 
         specs.push(CommandSpec {
             cmd,
             domain_tool: ToolName::ThinkOps,
-            tier: Tier::Advanced,
+            tier,
             stability: Stability::Stable,
             doc_ref: DocRef {
                 path: "docs/contracts/V1_COMMANDS.md".to_string(),

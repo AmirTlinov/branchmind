@@ -49,6 +49,14 @@ impl Tier {
             Tier::Internal => "internal",
         }
     }
+
+    pub(crate) fn allowed_in_toolset(self, toolset: crate::Toolset) -> bool {
+        match toolset {
+            crate::Toolset::Core => self == Tier::Gold,
+            crate::Toolset::Daily => matches!(self, Tier::Gold | Tier::Advanced),
+            crate::Toolset::Full => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

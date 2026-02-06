@@ -6,11 +6,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 fn tier_allowed(toolset: Toolset, tier: Tier) -> bool {
-    match toolset {
-        Toolset::Core => tier == Tier::Gold,
-        Toolset::Daily => tier == Tier::Gold || tier == Tier::Advanced,
-        Toolset::Full => true,
-    }
+    tier.allowed_in_toolset(toolset)
 }
 
 fn collect_op_aliases(tool: ToolName, toolset: Toolset) -> Vec<String> {

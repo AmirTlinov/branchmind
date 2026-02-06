@@ -45,7 +45,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
     specs.push(CommandSpec {
         cmd: "jobs.cancel".to_string(),
         domain_tool: ToolName::JobsOps,
-        tier: Tier::Advanced,
+        tier: Tier::Gold,
         stability: Stability::Stable,
         doc_ref: DocRef {
             path: "docs/contracts/V1_COMMANDS.md".to_string(),
@@ -79,7 +79,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
     specs.push(CommandSpec {
         cmd: "jobs.wait".to_string(),
         domain_tool: ToolName::JobsOps,
-        tier: Tier::Advanced,
+        tier: Tier::Gold,
         stability: Stability::Stable,
         doc_ref: DocRef {
             path: "docs/contracts/V1_COMMANDS.md".to_string(),
@@ -153,10 +153,16 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         } else {
             "#cmd-index".to_string()
         };
+        let tier = match suffix {
+            "create" | "list" | "radar" | "open" | "tail" | "message" | "report" | "complete"
+            | "claim" | "requeue" | "proof_attach" => Tier::Gold,
+            _ => Tier::Advanced,
+        };
+
         specs.push(CommandSpec {
             cmd,
             domain_tool: ToolName::JobsOps,
-            tier: Tier::Advanced,
+            tier,
             stability: Stability::Stable,
             doc_ref: DocRef {
                 path: "docs/contracts/V1_COMMANDS.md".to_string(),

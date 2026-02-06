@@ -170,6 +170,58 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
         .into_value();
     };
 
+    if !spec.tier.allowed_in_toolset(server.toolset) {
+        let mut resp = OpResponse::error(
+            env.cmd.clone(),
+            OpError {
+                code: "CMD_NOT_AVAILABLE".to_string(),
+                message: format!(
+                    "cmd is not available in toolset={}",
+                    server.toolset.as_str()
+                ),
+                recovery: Some(
+                    "Use the kernel surface (gold ops) or restart the server with a larger toolset. Prefer tasks.execute.next for guided recovery."
+                        .to_string(),
+                ),
+            },
+        );
+
+        if let Some(ws) = env.workspace.as_deref() {
+            resp.actions.push(Action {
+                action_id: "recover::tasks.execute.next".to_string(),
+                priority: ActionPriority::High,
+                tool: ToolName::TasksOps.as_str().to_string(),
+                args: json!({
+                    "workspace": ws,
+                    "op": "call",
+                    "cmd": "tasks.execute.next",
+                    "args": {},
+                    "budget_profile": BudgetProfile::Portal.as_str(),
+                    "view": "compact"
+                }),
+                why: "Получить следующий лучший шаг (kernel UX).".to_string(),
+                risk: "Низкий".to_string(),
+            });
+        }
+
+        resp.actions.push(Action {
+            action_id: "recover::system.ops.summary".to_string(),
+            priority: ActionPriority::Low,
+            tool: ToolName::SystemOps.as_str().to_string(),
+            args: json!({
+                "op": "call",
+                "cmd": "system.ops.summary",
+                "args": {},
+                "budget_profile": BudgetProfile::Portal.as_str(),
+                "view": "compact"
+            }),
+            why: "Посмотреть минимальную сводку доступной поверхности (kernel).".to_string(),
+            risk: "Низкий".to_string(),
+        });
+
+        return resp.into_value();
+    }
+
     let mut response = if spec.handler.is_some() {
         crate::ops::dispatch_custom(server, spec, &env)
     } else if let Some(handler_name) = &spec.handler_name {

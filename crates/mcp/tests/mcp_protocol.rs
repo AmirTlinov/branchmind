@@ -154,8 +154,12 @@ fn tools_list_toolset_is_a_disclosure_lens_only() {
         "core lens must include tier=gold tasks ops"
     );
     assert!(
-        !tasks_core_ops.iter().any(|op| op == "plan.create"),
-        "core lens must not advertise tier=advanced tasks ops"
+        tasks_core_ops.iter().any(|op| op == "plan.create"),
+        "core lens must advertise the kernel task creation op"
+    );
+    assert!(
+        !tasks_core_ops.iter().any(|op| op == "plan.decompose"),
+        "core lens must not advertise long-tail plan ops"
     );
     assert!(
         tasks_full_ops.iter().any(|op| op == "plan.create"),
@@ -165,8 +169,8 @@ fn tools_list_toolset_is_a_disclosure_lens_only() {
     let system_core_ops = op_enum(find_tool(core_tools, "system"));
     let system_full_ops = op_enum(find_tool(full_tools, "system"));
     assert!(
-        !system_core_ops.iter().any(|op| op == "cmd.list"),
-        "core lens must not advertise tier=advanced system ops"
+        system_core_ops.iter().any(|op| op == "cmd.list"),
+        "core lens should advertise the kernel cmd.list op"
     );
     assert!(
         system_full_ops.iter().any(|op| op == "cmd.list"),

@@ -70,7 +70,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
     specs.push(CommandSpec {
         cmd: "system.cmd.list".to_string(),
         domain_tool: ToolName::SystemOps,
-        tier: Tier::Advanced,
+        tier: Tier::Gold,
         stability: Stability::Stable,
         doc_ref: DocRef {
             path: "docs/contracts/V1_COMMANDS.md".to_string(),
@@ -87,6 +87,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 "type": "object",
                 "properties": {
                     "prefix": { "type": "string" },
+                    "include_hidden": { "type": "boolean", "description": "List all registered cmds (ignores the current toolset filter)." },
                     "offset": { "type": "integer" },
                     "limit": { "type": "integer" }
                 },
@@ -337,16 +338,32 @@ fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope) -> OpRespo
     resp
 }
 
-fn handle_cmd_list(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+fn handle_cmd_list(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
     let args_obj = env.args.as_object().cloned().unwrap_or_default();
     let prefix = args_obj
         .get("prefix")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let include_hidden = args_obj
+        .get("include_hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let offset = args_obj.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let limit = args_obj.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
-    let mut cmds = CommandRegistry::global().list_cmds();
+    let registry = CommandRegistry::global();
+    let mut cmds = if include_hidden {
+        registry.list_cmds()
+    } else {
+        let mut out = registry
+            .specs()
+            .iter()
+            .filter(|spec| spec.tier.allowed_in_toolset(server.toolset))
+            .map(|spec| spec.cmd.clone())
+            .collect::<Vec<_>>();
+        out.sort();
+        out
+    };
     if let Some(prefix) = prefix.as_deref() {
         cmds.retain(|c| c.starts_with(prefix));
     }

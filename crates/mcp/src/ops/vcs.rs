@@ -15,10 +15,17 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             None => continue,
         };
 
+        let tier = match name {
+            "branch_create" | "branch_list" | "checkout" | "log" | "reflog" | "show" | "diff" => {
+                Tier::Gold
+            }
+            _ => Tier::Advanced,
+        };
+
         specs.push(CommandSpec {
             cmd,
             domain_tool: ToolName::VcsOps,
-            tier: Tier::Advanced,
+            tier,
             stability: Stability::Stable,
             doc_ref: DocRef {
                 path: "docs/contracts/V1_COMMANDS.md".to_string(),

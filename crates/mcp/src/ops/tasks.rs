@@ -43,10 +43,19 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             "#cmd-index".to_string()
         };
 
+        // Kernel surface: promote high-signal portal entrypoints to Tier::Gold so Core toolset
+        // is fully usable without enabling the long-tail.
+        let tier = match suffix {
+            "create" | "macro_start" | "macro_delegate" | "macro_close_step" | "macro_finish"
+            | "done" | "snapshot" | "context" | "focus_get" | "focus_set" | "focus_clear"
+            | "lint" | "evidence_capture" | "templates_list" => Tier::Gold,
+            _ => Tier::Advanced,
+        };
+
         specs.push(CommandSpec {
             cmd,
             domain_tool: ToolName::TasksOps,
-            tier: Tier::Advanced,
+            tier,
             stability: Stability::Stable,
             doc_ref: DocRef {
                 path: "docs/contracts/V1_COMMANDS.md".to_string(),

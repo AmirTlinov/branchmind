@@ -199,9 +199,9 @@ pub(crate) fn parse_toolset() -> Toolset {
     }
 
     let value = cli.or_else(|| std::env::var("BRANCHMIND_TOOLSET").ok());
-    // Flagship DX: default to the small portal-first toolset unless explicitly overridden.
+    // Flagship DX: default to the smallest kernel surface unless explicitly overridden.
     if value.is_none() {
-        return Toolset::Daily;
+        return Toolset::Core;
     }
     Toolset::parse(value.as_deref())
 }

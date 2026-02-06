@@ -9,10 +9,10 @@ use serde_json::{Value, json};
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
     // Curated v1 docs portal ops (golden aliases in tools/list):
     // - list/show/diff/merge
-    register_handler(specs, "docs.list", "docs_list", Some("list"));
-    register_handler(specs, "docs.show", "show", Some("show"));
-    register_handler(specs, "docs.diff", "diff", Some("diff"));
-    register_handler(specs, "docs.merge", "merge", Some("merge"));
+    register_handler(specs, Tier::Gold, "docs.list", "docs_list", Some("list"));
+    register_handler(specs, Tier::Gold, "docs.show", "show", Some("show"));
+    register_handler(specs, Tier::Gold, "docs.diff", "diff", Some("diff"));
+    register_handler(specs, Tier::Gold, "docs.merge", "merge", Some("merge"));
 
     // Long-tail docs-ish tools (call-only).
     for handler_name in [
@@ -25,6 +25,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         match handler_name {
             "transcripts_open" => register_handler_with_hook(
                 specs,
+                Tier::Gold,
                 &cmd,
                 handler_name,
                 None,
@@ -32,27 +33,31 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             ),
             "transcripts_digest" => register_handler_with_hook(
                 specs,
+                Tier::Gold,
                 &cmd,
                 handler_name,
                 None,
                 Some(handle_transcripts_digest),
             ),
-            _ => register_handler(specs, &cmd, handler_name, None),
+            "transcripts_search" => register_handler(specs, Tier::Gold, &cmd, handler_name, None),
+            _ => register_handler(specs, Tier::Advanced, &cmd, handler_name, None),
         }
     }
 }
 
 fn register_handler(
     specs: &mut Vec<CommandSpec>,
+    tier: Tier,
     cmd: &str,
     handler_name: &str,
     op_alias: Option<&str>,
 ) {
-    register_handler_with_hook(specs, cmd, handler_name, op_alias, None);
+    register_handler_with_hook(specs, tier, cmd, handler_name, op_alias, None);
 }
 
 fn register_handler_with_hook(
     specs: &mut Vec<CommandSpec>,
+    tier: Tier,
     cmd: &str,
     handler_name: &str,
     op_alias: Option<&str>,
@@ -66,7 +71,7 @@ fn register_handler_with_hook(
     specs.push(CommandSpec {
         cmd: cmd.to_string(),
         domain_tool: ToolName::DocsOps,
-        tier: Tier::Advanced,
+        tier,
         stability: Stability::Stable,
         doc_ref: DocRef {
             path: "docs/contracts/V1_COMMANDS.md".to_string(),
