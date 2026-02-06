@@ -79,6 +79,8 @@ const autostartMutation = { pending: false };
 const workspaceMutation = { recoveredGuardMismatch: false };
 const projectsMutation = { pending: false };
 const navMutation = { applying: false };
+const urlSync = { enabled: false };
+const queryOverrides = { enabled: true };
 
 const windowUi = {
   zCounter: 80,
@@ -568,10 +570,16 @@ async function loadWorkspaces() {
     state.workspacesDefault = (payload.workspace_default || "").trim() || null;
     state.workspacesExpectedGuard = (payload.project_guard || "").trim() || null;
 
+    const candidates = state.workspaces
+      .map((entry) => (entry?.workspace || "").trim())
+      .filter((value) => value);
+
+    const override = (state.workspaceOverride || "").trim();
+    if (override && !candidates.includes(override)) {
+      setWorkspaceOverride(null, { persist: false });
+    }
+
     if (!state.workspaceOverride) {
-      const candidates = state.workspaces
-        .map((entry) => (entry?.workspace || "").trim())
-        .filter((value) => value);
       const recommended = (payload.workspace_recommended || state.workspaceRecommended || "").trim();
       const desired =
         (recommended && candidates.includes(recommended) && recommended) ||
