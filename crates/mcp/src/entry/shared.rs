@@ -993,22 +993,20 @@ fn daemon_is_compatible(
         return Ok(false);
     }
 
-    // If we have a git-backed compat fingerprint, treat it as code-identity and do not try to
-    // “outsmart” it with file mtimes. Different agent CLIs may run the same build from different
-    // paths (or copied binaries), and using mtimes here would cause needless daemon churn.
-    //
-    // When BM_GIT_SHA is unavailable (non-git builds), fall back to a cheap build-time heuristic.
-    if crate::build_git_sha().is_none() {
-        let daemon_build_time_ms = info
-            .get("build_time_ms")
-            .and_then(|v| v.as_u64())
-            .filter(|ms| *ms > 0);
-        let local_build_time_ms = crate::binary_build_time_ms();
-        if let (Some(daemon_ms), Some(local_ms)) = (daemon_build_time_ms, local_build_time_ms)
-            && daemon_ms < local_ms
-        {
-            return Ok(false);
-        }
+    // Stale-daemon avoidance:
+    // Even when the compat fingerprint matches (same semver+git sha), it is common to rebuild
+    // locally with uncommitted changes (git HEAD unchanged) and expect the next started proxy to
+    // talk to the freshest daemon. Use build_time as a best-effort monotonic tiebreaker:
+    // if the daemon is older than this proxy binary, treat it as incompatible and restart.
+    let daemon_build_time_ms = info
+        .get("build_time_ms")
+        .and_then(|v| v.as_u64())
+        .filter(|ms| *ms > 0);
+    let local_build_time_ms = crate::binary_build_time_ms();
+    if let (Some(daemon_ms), Some(local_ms)) = (daemon_build_time_ms, local_build_time_ms)
+        && daemon_ms < local_ms
+    {
+        return Ok(false);
     }
 
     let daemon_storage_dir = info
