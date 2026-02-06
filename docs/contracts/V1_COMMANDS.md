@@ -60,7 +60,8 @@ Return a small, low-noise summary of the v1 UX surface:
 
 - tool surface count + names (must be 10),
 - golden ops count (as advertised in `tools/list`),
-- cmd registry count (and cmd-by-domain counts),
+- cmd registry count (and cmd-by-domain counts) **for the active toolset** (Core/Daily/Full),
+- kernel cmd count (and kernel cmd-by-domain counts) for cognitive-cheap onboarding,
 - unplugged ops (if any) to detect “advertised but not dispatchable” drift.
 
 ## system.storage

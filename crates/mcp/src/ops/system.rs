@@ -276,11 +276,11 @@ fn handle_schema_get(_server: &mut crate::McpServer, env: &Envelope) -> OpRespon
     )
 }
 
-fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+fn handle_ops_summary(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
     let registry = CommandRegistry::global();
 
     // Surface: 10 tools (fixed by contract).
-    let surface = crate::tools_v1::tool_definitions();
+    let surface = crate::tools_v1::tool_definitions_for(server.toolset);
     let mut surface_names = surface
         .iter()
         .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
@@ -288,11 +288,24 @@ fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope) -> OpRespo
         .collect::<Vec<_>>();
     surface_names.sort();
 
-    // Count cmd by domain prefix (tasks.*, think.*, ...).
+    // Registry view should reflect the active toolset (agents should not be confronted with
+    // internal-only ops they cannot call in the current session).
     let mut cmd_by_domain = std::collections::BTreeMap::<String, usize>::new();
-    for cmd in registry.list_cmds() {
-        let domain = cmd.split('.').next().unwrap_or("cmd").to_string();
-        *cmd_by_domain.entry(domain).or_insert(0) += 1;
+    let mut cmd_count: usize = 0;
+    let mut kernel_by_domain = std::collections::BTreeMap::<String, usize>::new();
+    let mut kernel_count: usize = 0;
+    for spec in registry
+        .specs()
+        .iter()
+        .filter(|spec| spec.tier.allowed_in_toolset(server.toolset))
+    {
+        cmd_count = cmd_count.saturating_add(1);
+        let domain = spec.cmd.split('.').next().unwrap_or("cmd").to_string();
+        *cmd_by_domain.entry(domain.clone()).or_insert(0) += 1;
+        if is_kernel_cmd(spec) {
+            kernel_count = kernel_count.saturating_add(1);
+            *kernel_by_domain.entry(domain).or_insert(0) += 1;
+        }
     }
 
     // Count golden ops as advertised in tools/list (inputSchema.properties.op.enum),
@@ -351,6 +364,7 @@ fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope) -> OpRespo
     let mut resp = OpResponse::success(
         env.cmd.clone(),
         json!({
+            "toolset": server.toolset.as_str(),
             "surface": {
                 "tools": {
                     "count": surface_names.len(),
@@ -360,11 +374,15 @@ fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope) -> OpRespo
                     "count": golden_ops_total,
                     "by_tool": golden_ops_by_tool,
                     "unplugged": unplugged
+                },
+                "kernel_cmds": {
+                    "count": kernel_count,
+                    "by_domain": kernel_by_domain
                 }
             },
             "registry": {
                 "cmd": {
-                    "count": registry.list_cmds().len(),
+                    "count": cmd_count,
                     "by_domain": cmd_by_domain
                 }
             }
