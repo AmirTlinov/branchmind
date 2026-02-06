@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check clippy test check run-mcp
+.PHONY: help fmt fmt-check clippy test check acceptance run-mcp
 
 CARGO ?= cargo
 
@@ -6,6 +6,7 @@ help:
 	@printf "%s\n" \
 		"Targets:" \
 		"  make check      Run fmt-check + clippy + tests" \
+		"  make acceptance Run flagship UX acceptance suite (shared daily)" \
 		"  make fmt        Apply rustfmt" \
 		"  make fmt-check  Verify formatting" \
 		"  make clippy     Run clippy (deny warnings)" \
@@ -25,6 +26,10 @@ test:
 	$(CARGO) test --workspace
 
 check: fmt-check clippy test
+
+# Flagship acceptance suite: end-to-end UX invariants (shared mode + daily toolset).
+acceptance:
+	$(CARGO) test -p bm_mcp --test acceptance_flagship_ux_shared_daily
 
 # Golden path: zero-arg run enables DX defaults.
 run-mcp:
