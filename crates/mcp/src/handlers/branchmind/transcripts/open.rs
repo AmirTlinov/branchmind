@@ -24,7 +24,7 @@ fn format_capture_content(
         (None, Some(byte)) => out.push_str(&format!("ref: {ref_path}#B{byte}\n")),
         _ => out.push_str(&format!("ref: {ref_path}\n")),
     }
-    out.push_str("takeaway: <fill>\n");
+    out.push_str("takeaway: TBD\n");
 
     let mut chosen: Vec<&Value> = Vec::new();
     let mut focus_idx: Option<usize> = None;

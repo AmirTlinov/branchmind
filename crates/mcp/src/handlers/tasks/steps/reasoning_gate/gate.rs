@@ -104,8 +104,8 @@ pub(crate) fn enforce_reasoning_gate(
                 "type": "hypothesis",
                 // NOTE: This payload is rendered into a BM-L1 copy/paste command line.
                 // Keep JSON string values whitespace-free so `split_whitespace` parsing stays valid.
-                "title": "Hypothesis:<fill>",
-                "text": "<fill>",
+                "title": "Hypothesis:TBD",
+                "text": "TBD",
                 "status": "open",
                 "tags": [spec.gate_tag]
             }),

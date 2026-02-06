@@ -476,7 +476,7 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                                 "record a resolved synthesis decision (deep gate)",
                                 json!({
                                     "type": "decision",
-                                    "title": "Decision: <fill>",
+                                    "title": "Decision:TBD",
                                     "text": "Synthesis: winner + tradeoffs + rollback/stop rule + what would change your mind.",
                                     "status": "resolved",
                                     "tags": ["bm-deep"]
@@ -488,7 +488,7 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                                 "add a second hypothesis branch (deep gate)",
                                 json!({
                                     "type": "hypothesis",
-                                    "title": "Hypothesis (alt): <fill>",
+                                    "title": "Hypothesis(alt):TBD",
                                     "text": "Write the best alternative hypothesis; add one disconfirming test idea.",
                                     "status": "open",
                                     "tags": ["bm-deep", "branch"]
@@ -500,7 +500,7 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                                 "add a falsifier test stub for the current hypothesis (strict gate)",
                                 json!({
                                     "type": "test",
-                                    "title": "Test: <fill>",
+                                    "title": "Test:TBD",
                                     "text": "Define the smallest runnable check for this hypothesis.",
                                     "status": "open",
                                     "tags": ["bm4"]
@@ -512,7 +512,7 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                                 "steelman a counter-hypothesis (strict gate)",
                                 json!({
                                     "type": "hypothesis",
-                                    "title": "Counter-hypothesis: <fill>",
+                                    "title": "Counter-hypothesis:TBD",
                                     "text": "Steelman the opposite case; include 1 disconfirming test idea.",
                                     "status": "open",
                                     "tags": ["bm7", "counter"]
@@ -577,7 +577,7 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                             json!({
                                 "type": "test",
                                 "title": "Skeptic preflight (counter → falsifier → stop)",
-                                "text": "counter-hypothesis: <fill>\nfalsifier test: <fill>\nstop criteria: <fill>",
+                                "text": "counter-hypothesis: TBD\nfalsifier test: TBD\nstop criteria: TBD",
                                 "tags": [where_id, VIS_TAG_DRAFT, "skeptic:preflight"]
                             }),
                         );
@@ -639,7 +639,7 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                     }
 
                     // Keep capsule small: provide a single stage placeholder; other stages are optional.
-                    args_obj.insert("frame".to_string(), Value::String("<fill>".to_string()));
+                    args_obj.insert("frame".to_string(), Value::String("TBD".to_string()));
                     args_obj.insert("note_decision".to_string(), Value::Bool(true));
                     args_obj.insert(
                         "note_title".to_string(),

@@ -794,8 +794,9 @@ impl McpServer {
                                 .cloned()
                                 .unwrap_or_else(|| "a:unknown".to_string());
                             let seed_title = format!("{seed_anchor}: invariants");
-                            let seed_text = "Claim: <fill>\nScope: <fill>\nApply: <fill>\nProof: <fill>\nExpiry: <fill>"
-                                .to_string();
+                            let seed_text =
+                                "Claim: TBD\nScope: TBD\nApply: TBD\nProof: TBD\nExpiry: TBD"
+                                    .to_string();
 
                             actions.push(json!({
                                 "id": "action:task:knowledge:seed",

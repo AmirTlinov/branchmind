@@ -91,8 +91,8 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 profile.section_name(),
                 &[
                     "Golden path: status → tasks(cmd=tasks.macro.start) → tasks(cmd=tasks.snapshot).",
-                    "When lost: tasks(cmd=tasks.snapshot) → open <ref> → follow 1 next action.",
-                    "Write to meaning: use anchors (a:<slug>) for decisions/evidence/tests.",
+                    "When lost: tasks(cmd=tasks.snapshot) → open REF (from REFERENCE lines) → follow 1 next action.",
+                    "Write to meaning: use anchors (e.g. a:core, a:storage) for decisions/evidence/tests.",
                     "Close steps fast: tasks.macro.close.step with proof_input (URL/CMD/FILE/NOTE → auto-normalized).",
                 ],
             );
@@ -159,7 +159,7 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
         &mut out,
         "ANCHORS",
         &[
-            "Use anchors as meaning coordinates (a:<slug>), not file paths.",
+            "Use anchors as meaning coordinates (e.g. a:core, a:storage), not file paths.",
             "Bind decisions/evidence/tests to anchors so new sessions resume by meaning in seconds.",
             "Keep the map clean: merge/rename anchors instead of proliferating near-duplicates.",
         ],

@@ -62,7 +62,7 @@ pub(super) fn enforce_deep_synthesis(
                 "step": step_ref.step_id.clone(),
                 "card": {
                     "type": "hypothesis",
-                    "title": "Hypothesis (alt): <fill>",
+                    "title": "Hypothesis(alt):TBD",
                     "text": "Write the best alternative hypothesis; add one disconfirming test idea.",
                     "status": "open",
                     "tags": [spec.gate_tag, "branch"]
@@ -81,7 +81,7 @@ pub(super) fn enforce_deep_synthesis(
                 "step": step_ref.step_id.clone(),
                 "card": {
                     "type": "decision",
-                    "title": "Decision: <fill>",
+                    "title": "Decision:TBD",
                     "text": "Synthesis: winner + tradeoffs + rollback/stop rule + what would change your mind.",
                     "status": "resolved",
                     "tags": [spec.gate_tag]

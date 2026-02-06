@@ -21,11 +21,11 @@ pub(crate) fn render_note_template(template_id: &str, goal: Option<&str>) -> Opt
                 out.push_str(goal);
                 out.push_str("\n\n");
             } else {
-                out.push_str("## Goal\n<fill>\n\n");
+                out.push_str("## Goal\nTBD\n\n");
             }
-            out.push_str("## Context\n<fill>\n\n");
-            out.push_str("## Definition of Done\n<fill>\n\n");
-            out.push_str("## Risks / Unknowns\n<fill>\n");
+            out.push_str("## Context\nTBD\n\n");
+            out.push_str("## Definition of Done\nTBD\n\n");
+            out.push_str("## Risks / Unknowns\nTBD\n");
             Some(out)
         }
         "decision" => {
@@ -36,11 +36,11 @@ pub(crate) fn render_note_template(template_id: &str, goal: Option<&str>) -> Opt
                 out.push_str(goal);
                 out.push_str("\n\n");
             } else {
-                out.push_str("## Context\n<fill>\n\n");
+                out.push_str("## Context\nTBD\n\n");
             }
-            out.push_str("## Decision\n<fill>\n\n");
-            out.push_str("## Rationale\n<fill>\n\n");
-            out.push_str("## Proof / Evidence\n- CMD: <...>\n- LINK: <...>\n");
+            out.push_str("## Decision\nTBD\n\n");
+            out.push_str("## Rationale\nTBD\n\n");
+            out.push_str("## Proof / Evidence\n- CMD: (paste)\n- LINK: (paste)\n");
             Some(out)
         }
         _ => None,
