@@ -81,7 +81,7 @@ Job fields (high level):
     "expected_artifacts": ["report"],
     "meta": {
       "executor_model": "sonnet",
-      "skill_profile": "research"
+      "skill_profile": "deep"
     }
   }
 }
@@ -252,4 +252,3 @@ Canonical macros (task domain):
 
 Implementation detail: these are task commands (tool=`tasks`, `op="call"`, `cmd="tasks.macro.*"`),
 not job commands.
-

@@ -433,7 +433,7 @@ fn macro_fanout_jobs_creates_per_anchor_jobs() {
             .and_then(|v| v.as_str())
             .unwrap_or("-");
         assert!(
-            matches!(profile, "strict" | "research"),
+            matches!(profile, "strict" | "deep"),
             "expected skill_profile in job meta, got: {profile}"
         );
     }

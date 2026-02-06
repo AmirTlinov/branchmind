@@ -3,13 +3,13 @@
 use crate::*;
 use serde_json::Value;
 
-const SKILL_PACK_VERSION: &str = "0.1.2";
+const SKILL_PACK_VERSION: &str = "0.1.3";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SkillProfile {
     Daily,
     Strict,
-    Research,
+    Deep,
     Teamlead,
 }
 
@@ -18,7 +18,7 @@ impl SkillProfile {
         match raw.trim().to_ascii_lowercase().as_str() {
             "daily" => Some(Self::Daily),
             "strict" => Some(Self::Strict),
-            "research" => Some(Self::Research),
+            "deep" | "research" => Some(Self::Deep),
             "teamlead" => Some(Self::Teamlead),
             _ => None,
         }
@@ -28,7 +28,7 @@ impl SkillProfile {
         match self {
             Self::Daily => "daily",
             Self::Strict => "strict",
-            Self::Research => "research",
+            Self::Deep => "deep",
             Self::Teamlead => "teamlead",
         }
     }
@@ -37,7 +37,7 @@ impl SkillProfile {
         match self {
             Self::Daily => "DAILY",
             Self::Strict => "STRICT",
-            Self::Research => "RESEARCH",
+            Self::Deep => "DEEP",
             Self::Teamlead => "TEAMLEAD",
         }
     }
@@ -108,14 +108,15 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 ],
             );
         }
-        SkillProfile::Research => {
+        SkillProfile::Deep => {
             push_section(
                 &mut out,
                 profile.section_name(),
                 &[
-                    "Unit of progress: hypothesis → falsifier test → evidence → decision (canon).",
+                    "Unit of progress: hypothesis → falsifier test → evidence → resolved decision (canon).",
+                    "Branching is required: capture at least one counter-position (steelman).",
                     "Add stop criteria (time/budget/signal) to avoid infinite loops.",
-                    "Keep research anchor-scoped + step-scoped so you can resume without scanning.",
+                    "Keep deep work anchor-scoped + step-scoped so you can resume without scanning.",
                 ],
             );
         }

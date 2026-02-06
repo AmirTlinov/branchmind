@@ -102,8 +102,10 @@ pub(crate) fn enforce_reasoning_gate(
             "card".to_string(),
             json!({
                 "type": "hypothesis",
-                "title": "Hypothesis: <fill>",
-                "text": "State the simplest falsifiable hypothesis for this step, then link a test.",
+                // NOTE: This payload is rendered into a BM-L1 copy/paste command line.
+                // Keep JSON string values whitespace-free so `split_whitespace` parsing stays valid.
+                "title": "Hypothesis:<fill>",
+                "text": "<fill>",
                 "status": "open",
                 "tags": [spec.gate_tag]
             }),

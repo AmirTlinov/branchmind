@@ -87,7 +87,9 @@ fn normalize_skill_profile(raw: &str) -> Option<String> {
     }
     let lowered = trimmed.to_ascii_lowercase();
     match lowered.as_str() {
-        "daily" | "strict" | "research" | "teamlead" => Some(lowered),
+        "daily" | "strict" | "deep" | "teamlead" => Some(lowered),
+        // Back-compat alias: treat "research" as "deep".
+        "research" => Some("deep".to_string()),
         _ => None,
     }
 }
@@ -99,7 +101,7 @@ fn infer_skill_profile_from_job_kind(kind: &str) -> Option<String> {
     }
     let lowered = k.to_ascii_lowercase();
     if lowered.contains("research") {
-        return Some("research".to_string());
+        return Some("deep".to_string());
     }
     None
 }
@@ -645,7 +647,7 @@ fn parse_args() -> Result<RunnerConfig, String> {
     let claude_bin = crate::bin_detect::resolve_optional_bin(claude_bin, "claude");
     let skill_profile = skill_profile.unwrap_or_else(|| "strict".to_string());
     let skill_profile = normalize_skill_profile(&skill_profile)
-        .ok_or("invalid --skill-profile (expected daily|strict|research|teamlead)")?;
+        .ok_or("invalid --skill-profile (expected daily|strict|deep|teamlead; research is an alias for deep)")?;
 
     Ok(RunnerConfig {
         workspace,

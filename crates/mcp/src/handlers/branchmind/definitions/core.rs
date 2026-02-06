@@ -67,13 +67,13 @@ pub(crate) fn core_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "skill",
-            "description": "Get a built-in behavior pack (daily|strict|research|teamlead) to shape agent workflow deterministically.",
+            "description": "Get a built-in behavior pack (daily|strict|deep|teamlead; research is accepted as an alias for deep) to shape agent workflow deterministically.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "profile": {
                         "type": "string",
-                        "enum": ["daily", "strict", "research", "teamlead"]
+                        "enum": ["daily", "strict", "deep", "research", "teamlead"]
                     },
                     "max_chars": { "type": "integer" }
                 },

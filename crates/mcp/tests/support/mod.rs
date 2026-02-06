@@ -218,6 +218,177 @@ pub(crate) fn parse_open_command_line(line: &str) -> serde_json::Map<String, Val
     args
 }
 
+pub(crate) fn parse_portal_command_line(line: &str) -> (String, serde_json::Map<String, Value>) {
+    let line = line.trim();
+    assert!(!line.is_empty(), "expected a command line, got empty");
+
+    let (tool, rest) = line
+        .split_once(char::is_whitespace)
+        .map(|(tool, rest)| (tool.trim(), rest.trim()))
+        .unwrap_or((line, ""));
+    assert!(
+        !tool.is_empty(),
+        "expected a portal tool name as the first token, got: {line}"
+    );
+
+    let mut args = serde_json::Map::new();
+    for (key, raw) in split_key_value_tokens(rest) {
+        if key.is_empty() || raw.is_empty() {
+            continue;
+        }
+
+        let value = if raw.starts_with('\"') || raw.starts_with('[') || raw.starts_with('{') {
+            serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw.to_string()))
+        } else if raw == "true" || raw == "false" {
+            Value::Bool(raw == "true")
+        } else if let Ok(n) = raw.parse::<i64>() {
+            Value::Number(serde_json::Number::from(n))
+        } else {
+            Value::String(raw.to_string())
+        };
+
+        args.insert(key.to_string(), value);
+    }
+
+    (tool.to_string(), args)
+}
+
+fn split_key_value_tokens(input: &str) -> Vec<(String, String)> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+
+        let key_start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'=' {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'=' {
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            continue;
+        }
+        let key = input[key_start..i].trim().to_string();
+        i += 1; // skip '='
+        if i >= bytes.len() {
+            out.push((key, String::new()));
+            break;
+        }
+
+        let value_start = i;
+        i = match bytes[i] {
+            b'{' => consume_balanced_json(input, i, b'{', b'}'),
+            b'[' => consume_balanced_json(input, i, b'[', b']'),
+            b'"' => consume_quoted_json(input, i),
+            _ => {
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                i
+            }
+        };
+        let raw = input[value_start..i].trim().to_string();
+        out.push((key, raw));
+    }
+    out
+}
+
+fn consume_balanced_json(input: &str, mut i: usize, open: u8, close: u8) -> usize {
+    let bytes = input.as_bytes();
+    let mut depth = 0i64;
+    let mut in_string = false;
+    let mut escape = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+        } else if b == b'"' {
+            in_string = true;
+        } else if b == open {
+            depth += 1;
+        } else if b == close {
+            depth -= 1;
+            if depth == 0 {
+                i += 1;
+                break;
+            }
+        }
+        i += 1;
+    }
+    i
+}
+
+fn consume_quoted_json(input: &str, mut i: usize) -> usize {
+    let bytes = input.as_bytes();
+    // start with opening quote
+    i += 1;
+    let mut escape = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escape {
+            escape = false;
+        } else if b == b'\\' {
+            escape = true;
+        } else if b == b'"' {
+            i += 1;
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
+pub(crate) fn extract_bm_command_lines(rendered: &str) -> Vec<String> {
+    // BM-L1 command lines are intended to be copy/paste-able. For tests we keep the heuristic
+    // strict: only accept lines that begin with a portal tool token.
+    const PORTALS: &[&str] = &[
+        "status",
+        "open",
+        "workspace",
+        "tasks",
+        "jobs",
+        "think",
+        "graph",
+        "vcs",
+        "docs",
+        "system",
+    ];
+
+    let mut out = Vec::new();
+    for raw in rendered.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Skip tagged lines (error/warning/more/reference) — those are not executable commands.
+        if line.starts_with("ERROR: ")
+            || line.starts_with("WARNING: ")
+            || line.starts_with("MORE: ")
+            || line.starts_with("REFERENCE: ")
+        {
+            continue;
+        }
+        let head = line.split_whitespace().next().unwrap_or("");
+        if PORTALS.contains(&head) {
+            out.push(line.to_string());
+        }
+    }
+    out
+}
+
 pub(crate) fn parse_state_ref_id(state_line: &str) -> Option<String> {
     let idx = state_line.find("ref=")?;
     let after = &state_line[idx + "ref=".len()..];

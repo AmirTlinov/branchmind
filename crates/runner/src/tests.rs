@@ -125,8 +125,9 @@ fn normalize_skill_profile_accepts_known_profiles() {
     assert_eq!(normalize_skill_profile("STRICT").as_deref(), Some("strict"));
     assert_eq!(
         normalize_skill_profile(" research ").as_deref(),
-        Some("research")
+        Some("deep")
     );
+    assert_eq!(normalize_skill_profile("deep").as_deref(), Some("deep"));
     assert_eq!(
         normalize_skill_profile("teamlead").as_deref(),
         Some("teamlead")
@@ -200,7 +201,7 @@ fn skill_selection_prefers_job_meta_then_kind_then_default() {
     let no_meta = json!(null);
     assert_eq!(
         select_skill_profile(Some("research_probe"), Some(&no_meta), &cfg),
-        "research".to_string()
+        "deep".to_string()
     );
 
     assert_eq!(select_skill_profile(None, None, &cfg), "strict".to_string());

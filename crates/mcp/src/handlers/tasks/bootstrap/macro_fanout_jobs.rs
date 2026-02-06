@@ -12,7 +12,7 @@ const DEFAULT_JOB_SKILL_MAX_CHARS: usize = 1200;
 fn default_skill_profile_for_job_kind(kind: &str) -> &'static str {
     let lowered = kind.trim().to_ascii_lowercase();
     if lowered.contains("research") {
-        return "research";
+        return "deep";
     }
     "strict"
 }

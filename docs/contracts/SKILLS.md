@@ -18,7 +18,8 @@ system op=schema.get args={cmd:"system.skill"}
 ## Input (selected)
 
 - `profile` (string, optional)
-  - Allowed: `daily | strict | research | teamlead`
+  - Allowed: `daily | strict | deep | teamlead`
+  - Alias: `research` is accepted as an alias for `deep` (back-compat).
   - Default: `daily`
 - `max_chars` (int, optional)
   - Output budget for the returned text.
@@ -38,4 +39,3 @@ Semantic contract for the text:
 ## Determinism
 
 Given the same build + `profile` + `max_chars`, the output must be byte-identical.
-

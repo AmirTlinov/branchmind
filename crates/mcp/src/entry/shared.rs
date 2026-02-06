@@ -273,6 +273,18 @@ fn handle_client_body(
         }
     }
 
+    // Explicit shared-mode UX: allow agents/users to force a daemon restart with one command,
+    // without shelling out or thinking about processes.
+    if let Some(resp_body) =
+        try_handle_shared_daemon_restart(&body, method.as_deref(), expects_response, daemon, config)
+    {
+        match mode {
+            TransportMode::NewlineJson => write_newline_raw(stdout, &resp_body)?,
+            TransportMode::ContentLength => write_content_length_raw(stdout, &resp_body)?,
+        }
+        return Ok(());
+    }
+
     let reset_on_error = matches!(
         method.as_deref(),
         Some("initialize") | Some("ping") | Some("tools/call")
@@ -415,6 +427,84 @@ enum LocalHandling {
     NotHandled,
     NoResponse,
     Response(Vec<u8>),
+}
+
+fn try_handle_shared_daemon_restart(
+    body: &[u8],
+    method: Option<&str>,
+    expects_response: bool,
+    daemon: &mut Option<DaemonPipe>,
+    config: &SharedProxyConfig,
+) -> Option<Vec<u8>> {
+    if !expects_response {
+        return None;
+    }
+    if method != Some("tools/call") {
+        return None;
+    }
+
+    let parsed = serde_json::from_slice::<Value>(body).ok()?;
+    let id = parsed.get("id").cloned();
+    let params = parsed.get("params").and_then(|v| v.as_object())?;
+    let tool_raw = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let tool = tool_raw
+        .strip_prefix("branchmind/")
+        .or_else(|| tool_raw.strip_prefix("branchmind."))
+        .unwrap_or(tool_raw);
+    if tool != "system" {
+        return None;
+    }
+
+    let args = match params.get("arguments") {
+        None | Some(Value::Null) => Value::Object(serde_json::Map::new()),
+        Some(v) => v.clone(),
+    };
+    let args_obj = args.as_object()?;
+    let op = args_obj.get("op").and_then(|v| v.as_str()).unwrap_or("");
+
+    let cmd = if op == "call" {
+        args_obj.get("cmd").and_then(|v| v.as_str()).unwrap_or("")
+    } else if op == "daemon.restart" {
+        "system.daemon.restart"
+    } else {
+        ""
+    };
+    if cmd != "system.daemon.restart" {
+        return None;
+    }
+
+    // Best-effort: shut down the existing daemon so the stable socket path can be claimed by a
+    // fresh build. We intentionally do NOT spawn a new daemon here; the next forwarded request
+    // will trigger connect_or_spawn as usual.
+    let existing = daemon
+        .as_ref()
+        .and_then(|pipe| pipe.reader.get_ref().try_clone().ok())
+        .or_else(|| UnixStream::connect(&config.socket_path).ok());
+    if let Some(stream) = existing.as_ref() {
+        let _ = try_shutdown_daemon(stream);
+    }
+    *daemon = None;
+    let _ = std::fs::remove_file(&config.socket_path);
+
+    let payload = json!({
+        "success": true,
+        "intent": "system.daemon.restart",
+        "result": "daemon restart requested (socket reset; next call spawns a fresh daemon)",
+        "error": null,
+        "actions": [],
+        "warnings": [],
+        "suggestions": [],
+        "context": {},
+        "line_protocol": true
+    });
+    let resp = crate::json_rpc_response(
+        id,
+        json!({
+            "content": [crate::tool_text_content(&payload)],
+            "isError": false
+        }),
+    );
+    serde_json::to_vec(&resp).ok()
 }
 
 fn try_handle_locally(

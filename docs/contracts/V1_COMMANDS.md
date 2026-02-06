@@ -29,6 +29,25 @@ UX notes:
   a handful of workflow macros), and only those available in the current toolset.
 - Use `include_hidden=true` to list the **full registry** (may include advanced/internal commands).
 
+## system.daemon.restart
+
+Force a **shared-mode daemon restart** (best-effort).
+
+Purpose:
+- After a local rebuild, a long-lived shared proxy may still be connected to an older daemon process.
+- This command provides an explicit **one-command escape hatch** for agents/users.
+
+Semantics (shared mode):
+- The shared proxy requests daemon shutdown (best-effort),
+- unlinks the daemon socket path,
+- drops its daemon connection.
+- The **next forwarded request** will spawn a fresh daemon via the normal `connect_or_spawn` path.
+
+Semantics (non-shared mode):
+- Returns a typed `NOT_SUPPORTED` error with an actionable recovery hint.
+
+Inputs: none.
+
 ## system.ops.summary
 
 Return a small, low-noise summary of the v1 UX surface:

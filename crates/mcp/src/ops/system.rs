@@ -100,6 +100,39 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         handler: Some(handle_cmd_list),
     });
 
+    // system.daemon.restart (custom)
+    //
+    // UX: in shared mode, the proxy can end up talking to a long-lived daemon that survives local
+    // rebuilds. The proxy already self-heals in many cases, but agents should have an explicit,
+    // copy/paste-able escape hatch that forces a fresh daemon on the next request.
+    specs.push(CommandSpec {
+        cmd: "system.daemon.restart".to_string(),
+        domain_tool: ToolName::SystemOps,
+        tier: Tier::Gold,
+        stability: Stability::Stable,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#system.daemon.restart".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: false,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Custom {
+            args_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+            example_minimal_args: json!({}),
+        },
+        op_aliases: vec!["daemon.restart".to_string()],
+        handler_name: None,
+        handler: Some(handle_daemon_restart),
+    });
+
     // system.tutorial (custom)
     specs.push(CommandSpec {
         cmd: "system.tutorial".to_string(),
@@ -159,6 +192,24 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             handler: None,
         });
     }
+}
+
+fn handle_daemon_restart(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+    // In a shared deployment, this cmd is handled by the shared proxy layer (not the daemon).
+    //
+    // If an agent reaches this handler, they are talking directly to a daemon or running without
+    // shared mode. We keep the error typed and actionable.
+    OpResponse::error(
+        env.cmd.clone(),
+        OpError {
+            code: "NOT_SUPPORTED".to_string(),
+            message: "daemon restart is only supported in shared proxy mode (--shared)".to_string(),
+            recovery: Some(
+                "Restart the process running the MCP server. If you are using shared mode, call system cmd=system.daemon.restart via the shared proxy."
+                    .to_string(),
+            ),
+        },
+    )
 }
 
 fn handle_schema_get(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
