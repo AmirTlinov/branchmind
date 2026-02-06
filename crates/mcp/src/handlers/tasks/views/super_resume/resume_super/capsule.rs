@@ -469,10 +469,10 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                             .get("reasoning_mode")
                             .and_then(|v| v.as_str())
                             .unwrap_or("normal");
-                        let playbook = if reasoning_mode == "strict" {
-                            "strict"
-                        } else {
-                            "skeptic"
+                        let playbook = match reasoning_mode {
+                            "deep" => "deep",
+                            "strict" => "strict",
+                            _ => "skeptic",
                         };
                         if !args.omit_workspace {
                             args_obj.insert(

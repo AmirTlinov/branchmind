@@ -52,6 +52,18 @@ Core invariants (MUST):
    - Closing a step is blocked until required checkpoints are confirmed.
    - All “what next” guidance is expressed via `actions[]` (actions-first).
 
+3) **Reasoning-gated completion (optional discipline engine)**
+   - Tasks may set `reasoning_mode` to control step-close discipline:
+     - `normal` (default): no reasoning gate.
+     - `strict`: requires minimal falsifiable reasoning discipline (hypotheses + tests + counter-position).
+     - `deep`: strict **superset**; additionally requires a **resolved** synthesis decision before closing.
+   - When the gate blocks, the server MUST return typed errors + portal-first recovery suggestions
+     (e.g. `think.card`, `think.playbook`, `tasks.macro.close.step`).
+   - Escape hatch: `tasks.macro.close.step` supports `override={reason,risk}` which:
+     - records an explicit debt note,
+     - emits `WARNING: REASONING_OVERRIDE_APPLIED`,
+     - then allows closing (gate is bypassed only for that macro close).
+
 ---
 
 ## Key commands (semantic index)
@@ -135,4 +147,3 @@ Every mutating task operation MUST emit a durable event into the reasoning subsy
 and tasks MUST have stable reasoning refs (`notes_doc`, `graph_doc`, `trace_doc`) created lazily.
 
 See `INTEGRATION.md` for the normative contract.
-

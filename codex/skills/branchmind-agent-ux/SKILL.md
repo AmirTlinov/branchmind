@@ -72,6 +72,17 @@ If there is no focus yet:
 
 > When in doubt, choose **Strict**.
 
+### Mechanical enforcement (recommended)
+
+BranchMind can **enforce** discipline on step close when the task sets:
+
+- `reasoning_mode=strict` — requires hypotheses/tests/counter-position before closing.
+- `reasoning_mode=deep` — strict superset; additionally requires a **resolved decision** per step.
+
+If the gate blocks, follow the portal-first suggestions (`think.card`, `think.playbook`, …).
+Escape hatch (macro flow only): `tasks.macro.close.step override={reason,risk}` emits
+`WARNING: REASONING_OVERRIDE_APPLIED` and records an explicit debt note.
+
 Templates live in `references/templates.md`.
 
 ---

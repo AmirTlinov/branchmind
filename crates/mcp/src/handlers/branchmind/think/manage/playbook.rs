@@ -41,6 +41,18 @@ impl McpServer {
                     "decision: fix + verify"
                 ]
             }),
+            "deep" => json!({
+                "steps": [
+                    "frame: restate goal + constraints + non-goals (one paragraph)",
+                    "branches: write 3–7 hypotheses/options; keep each falsifiable",
+                    "select: pick top-2 branches to pursue now (and why the others lose)",
+                    "falsifiers: for each top branch, define the cheapest decisive test + stop criteria (time/budget/signal)",
+                    "counter: steelman the best counter-position; add 1 disconfirming test idea",
+                    "evidence: run at least one falsifier and capture receipts (CMD + LINK)",
+                    "merge: synthesize tradeoffs; name rollback/kill-switch conditions",
+                    "decision(resolved): record the resolved decision (winner + why + tradeoffs + what would change your mind)"
+                ]
+            }),
             "strict" => json!({
                 "steps": [
                     "frame: restate goal + constraints + non-goals (one paragraph)",

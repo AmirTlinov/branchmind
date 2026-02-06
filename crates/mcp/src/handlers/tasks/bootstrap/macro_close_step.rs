@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-use crate::handlers::tasks::steps::strict_gate::{
-    StrictGateContext, enforce_strict_reasoning_gate, parse_strict_reasoning_override,
+use crate::handlers::tasks::steps::reasoning_gate::{
+    ReasoningGateContext, enforce_reasoning_gate, parse_reasoning_override,
 };
 use crate::*;
 use serde_json::{Value, json};
@@ -40,7 +40,7 @@ impl McpServer {
             .get("proof_from_job")
             .cloned()
             .filter(|v| !v.is_null());
-        let reasoning_override = match parse_strict_reasoning_override(args_obj.get("override")) {
+        let reasoning_override = match parse_reasoning_override(args_obj.get("override")) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -759,9 +759,9 @@ impl McpServer {
             close_args_obj.insert("checkpoints".to_string(), Value::String("gate".to_string()));
         }
 
-        let mut strict_override_applied = false;
+        let mut reasoning_override_applied = false;
 
-        // Strict reasoning gate (opt-in via task.reasoning_mode).
+        // Reasoning gate (opt-in via task.reasoning_mode: strict|deep).
         // This is a "soft-hard" gate: it blocks closing the step unless minimum reasoning
         // discipline is present (tests + counter-position), but it provides portal-first
         // recovery suggestions so agents don't get stuck.
@@ -776,7 +776,7 @@ impl McpServer {
                     None => None,
                     Some(raw) => StepPath::parse(raw).ok(),
                 };
-                let ctx = StrictGateContext {
+                let ctx = ReasoningGateContext {
                     server: self,
                     workspace: &workspace,
                     task_id: &task_id,
@@ -789,14 +789,14 @@ impl McpServer {
                     warnings: Some(&mut warnings),
                     note_event: Some(&mut note_event),
                 };
-                strict_override_applied = match enforce_strict_reasoning_gate(ctx) {
+                reasoning_override_applied = match enforce_reasoning_gate(ctx) {
                     Ok(v) => v,
                     Err(resp) => return resp,
                 };
             }
         }
 
-        let close = if strict_override_applied {
+        let close = if reasoning_override_applied {
             self.close_step_internal(Value::Object(close_args_obj), false)
         } else {
             self.tool_tasks_close_step(Value::Object(close_args_obj))

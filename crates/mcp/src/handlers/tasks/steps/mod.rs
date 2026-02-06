@@ -5,5 +5,5 @@ mod lease;
 mod lifecycle;
 mod patch;
 mod progress;
-pub(super) mod strict_gate;
+pub(super) mod reasoning_gate;
 mod task_ops;

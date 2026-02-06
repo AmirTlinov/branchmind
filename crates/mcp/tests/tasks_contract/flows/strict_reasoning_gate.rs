@@ -317,7 +317,7 @@ fn strict_reasoning_override_allows_closing_with_reason_and_risk() {
         "expected strict override to allow closing"
     );
     assert!(
-        closed_text.contains("WARNING: STRICT_OVERRIDE_APPLIED"),
+        closed_text.contains("WARNING: REASONING_OVERRIDE_APPLIED"),
         "expected macro to surface explicit strict override warning"
     );
 }

@@ -2,6 +2,7 @@
 
 mod bootstrap_steps_tests_optional;
 mod bootstrap_with_think_pipeline;
+mod deep_reasoning_gate;
 mod edit_revision_mismatch;
 mod evidence_checkpoint_requires_security;
 mod lint_context_health_smoke;
