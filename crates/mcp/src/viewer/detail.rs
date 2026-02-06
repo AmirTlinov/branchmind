@@ -13,10 +13,10 @@ const MAX_STEP_ITEMS: usize = 400;
 const MAX_DOC_TAIL_ENTRIES: usize = 64;
 const MAX_ENTRY_CONTENT_CHARS: usize = 20_000;
 
-struct ResolvedWorkspace {
-    workspace: WorkspaceId,
-    stored_guard: Option<String>,
-    guard_status: &'static str,
+pub(super) struct ResolvedWorkspace {
+    pub(super) workspace: WorkspaceId,
+    pub(super) stored_guard: Option<String>,
+    pub(super) guard_status: &'static str,
 }
 
 pub(crate) fn build_task_detail(
@@ -193,7 +193,7 @@ pub(crate) fn build_plan_detail(
     }))
 }
 
-fn resolve_workspace(
+pub(super) fn resolve_workspace(
     store: &mut SqliteStore,
     config: &ViewerConfig,
     workspace_override: Option<&str>,

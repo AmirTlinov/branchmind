@@ -300,10 +300,12 @@ function detailWindowStorageKey() {
   return `${DETAIL_WINDOW_STORAGE_PREFIX}${windowScopeKey()}`;
 }
 
-function setProjectOverride(value) {
+function setProjectOverride(value, opts) {
   const next = (value || "").trim();
   state.projectOverride = next || null;
   try {
+    const persist = opts && "persist" in opts ? !!opts.persist : true;
+    if (!persist) return;
     if (state.projectOverride) {
       localStorage.setItem(PROJECT_STORAGE_KEY, state.projectOverride);
     } else {
@@ -314,10 +316,12 @@ function setProjectOverride(value) {
   }
 }
 
-function setWorkspaceOverride(value) {
+function setWorkspaceOverride(value, opts) {
   const next = (value || "").trim();
   state.workspaceOverride = next || null;
   try {
+    const persist = opts && "persist" in opts ? !!opts.persist : true;
+    if (!persist) return;
     if (state.workspaceOverride) {
       localStorage.setItem(workspaceStorageKey(), state.workspaceOverride);
     } else {
@@ -329,6 +333,15 @@ function setWorkspaceOverride(value) {
 }
 
 function loadWorkspaceOverrideFromStorage() {
+  if (queryOverrides.enabled) {
+    const fromQuery = queryParam("workspace");
+    if (fromQuery !== null) {
+      const trimmed = (fromQuery || "").trim();
+      state.workspaceOverride = trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : null;
+      return;
+    }
+  }
+
   let stored = null;
   try {
     stored = localStorage.getItem(workspaceStorageKey());
@@ -495,20 +508,38 @@ async function loadProjects() {
       stored = null;
     }
 
-    const candidate = (stored || "").trim() || null;
-    const match = candidate
-      ? state.projects.find((project) => project && project.project_guard === candidate)
-      : undefined;
-    const isKnown = !!(
-      match &&
-      match.store_present !== false &&
-      (state.includeTempProjects || !match.is_temp) &&
-      !match.stale
-    );
-    if (!candidate || !isKnown || (currentGuard && candidate === currentGuard)) {
+    const storedCandidate = (stored || "").trim() || null;
+    const queryCandidateRaw = queryOverrides.enabled ? queryParam("project") : null;
+    const queryCandidate = (queryCandidateRaw || "").trim() || null;
+
+    const candidates = [];
+    if (queryCandidate) candidates.push({ value: queryCandidate, persist: false });
+    if (storedCandidate) candidates.push({ value: storedCandidate, persist: true });
+
+    let chosen = null;
+    for (let i = 0; i < candidates.length; i += 1) {
+      const cand = candidates[i];
+      const value = (cand?.value || "").trim();
+      if (!value) continue;
+      if (currentGuard && value === currentGuard) continue;
+
+      const match = state.projects.find((project) => project && project.project_guard === value);
+      const isKnown = !!(
+        match &&
+        match.store_present !== false &&
+        (state.includeTempProjects || !match.is_temp) &&
+        !match.stale
+      );
+      if (isKnown) {
+        chosen = cand;
+        break;
+      }
+    }
+
+    if (!chosen) {
       setProjectOverride(null);
     } else {
-      setProjectOverride(candidate);
+      setProjectOverride(chosen.value, { persist: chosen.persist });
     }
   } catch {
     state.currentProjectGuard = null;

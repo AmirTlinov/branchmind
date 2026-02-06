@@ -538,6 +538,57 @@ Budgets / safety notes:
 - `trace_tail.entries` and `notes_tail.entries` are capped (currently `<=64`).
 - Entry `content` is truncated (currently `<=20000` chars) to keep responses bounded.
 
+### `GET /api/knowledge/<CARD-ID>`
+
+Returns **read-only** details for a single knowledge card (by `card_id`).
+
+This endpoint exists so the viewer UI can show the actual text behind a `knowledge_key` selection,
+without requiring an MCP client.
+
+Optional query params:
+
+- `workspace=<WorkspaceId>`: override workspace for this request (read-only view selection).
+- `project=<project_guard>`: switch the request to another active project (read-only).
+- `max_chars=<int>`: maximum number of characters returned for `card.text`
+  - default: `20000`
+  - clamped to `0..200000`
+
+Response (high-level):
+
+```json
+{
+  "workspace": "string",
+  "project_guard": {
+    "expected": "string|null",
+    "stored": "string|null",
+    "status": "ok|uninitialized|unknown|not_applicable"
+  },
+  "generated_at": "RFC3339",
+  "generated_at_ms": 0,
+  "card": {
+    "id": "CARD-KN-...",
+    "type": "knowledge",
+    "title": "string|null",
+    "text": "string|null",
+    "tags": ["string"],
+    "status": "string|null",
+    "meta_json": "string|null",
+    "deleted": false,
+    "last_seq": 0,
+    "last_ts_ms": 0
+  },
+  "supports": ["string"],
+  "blocks": ["string"],
+  "truncated": false,
+  "limits": { "max_chars": 20000 }
+}
+```
+
+Notes:
+
+- The viewer never writes to the store.
+- `truncated=true` means the returned `card.text` was cut to `limits.max_chars`.
+
 ### `GET /api/settings`
 
 Returns current viewer runtime settings:

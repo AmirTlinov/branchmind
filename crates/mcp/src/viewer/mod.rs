@@ -5,6 +5,7 @@ mod detail;
 mod events_stream;
 mod graph;
 mod graph_http;
+mod knowledge_detail;
 mod knowledge_snapshot;
 mod registry;
 mod search;
@@ -1318,6 +1319,77 @@ fn handle_connection(
                 plan_id,
                 trace_cursor,
                 notes_cursor,
+            ) {
+                Ok(payload) => {
+                    let body = payload.to_string();
+                    write_response(
+                        &mut stream,
+                        "200 OK",
+                        "application/json; charset=utf-8",
+                        body.as_bytes(),
+                        method == "HEAD",
+                    )
+                }
+                Err(err) => {
+                    let body = err.to_json().to_string();
+                    write_response(
+                        &mut stream,
+                        err.status_line(),
+                        "application/json; charset=utf-8",
+                        body.as_bytes(),
+                        method == "HEAD",
+                    )
+                }
+            }
+        }
+        path if path.starts_with("/api/knowledge/") => {
+            if project_param_invalid {
+                return write_api_error(
+                    &mut stream,
+                    "400 Bad Request",
+                    "INVALID_PROJECT",
+                    "project: invalid project guard.",
+                    Some("Use a value like repo:0123abcd… from /api/projects."),
+                    method == "HEAD",
+                );
+            }
+            if project_unknown {
+                return write_api_error(
+                    &mut stream,
+                    "404 Not Found",
+                    "UNKNOWN_PROJECT",
+                    "Unknown project.",
+                    Some("Pick one of the active projects returned by /api/projects."),
+                    method == "HEAD",
+                );
+            }
+
+            let store = match stores.store_for(&request_storage_dir) {
+                Ok(store) => store,
+                Err(err) => {
+                    return write_api_error(
+                        &mut stream,
+                        "503 Service Unavailable",
+                        "PROJECT_UNAVAILABLE",
+                        "Unable to open project store in read-only mode.",
+                        Some(&format!("{err}")),
+                        method == "HEAD",
+                    );
+                }
+            };
+
+            let max_chars = extract_query_param_raw(&request.path, "max_chars")
+                .as_deref()
+                .and_then(decode_query_value)
+                .and_then(|value| value.parse::<usize>().ok());
+
+            let card_id = path.trim_start_matches("/api/knowledge/").trim();
+            match knowledge_detail::build_knowledge_card_detail(
+                store,
+                &request_config,
+                workspace_override.as_deref(),
+                card_id,
+                max_chars,
             ) {
                 Ok(payload) => {
                     let body = payload.to_string();
