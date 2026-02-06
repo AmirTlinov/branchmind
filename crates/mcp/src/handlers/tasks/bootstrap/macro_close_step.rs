@@ -318,7 +318,7 @@ impl McpServer {
                             "PROOF_PARSE_AMBIGUOUS",
                             "proof_input contains NOTE lines",
                             Some(
-                                "Tag lines as CMD:/LINK: (or provide explicit proof) when they are meant to satisfy proof.",
+                                "Tag lines as CMD:/LINK:/FILE: (or provide explicit proof) when they are meant to satisfy proof.",
                             ),
                             Vec::new(),
                         );
@@ -326,7 +326,7 @@ impl McpServer {
                     warnings.push(warning(
                         "PROOF_PARSE_AMBIGUOUS",
                         "proof_input contains NOTE lines",
-                        "NOTE lines are stored as a step note and do not count as proof; tag CMD:/LINK: (or provide explicit proof) for proof receipts.",
+                        "NOTE lines are stored as a step note and do not count as proof; tag CMD:/LINK:/FILE: (or provide explicit proof) for proof receipts.",
                     ));
                 }
 

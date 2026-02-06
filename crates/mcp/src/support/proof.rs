@@ -315,6 +315,39 @@ pub(crate) fn coerce_proof_input_line(raw: &str) -> Option<(String, bool)> {
         return Some((format!("LINK: {rest}"), false));
     }
 
+    let file_tagged = trimmed
+        .get(..5)
+        .is_some_and(|p| p.eq_ignore_ascii_case("FILE:"))
+        || (trimmed
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("FILE"))
+            && trimmed
+                .as_bytes()
+                .get(4)
+                .is_some_and(|b| b.is_ascii_whitespace()));
+    if file_tagged {
+        let rest = if trimmed
+            .get(..5)
+            .is_some_and(|p| p.eq_ignore_ascii_case("FILE:"))
+        {
+            trimmed.get(5..).unwrap_or_default()
+        } else {
+            trimmed.get(4..).unwrap_or_default()
+        };
+        let rest = rest.trim();
+        if rest.is_empty() {
+            // Empty FILE tags are common when lines are hard-wrapped:
+            //
+            //   FILE:
+            //     docs/audit/report.json
+            //
+            // We accept the tag as a placeholder receipt and rely on folding + normalization to
+            // turn it into a real attachment (or drop it if it remains empty).
+            return Some(("FILE:".to_string(), false));
+        }
+        return Some((format!("FILE: {rest}"), false));
+    }
+
     let url_candidate = strip_wrapping_angle_brackets(trimmed);
     if looks_like_bare_url(url_candidate) {
         return Some((format!("LINK: {url_candidate}"), false));
@@ -336,8 +369,8 @@ pub(crate) fn coerce_proof_input_line(raw: &str) -> Option<(String, bool)> {
 pub(crate) fn parse_proof_input_lines(raw: &[String]) -> ProofParseOutcome {
     let mut outcome = ProofParseOutcome::default();
     for item in raw {
-        for line in item.lines() {
-            if let Some((coerced, ambiguous)) = coerce_proof_input_line(line) {
+        for line in fold_proof_input_lines(item) {
+            if let Some((coerced, ambiguous)) = coerce_proof_input_line(&line) {
                 if ambiguous {
                     outcome.notes.push(coerced);
                     continue;
@@ -351,7 +384,117 @@ pub(crate) fn parse_proof_input_lines(raw: &[String]) -> ProofParseOutcome {
         }
     }
     outcome.checks = normalize_proof_checks(&outcome.checks);
+    outcome.attachments = normalize_proof_attachments(&outcome.attachments);
     outcome
+}
+
+fn normalize_proof_attachments(attachments: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in attachments {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !trimmed
+            .get(..5)
+            .is_some_and(|p| p.eq_ignore_ascii_case("FILE:"))
+        {
+            continue;
+        }
+        let rest = trimmed[5..].trim();
+        if rest.is_empty() || rest.contains("<fill") {
+            continue;
+        }
+        out.push(format!("FILE: {rest}"));
+    }
+    out
+}
+
+fn is_line_continuation_signal(raw_line: &str, trimmed: &str) -> bool {
+    // We only fold when there is a strong signal that the line is a continuation of the
+    // previous receipt, not an independent NOTE.
+    //
+    // Typical cases:
+    // - wrapped CLI flags:
+    //     CMD: cargo run --features
+    //       vulkan-internal -- --offscreen
+    // - wrapped refs:
+    //     LINK:
+    //       https://...
+    // - shell line continuation:
+    //     CMD: cargo run \
+    //       --features foo
+    //
+    // We intentionally do NOT fold arbitrary prose lines without indentation/flag markers.
+    raw_line
+        .as_bytes()
+        .first()
+        .is_some_and(|b| b.is_ascii_whitespace())
+        || trimmed.starts_with('-')
+}
+
+fn fold_proof_input_lines(item: &str) -> Vec<String> {
+    // UX: agents frequently paste long commands/paths that are hard-wrapped by terminals or chat UIs.
+    // In strict proof mode, those wrapped continuation lines would otherwise be classified as NOTE
+    // and cause `PROOF_PARSE_AMBIGUOUS`, even though the intent is clearly "one receipt".
+    //
+    // We fold only strong continuation signals (indentation / leading `-`) onto the previous
+    // non-ambiguous receipt, preserving strictness for real prose notes.
+    let mut folded: Vec<String> = Vec::new();
+    for raw_line in item.lines() {
+        let trimmed = strip_markdown_prefixes(raw_line).trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(prev) = folded.last_mut() else {
+            folded.push(raw_line.to_string());
+            continue;
+        };
+
+        let prev_kind = coerce_proof_input_line(prev).and_then(|(coerced, ambiguous)| {
+            if ambiguous {
+                return None;
+            }
+            if coerced.starts_with("CMD:") {
+                Some("cmd")
+            } else if coerced.starts_with("LINK:") {
+                Some("link")
+            } else if coerced.starts_with("FILE:") {
+                Some("file")
+            } else {
+                None
+            }
+        });
+        let is_note_line =
+            coerce_proof_input_line(raw_line).is_some_and(|(_, ambiguous)| ambiguous);
+        let continuation = is_note_line && is_line_continuation_signal(raw_line, trimmed);
+
+        // Only fold onto explicit receipts. If we can't confidently classify the previous line
+        // as a receipt, keep strict behavior (NOTE stays NOTE).
+        let can_fold = match prev_kind {
+            Some("cmd") => continuation,
+            Some("link") | Some("file") => {
+                continuation
+                    && raw_line
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|b| b.is_ascii_whitespace())
+            }
+            _ => false,
+        };
+        if !can_fold {
+            folded.push(raw_line.to_string());
+            continue;
+        }
+
+        let mut base = prev.trim_end().to_string();
+        if base.ends_with('\\') {
+            base.pop();
+            base = base.trim_end().to_string();
+        }
+        *prev = format!("{base} {trimmed}");
+    }
+    folded
 }
 
 pub(crate) fn lint_proof_checks(checks: &[String]) -> ProofReceiptsLint {

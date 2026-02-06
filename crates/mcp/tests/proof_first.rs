@@ -312,6 +312,54 @@ fn proof_input_parses_and_supports_strict_policy() {
 }
 
 #[test]
+fn proof_input_strict_folds_wrapped_command_lines_instead_of_erroring() {
+    let mut server = Server::start_initialized_with_args(
+        "proof_input_strict_folds_wrapped_command_lines_instead_of_erroring",
+        &["--toolset", "daily", "--workspace", "ws_proof_input_fold"],
+    );
+
+    let started = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.start", "args": { "task_title": "Proof Input Fold", "template": "principal-task", "reasoning_mode": "normal" } } }
+    }));
+    assert_tag_light(&extract_tool_text_str(&started));
+
+    // Close first 3 steps (no proof required yet).
+    for id in 2..=4 {
+        let closed = server.request(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {} } }
+        }));
+        let text = extract_tool_text_str(&closed);
+        assert_tag_light(&text);
+        assert!(!text.starts_with("ERROR:"), "early closure should succeed");
+    }
+
+    // Hard-wrapped commands/paths are common when agents copy from terminals/chat UIs.
+    // In strict mode, BranchMind should fold obvious continuation lines (indent / leading flags)
+    // instead of classifying them as NOTE and erroring.
+    let close_with_folded_proof_input = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
+            "proof_parse_policy": "strict",
+            "proof_input": "CMD: cargo test --workspace\n  -q\nLINK:\n  https://example.com/ci/run/123\nFILE:\n  docs/audit/2026-02-06-sample.context"
+        } } }
+    }));
+    let ok_text = extract_tool_text_str(&close_with_folded_proof_input);
+    assert_tag_light(&ok_text);
+    assert!(
+        !ok_text.starts_with("ERROR:"),
+        "strict proof_input should accept wrapped continuations by folding them"
+    );
+}
+
+#[test]
 fn proof_input_note_does_not_satisfy_proof_gate() {
     let mut server = Server::start_initialized_with_args(
         "proof_input_note_does_not_satisfy_proof_gate",
