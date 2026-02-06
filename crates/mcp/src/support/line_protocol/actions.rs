@@ -33,7 +33,7 @@ pub(super) fn append_actions_as_commands_limited(
             && args
                 .get("op")
                 .and_then(|v| v.as_str())
-                .is_some_and(|op| op == "schema.get" || op == "migration.lookup")
+                .is_some_and(|op| op == "schema.get")
         {
             return false;
         }

@@ -1,9 +1,46 @@
 #![forbid(unsafe_code)]
 
+use crate::Toolset;
+use crate::ops::{CommandRegistry, Tier, ToolName};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
-fn ops_schema(golden_ops: &[&str]) -> Value {
-    let mut ops = golden_ops.iter().map(|s| json!(s)).collect::<Vec<_>>();
+fn tier_allowed(toolset: Toolset, tier: Tier) -> bool {
+    match toolset {
+        Toolset::Core => tier == Tier::Gold,
+        Toolset::Daily => tier == Tier::Gold || tier == Tier::Advanced,
+        Toolset::Full => true,
+    }
+}
+
+fn collect_op_aliases(tool: ToolName, toolset: Toolset) -> Vec<String> {
+    let registry = CommandRegistry::global();
+    let mut out = BTreeSet::<String>::new();
+
+    for spec in registry.specs() {
+        if spec.domain_tool != tool {
+            continue;
+        }
+        if !tier_allowed(toolset, spec.tier) {
+            continue;
+        }
+        for alias in spec.op_aliases.iter() {
+            let trimmed = alias.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            out.insert(trimmed.to_string());
+        }
+    }
+
+    out.into_iter().collect::<Vec<_>>()
+}
+
+fn ops_schema(tool: ToolName, toolset: Toolset) -> Value {
+    let mut ops = collect_op_aliases(tool, toolset)
+        .into_iter()
+        .map(|s| json!(s))
+        .collect::<Vec<_>>();
     ops.push(json!("call"));
     json!({
         "type": "object",
@@ -20,6 +57,10 @@ fn ops_schema(golden_ops: &[&str]) -> Value {
 }
 
 pub(crate) fn tool_definitions() -> Vec<Value> {
+    tool_definitions_for(Toolset::Full)
+}
+
+pub(crate) fn tool_definitions_for(toolset: Toolset) -> Vec<Value> {
     vec![
         json!({
             "name": "status",
@@ -54,51 +95,42 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workspace",
             "description": "Workspace operations (v1).",
-            "inputSchema": ops_schema(&["use", "reset"])
+            "inputSchema": ops_schema(ToolName::WorkspaceOps, toolset)
         }),
         json!({
             "name": "tasks",
             "description": "Tasks operations (v1).",
-            "inputSchema": ops_schema(&["plan.create", "plan.decompose", "execute.next", "evidence.capture", "step.close"])
+            "inputSchema": ops_schema(ToolName::TasksOps, toolset)
         }),
         json!({
             "name": "jobs",
             "description": "Delegation jobs operations (v1).",
-            "inputSchema": ops_schema(&["create", "list", "radar", "open", "runner.start"])
+            "inputSchema": ops_schema(ToolName::JobsOps, toolset)
         }),
         json!({
             "name": "think",
             "description": "Reasoning/knowledge operations (v1).",
-            "inputSchema": ops_schema(&[
-                "knowledge.upsert",
-                "knowledge.query",
-                "knowledge.recall",
-                "knowledge.lint",
-                "reasoning.seed",
-                "reasoning.pipeline",
-                "idea.branch.create",
-                "idea.branch.merge"
-            ])
+            "inputSchema": ops_schema(ToolName::ThinkOps, toolset)
         }),
         json!({
             "name": "graph",
             "description": "Graph operations (v1).",
-            "inputSchema": ops_schema(&["query", "apply", "merge"])
+            "inputSchema": ops_schema(ToolName::GraphOps, toolset)
         }),
         json!({
             "name": "vcs",
             "description": "VCS operations (v1).",
-            "inputSchema": ops_schema(&["branch.create"])
+            "inputSchema": ops_schema(ToolName::VcsOps, toolset)
         }),
         json!({
             "name": "docs",
             "description": "Docs operations (v1).",
-            "inputSchema": ops_schema(&["list", "show", "diff", "merge"])
+            "inputSchema": ops_schema(ToolName::DocsOps, toolset)
         }),
         json!({
             "name": "system",
             "description": "System operations (v1).",
-            "inputSchema": ops_schema(&["schema.get", "ops.summary", "cmd.list", "migration.lookup"])
+            "inputSchema": ops_schema(ToolName::SystemOps, toolset)
         }),
     ]
 }

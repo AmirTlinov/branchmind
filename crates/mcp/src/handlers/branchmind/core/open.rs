@@ -543,7 +543,7 @@ impl McpServer {
                     "UNKNOWN_ID",
                     "Unknown runner id",
                     Some(
-                        "Copy a runner:<id> ref from tasks_jobs_radar runner lines or ensure the runner is heartbeating.",
+                        "Copy a runner:<id> ref from jobs(op=radar) runner lines or ensure the runner is heartbeating (jobs cmd=jobs.runner.heartbeat).",
                     ),
                     vec![],
                 );
@@ -563,9 +563,11 @@ impl McpServer {
 
             if let Some(job_id) = lease.lease.active_job_id.as_deref() {
                 suggestions.push(json!({
-                    "tool": "open",
+                    "action": "call_tool",
+                    "target": "open",
                     "reason": "Open the active job for this runner",
-                    "args_hint": {
+                    "priority": "medium",
+                    "params": {
                         "workspace": workspace.as_str(),
                         "id": job_id
                     }
@@ -703,7 +705,7 @@ impl McpServer {
                 return ai_error_with(
                     "UNKNOWN_ID",
                     "Unknown job id",
-                    Some("Copy a JOB-* id from tasks_snapshot or tasks_jobs_list."),
+                    Some("Copy a JOB-* id from tasks(cmd=tasks.snapshot) or jobs(cmd=jobs.list)."),
                     vec![],
                 );
             };
@@ -789,9 +791,11 @@ impl McpServer {
             let ctx_count = ctx_events.len();
 
             suggestions.push(json!({
-                "tool": "tasks_jobs_tail",
+                "action": "call_tool",
+                "target": "jobs.tail",
                 "reason": "Follow job events incrementally (no lose-place loops)",
-                "args_hint": {
+                "priority": "medium",
+                "params": {
                     "workspace": workspace.as_str(),
                     "job": job_id.as_str(),
                     "after_seq": seq,
@@ -801,9 +805,11 @@ impl McpServer {
             }));
 
             suggestions.push(json!({
-                "tool": "tasks_jobs_open",
+                "action": "call_tool",
+                "target": "jobs.open",
                 "reason": "Open the job (status + prompt + recent events)",
-                "args_hint": {
+                "priority": "medium",
+                "params": {
                     "workspace": workspace.as_str(),
                     "job": job_id.as_str(),
                     "include_prompt": include_drafts,
@@ -859,7 +865,9 @@ impl McpServer {
                     return ai_error_with(
                         "UNKNOWN_ID",
                         "Unknown job id",
-                        Some("Copy a JOB-* id from tasks_snapshot or tasks_jobs_list."),
+                        Some(
+                            "Copy a JOB-* id from tasks(cmd=tasks.snapshot) or jobs(cmd=jobs.list).",
+                        ),
                         vec![],
                     );
                 }
@@ -886,9 +894,11 @@ impl McpServer {
 
             if !include_drafts {
                 suggestions.push(json!({
-                    "tool": "tasks_jobs_open",
+                    "action": "call_tool",
+                    "target": "jobs.open",
                     "reason": "Open full job spec (prompt) and more events",
-                    "args_hint": {
+                    "priority": "medium",
+                    "params": {
                         "workspace": workspace.as_str(),
                         "job": id,
                         "include_prompt": true,
@@ -902,9 +912,11 @@ impl McpServer {
                 && let Some(oldest) = opened.events.last()
             {
                 suggestions.push(json!({
-                    "tool": "tasks_jobs_open",
+                    "action": "call_tool",
+                    "target": "jobs.open",
                     "reason": "Page older job events",
-                    "args_hint": {
+                    "priority": "medium",
+                    "params": {
                         "workspace": workspace.as_str(),
                         "job": id,
                         "include_prompt": false,

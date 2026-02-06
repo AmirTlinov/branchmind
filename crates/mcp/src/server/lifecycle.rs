@@ -142,8 +142,19 @@ impl McpServer {
         }
 
         if method == "tools/list" {
-            // v1: strict surface = 10, toolset params are ignored (legacy clients may still send).
-            let tools = crate::tools_v1::tool_definitions();
+            // v1: strict surface = 10 portals. `toolset` is a disclosure lens that changes
+            // only the advertised op enums (gold → advanced → internal), never the tool list.
+            let override_toolset = request
+                .params
+                .as_ref()
+                .and_then(|v| v.get("toolset"))
+                .and_then(|v| v.as_str())
+                .and_then(|raw| {
+                    let normalized = raw.trim().to_ascii_lowercase();
+                    crate::Toolset::from_str(normalized.as_str())
+                });
+            let lens = override_toolset.unwrap_or(self.toolset);
+            let tools = crate::tools_v1::tool_definitions_for(lens);
             return Some(crate::json_rpc_response(
                 request.id,
                 json!({ "tools": tools }),

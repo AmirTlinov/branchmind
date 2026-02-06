@@ -149,6 +149,31 @@ fn handler_suggestions_to_actions(
             continue;
         }
 
+        if target == "open" {
+            let mut args = match params.as_object() {
+                Some(obj) => obj.clone(),
+                None => serde_json::Map::new(),
+            };
+            if let Some(ws) = workspace
+                && !args.contains_key("workspace")
+            {
+                args.insert("workspace".to_string(), Value::String(ws.to_string()));
+            }
+            args.entry("budget_profile".to_string())
+                .or_insert_with(|| Value::String(BudgetProfile::Portal.as_str().to_string()));
+            args.entry("view".to_string())
+                .or_insert_with(|| Value::String("compact".to_string()));
+            out.push(Action {
+                action_id: format!("recover.handler.open::{idx}"),
+                priority,
+                tool: ToolName::Open.as_str().to_string(),
+                args: Value::Object(args),
+                why,
+                risk: "Низкий".to_string(),
+            });
+            continue;
+        }
+
         // Most handler suggestions reference handler names; map them via registry.
         if let Some(spec) = registry.find_by_handler_name(target) {
             let mut env = serde_json::Map::new();
@@ -178,20 +203,56 @@ fn handler_suggestions_to_actions(
             continue;
         }
 
-        // Fallback: recommend migration lookup for deprecated tool names.
+        // Some suggestions may already reference cmd strings (not handler names).
+        if let Some(spec) = registry.find_by_cmd(target) {
+            let mut env = serde_json::Map::new();
+            if let Some(ws) = workspace {
+                env.insert("workspace".to_string(), Value::String(ws.to_string()));
+            }
+            env.insert("op".to_string(), Value::String("call".to_string()));
+            env.insert("cmd".to_string(), Value::String(spec.cmd.clone()));
+            env.insert("args".to_string(), params);
+            env.insert(
+                "budget_profile".to_string(),
+                Value::String(spec.budget.default_profile.as_str().to_string()),
+            );
+            env.insert("view".to_string(), Value::String("compact".to_string()));
+
+            out.push(Action {
+                action_id: format!(
+                    "recover.cmd.call.{}::{idx}",
+                    sanitize_action_id_segment(target)
+                ),
+                priority,
+                tool: spec.domain_tool.as_str().to_string(),
+                args: Value::Object(env),
+                why,
+                risk: "Низкий".to_string(),
+            });
+            continue;
+        }
+
+        // Fallback: we can't resolve the suggestion target, so provide a deterministic
+        // discovery action (bounded cmd listing).
+        let prefix = target
+            .split(['_', '.'])
+            .next()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("{}.", s.to_ascii_lowercase()));
         out.push(Action {
             action_id: format!(
-                "recover.migration.lookup.{}::{idx}",
+                "recover.system.cmd.list.{}::{idx}",
                 sanitize_action_id_segment(target)
             ),
             priority: ActionPriority::High,
             tool: "system".to_string(),
             args: json!({
-                "op": "migration.lookup",
-                "args": { "old_name": target },
+                "op": "cmd.list",
+                "args": { "prefix": prefix },
                 "budget_profile": "portal"
             }),
-            why: format!("Найти v1 cmd для устаревшего tool имени {target}."),
+            why: format!("Найти правильный cmd для неизвестного action target: {target}."),
             risk: "Низкий".to_string(),
         });
     }

@@ -27,7 +27,7 @@ impl McpServer {
                 let mut suggestions = Vec::new();
                 if checkout.is_some() {
                     suggestions.push(suggest_call(
-                        "think_card",
+                        "think.card",
                         "Start with a lightweight note.",
                         "high",
                         json!({ "workspace": workspace.as_str(), "card": "First note" }),
@@ -38,7 +38,7 @@ impl McpServer {
                     json!({
                         "workspace": workspace.as_str(),
                         "storage_dir": self.store.storage_dir().to_string_lossy().to_string(),
-                        "schema_version": "v0",
+                        "schema_version": "v1",
                         "checkout": checkout,
                         "defaults": defaults
                     }),

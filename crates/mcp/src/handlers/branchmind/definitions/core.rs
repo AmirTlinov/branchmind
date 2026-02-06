@@ -16,22 +16,6 @@ pub(crate) fn core_definitions() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "status",
-            "description": "Get reasoning store status for a workspace.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workspace": { "type": "string" },
-                    "max_chars": { "type": "integer" },
-                    "verbosity": {
-                        "type": "string",
-                        "enum": ["full", "compact"]
-                    }
-                },
-                "required": []
-            }
-        }),
-        json!({
             "name": "workspace_use",
             "description": "Switch the active workspace for this session (no restart).",
             "inputSchema": {

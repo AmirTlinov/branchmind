@@ -26,7 +26,6 @@ macro_rules! define_branchmind_dispatch {
 
 define_branchmind_dispatch! {
     "init" => tool_branchmind_init,
-    "status" => tool_branchmind_status,
     "workspace_use" => tool_branchmind_workspace_use,
     "workspace_reset" => tool_branchmind_workspace_reset,
     "open" => tool_branchmind_open,

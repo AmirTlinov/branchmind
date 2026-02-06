@@ -44,10 +44,10 @@ fn render_help_text(max_chars: Option<usize>) -> String {
         &mut out,
         "DAILY",
         &[
-            "Golden path (core): status → tasks_macro_start → tasks_snapshot.",
-            "Daily add-ons: tasks_macro_delegate, tasks_jobs_radar, tasks_macro_close_step, think_card, think_playbook, open.",
-            "Finishing: tasks_macro_close_step auto-finishes when no open steps; explicit tasks_macro_finish exists in the full toolset.",
-            "Views: tasks_snapshot defaults to view=smart; tasks_resume_super supports view=smart|explore|audit for cold/warm archive and cross-lane reads.",
+            "Golden path (core): status → tasks(cmd=tasks.macro.start) → tasks(cmd=tasks.snapshot).",
+            "Daily add-ons: tasks(cmd=tasks.macro.delegate), jobs(op=radar), tasks(cmd=tasks.macro.close.step), think(cmd=think.card), think(cmd=think.playbook), open.",
+            "Finishing: tasks(cmd=tasks.macro.close.step) auto-finishes when no open steps; explicit tasks(cmd=tasks.macro.finish) exists in the full toolset.",
+            "Views: tasks(cmd=tasks.snapshot) defaults to view=smart; tasks(cmd=tasks.resume.super) supports view=smart|explore|audit for cold/warm archive and cross-lane reads.",
             "Progressive disclosure: tools/list toolset=daily|full reveals more tools when needed.",
         ],
     );
@@ -57,7 +57,7 @@ fn render_help_text(max_chars: Option<usize>) -> String {
         "PROOF",
         &[
             "Preferred receipts: CMD: ... (what you ran) + LINK: ... (CI/artifact/log).",
-            "Proof shortcut: pass proof as string/array/object to tasks_macro_close_step.",
+            "Proof shortcut: pass proof as string/array/object to tasks(cmd=tasks.macro.close.step).",
             "Auto-normalization (proof_input/proof): URL lines become LINK; strong shell command lines become CMD; path-like lines become FILE; everything else becomes NOTE (does not count as proof).",
             "Markdown bullets are accepted in proof lines (e.g. '- LINK: ...').",
             "URL-like attachments count as LINK for the soft PROOF_WEAK lint.",
@@ -71,12 +71,12 @@ fn render_help_text(max_chars: Option<usize>) -> String {
         "DELEGATION",
         &[
             "Delegate work as jobs (JOB-*). BranchMind tracks; runners execute out-of-process.",
-            "Create: tasks_macro_delegate (creates task + cockpit + job).",
-            "Inbox: tasks_jobs_radar (daily defaults to lines; ref-first; open id=JOB-*@seq; reply reply_job=JOB-* reply_message=\"...\").",
-            "24h: runners heartbeat; reclaim stale RUNNING via tasks_jobs_claim allow_stale=true.",
-            "Fan-out: tasks_macro_fanout_jobs (full toolset) splits by anchors.",
-            "Fan-in: tasks_macro_merge_report (full toolset) pins a canonical merge report.",
-            "Steer: reply via tasks_jobs_radar (reply args) or tasks_jobs_message (full toolset).",
+            "Create: tasks(cmd=tasks.macro.delegate) (creates task + cockpit + job).",
+            "Inbox: jobs(op=radar) (daily defaults to lines; ref-first; open id=JOB-*@seq; reply reply_job=JOB-* reply_message=\"...\").",
+            "24h: runner heartbeat via jobs(cmd=jobs.runner.heartbeat); reclaim stale RUNNING via jobs(cmd=jobs.claim) allow_stale=true.",
+            "Fan-out: tasks(cmd=tasks.macro.fanout.jobs) (full toolset) splits by anchors.",
+            "Fan-in: tasks(cmd=tasks.macro.merge.report) (full toolset) pins a canonical merge report.",
+            "Steer: reply via jobs(op=radar) reply args or jobs(cmd=jobs.message) (full toolset).",
             "Proof: runners should refuse DONE without non-JOB refs.",
         ],
     );
@@ -86,9 +86,9 @@ fn render_help_text(max_chars: Option<usize>) -> String {
         "ANCHORS",
         &[
             "Anchors are meaning coordinates: a:<slug> (not file paths).",
-            "Write-to-meaning: macro_anchor_note binds a note/card to an anchor (+ optional task/step scope).",
-            "Resume-by-meaning: anchor_snapshot shows a bounded canon-first slice (include_drafts expands).",
-            "Hygiene: anchors_lint / anchors_merge / anchors_rename keep the map navigable.",
+            "Write-to-meaning: think(cmd=think.macro.anchor.note) binds a note/card to an anchor (+ optional task/step scope).",
+            "Resume-by-meaning: think(cmd=think.anchor.snapshot) shows a bounded canon-first slice (include_drafts expands).",
+            "Hygiene: think(cmd=think.anchor.lint/merge/rename) keeps the map navigable.",
         ],
     );
 

@@ -14,6 +14,7 @@ mod vcs_ops;
 mod workspace_ops;
 
 pub(crate) use definitions::tool_definitions;
+pub(crate) use definitions::tool_definitions_for;
 pub(crate) use dispatch::dispatch_tool;
 
 /// v1 advertised MCP surface: exactly 10 portal tools.

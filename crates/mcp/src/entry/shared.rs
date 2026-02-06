@@ -421,7 +421,7 @@ fn try_handle_locally(
     body: &[u8],
     method: Option<&str>,
     expects_response: bool,
-    _config: &SharedProxyConfig,
+    config: &SharedProxyConfig,
 ) -> LocalHandling {
     let Some(method) = method else {
         return LocalHandling::NotHandled;
@@ -440,21 +440,21 @@ fn try_handle_locally(
         return LocalHandling::NoResponse;
     }
 
-    let id = serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|v| v.get("id").cloned());
+    let parsed = serde_json::from_slice::<Value>(body).ok();
+    let id = parsed.as_ref().and_then(|v| v.get("id").cloned());
 
     match method {
         "initialize" => {
             // Some clients are strict about the server echoing the negotiated protocol version.
             // In shared mode we short-circuit initialize locally, so we must reflect the
             // client’s declared version here as well.
-            let protocol_version = serde_json::from_slice::<Value>(body)
-                .ok()
-                .and_then(|v| v.get("params").cloned())
-                .and_then(|v| v.get("protocolVersion").cloned())
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_else(|| crate::MCP_VERSION.to_string());
+            let protocol_version = parsed
+                .as_ref()
+                .and_then(|v| v.get("params"))
+                .and_then(|v| v.get("protocolVersion"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(crate::MCP_VERSION)
+                .to_string();
             let resp = crate::json_rpc_response(
                 id,
                 json!({
@@ -522,10 +522,21 @@ fn try_handle_locally(
             }
         }
         "tools/list" => {
-            // v1: strict surface = 10, ignore toolset overrides from legacy clients.
+            // v1: strict surface = 10 portals. `toolset` is a disclosure lens that changes
+            // only the advertised op enums, never the tool list.
+            let override_toolset = parsed
+                .as_ref()
+                .and_then(|v| v.get("params"))
+                .and_then(|v| v.get("toolset"))
+                .and_then(|v| v.as_str())
+                .and_then(|raw| {
+                    let normalized = raw.trim().to_ascii_lowercase();
+                    Toolset::from_str(normalized.as_str())
+                });
+            let lens = override_toolset.unwrap_or(config.toolset);
             let resp = crate::json_rpc_response(
                 id,
-                json!({ "tools": crate::tools_v1::tool_definitions() }),
+                json!({ "tools": crate::tools_v1::tool_definitions_for(lens) }),
             );
             match serde_json::to_vec(&resp) {
                 Ok(bytes) => LocalHandling::Response(bytes),

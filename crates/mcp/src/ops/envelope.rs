@@ -95,18 +95,18 @@ pub(crate) fn error_unknown_tool(name: &str) -> Value {
             code: "UNKNOWN_TOOL".to_string(),
             message: format!("Unknown tool: {name}"),
             recovery: Some(
-                "Use system migration.lookup to map old names, or tools/list for v1 surface."
+                "Use tools/list to see the strict v1 surface (10 portals). Then call tools/call with one of those names. Long-tail ops are available via op=\"call\" + cmd (see system ops.summary / schema.get)."
                     .to_string(),
             ),
         },
     );
     resp.actions.push(Action {
-        action_id: format!("recover.migration.lookup::{name}"),
+        action_id: format!("recover.system.ops.summary::{name}"),
         priority: ActionPriority::High,
         tool: ToolName::SystemOps.as_str().to_string(),
-        args: json!({ "op": "migration.lookup", "args": { "old_name": name }, "budget_profile": "portal" }),
-        why: "Найти новый cmd для старого имени инструмента.".to_string(),
-        risk: "Без миграции вызов будет UNKNOWN_TOOL.".to_string(),
+        args: json!({ "op": "ops.summary", "args": {}, "budget_profile": "portal", "view": "compact" }),
+        why: "Показать v1 поверхность (10 порталов) + золотые ops + cmd registry summary.".to_string(),
+        risk: "Низкий".to_string(),
     });
     resp.actions.push(Action {
         action_id: "recover.status.portal".to_string(),

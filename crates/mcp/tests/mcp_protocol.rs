@@ -72,6 +72,109 @@ fn mcp_auto_init_allows_tools_list_without_notifications() {
 }
 
 #[test]
+fn tools_list_toolset_is_a_disclosure_lens_only() {
+    let mut server = Server::start_initialized_with_args(
+        "tools_list_toolset_is_a_disclosure_lens_only",
+        &["--toolset", "core", "--workspace", "ws_toolset_lens"],
+    );
+
+    let core = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }));
+    let full = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": { "toolset": "full" }
+    }));
+
+    let core_tools = core
+        .get("result")
+        .and_then(|v| v.get("tools"))
+        .and_then(|v| v.as_array())
+        .expect("core result.tools");
+    let full_tools = full
+        .get("result")
+        .and_then(|v| v.get("tools"))
+        .and_then(|v| v.as_array())
+        .expect("full result.tools");
+
+    let mut core_names = core_tools
+        .iter()
+        .filter_map(|t| {
+            t.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect::<Vec<_>>();
+    let mut full_names = full_tools
+        .iter()
+        .filter_map(|t| {
+            t.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect::<Vec<_>>();
+    core_names.sort();
+    full_names.sort();
+
+    assert_eq!(
+        core_names, full_names,
+        "toolset must never change the tool list (surface stays 10 portals)"
+    );
+
+    fn find_tool<'a>(tools: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
+        tools
+            .iter()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
+            .unwrap_or_else(|| panic!("missing tool: {name}"))
+    }
+
+    fn op_enum(tool: &serde_json::Value) -> Vec<String> {
+        tool.get("inputSchema")
+            .and_then(|v| v.get("properties"))
+            .and_then(|v| v.get("op"))
+            .and_then(|v| v.get("enum"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    let tasks_core_ops = op_enum(find_tool(core_tools, "tasks"));
+    let tasks_full_ops = op_enum(find_tool(full_tools, "tasks"));
+    assert!(
+        tasks_core_ops.iter().any(|op| op == "execute.next"),
+        "core lens must include tier=gold tasks ops"
+    );
+    assert!(
+        !tasks_core_ops.iter().any(|op| op == "plan.create"),
+        "core lens must not advertise tier=advanced tasks ops"
+    );
+    assert!(
+        tasks_full_ops.iter().any(|op| op == "plan.create"),
+        "full lens must advertise tier=advanced tasks ops"
+    );
+
+    let system_core_ops = op_enum(find_tool(core_tools, "system"));
+    let system_full_ops = op_enum(find_tool(full_tools, "system"));
+    assert!(
+        !system_core_ops.iter().any(|op| op == "cmd.list"),
+        "core lens must not advertise tier=advanced system ops"
+    );
+    assert!(
+        system_full_ops.iter().any(|op| op == "cmd.list"),
+        "full lens must advertise tier=advanced system ops"
+    );
+}
+
+#[test]
 fn mcp_resources_list_is_supported_and_empty() {
     let mut server = Server::start("resources_list_supported");
 

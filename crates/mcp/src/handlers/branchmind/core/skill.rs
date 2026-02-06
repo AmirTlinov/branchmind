@@ -90,8 +90,8 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 &mut out,
                 profile.section_name(),
                 &[
-                    "Golden path: status → tasks_macro_start → tasks_snapshot.",
-                    "When lost: tasks_snapshot (refs=true) → open <ref> → follow 1 next action.",
+                    "Golden path: status → tasks(cmd=tasks.macro.start) → tasks(cmd=tasks.snapshot).",
+                    "When lost: tasks(cmd=tasks.snapshot) → open <ref> → follow 1 next action.",
                     "Write to meaning: use anchors (a:<slug>) for decisions/evidence/tests.",
                     "Close steps fast: tasks.macro.close.step with proof_input (URL/CMD/FILE/NOTE → auto-normalized).",
                 ],
@@ -102,7 +102,7 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 &mut out,
                 profile.section_name(),
                 &[
-                    "Loop: tasks_snapshot → tasks_lint (patches_limit=2) → apply 1 patch → think_card (hypothesis+test) → tasks.macro.close.step (proof_input=...).",
+                    "Loop: tasks(cmd=tasks.snapshot) → tasks(cmd=tasks.lint) (patches_limit=2) → apply 1 patch → think(cmd=think.card) (hypothesis+test) → tasks(cmd=tasks.macro.close.step) (proof_input=...).",
                     "DoD discipline: every active step has success_criteria + tests + proof.",
                     "Override exists but must be explicit: reason+risk (visible debt).",
                 ],
@@ -125,7 +125,7 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
                 profile.section_name(),
                 &[
                     "Fan-out: split work into 3–10 jobs by anchors; keep each job bounded.",
-                    "Inbox loop: tasks_jobs_radar → open JOB ref → answer once → job continues.",
+                    "Inbox loop: jobs(op=radar) → open JOB ref → answer once → job continues.",
                     "Accept DONE only with proof refs (or explicit override with reason+risk).",
                     "Fan-in: produce one canonical merge report (what changed + proofs + risks).",
                     "Liveness is explicit: runner state is live/idle/offline; reclaim offline slices when needed.",
@@ -138,7 +138,7 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
         &mut out,
         "CORE LOOP",
         &[
-            "Read tasks_snapshot (BM‑L1 compass) → do 1 next action → leave 1 receipt → repeat.",
+            "Read tasks(cmd=tasks.snapshot) (BM‑L1 compass) → do 1 next action → leave 1 receipt → repeat.",
             "Keep 1 primary next action + 1 backup. Everything else is hidden by default.",
             "Never “hunt chat”: every important thing must have a ref you can open.",
         ],

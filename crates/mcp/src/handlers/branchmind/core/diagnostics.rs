@@ -125,7 +125,7 @@ impl McpServer {
                 "severity": "warning",
                 "code": "NO_TARGET",
                 "message": "no task/plan target or focus set",
-                "recovery": "Use tasks_context to list items, then set focus via tasks_focus_set."
+                "recovery": "Use tasks(cmd=tasks.context) to list items, then set focus via tasks(cmd=tasks.focus.set)."
             }));
             suggestions.push(suggest_call(
                 "tasks_context",
@@ -145,15 +145,15 @@ impl McpServer {
 
         let golden_path = json!([
             {
-                "tool": "macro_branch_note",
+                "cmd": "think.idea.branch.create",
                 "purpose": "start an initiative branch + seed a first note"
             },
             {
-                "tool": "tasks_macro_start",
+                "cmd": "tasks.macro.start",
                 "purpose": "create a task with steps and open a resume capsule"
             },
             {
-                "tool": "tasks_snapshot",
+                "cmd": "tasks.snapshot",
                 "purpose": "refresh unified snapshot (tasks + reasoning + diff)"
             }
         ]);

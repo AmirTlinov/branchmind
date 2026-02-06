@@ -44,7 +44,7 @@ fn branchmind_skill_is_budget_safe_and_line_protocol() {
         "skill output must identify the selected profile"
     );
     assert!(
-        text.contains("[TEAMLEAD]") && text.contains("tasks_jobs_radar"),
+        text.contains("[TEAMLEAD]") && text.contains("jobs(op=radar)"),
         "teamlead pack should contain delegation/inbox guidance"
     );
     assert!(
