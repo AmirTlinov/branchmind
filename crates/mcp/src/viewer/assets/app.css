@@ -208,12 +208,7 @@ html[data-ui="legacy"] .graph-overlay {
   user-select: none;
 }
 
-/* Avoid visual clutter: when Explorer ("Project Pulse") is open, HUD overlaps it. */
-body[data-explorer-open="1"] .hud {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
+/* HUD position is dynamically docked in JS to avoid overlapping floating panels. */
 
 .hud-title {
   font-size: 12px;

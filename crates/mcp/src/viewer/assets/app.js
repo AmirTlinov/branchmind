@@ -1308,6 +1308,186 @@ function updatePanelBodyState() {
   body.dataset.explorerOpen = windowUi.explorer.open ? "1" : "0";
   body.dataset.detailOpen = windowUi.detail.open ? "1" : "0";
   body.dataset.front = windowUi.front === "explorer" ? "explorer" : "detail";
+
+  dockGraphOverlays();
+}
+
+function rectIntersects(a, b) {
+  if (!a || !b) return false;
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function clampDockRect(rect, margin) {
+  const m = typeof margin === "number" ? margin : 0;
+  const w = Math.max(1, rect.right - rect.left);
+  const h = Math.max(1, rect.bottom - rect.top);
+  const maxLeft = Math.max(m, window.innerWidth - m - w);
+  const maxTop = Math.max(m, window.innerHeight - m - h);
+  const left = clamp(rect.left, m, maxLeft);
+  const top = clamp(rect.top, m, maxTop);
+  return { left, top, right: left + w, bottom: top + h, width: w, height: h };
+}
+
+function inflateRect(rect, pad) {
+  const p = typeof pad === "number" ? pad : 0;
+  return {
+    left: rect.left - p,
+    top: rect.top - p,
+    right: rect.right + p,
+    bottom: rect.bottom + p,
+  };
+}
+
+function elementIsInteractive(el) {
+  if (!el) return false;
+  try {
+    const style = window.getComputedStyle(el);
+    if (style.visibility === "hidden") return false;
+    if (style.pointerEvents === "none") return false;
+    const opacity = Number(style.opacity);
+    if (Number.isFinite(opacity) && opacity <= 0.01) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function placeOverlay(el, candidates, avoidRects, placedRects, opts) {
+  if (!el) return null;
+  const margin = typeof opts?.margin === "number" ? opts.margin : 22;
+  const topInset = Math.max(margin, safeTopInsetPx());
+  const rect = el.getBoundingClientRect();
+  const w = Math.max(1, rect.width || el.offsetWidth || 1);
+  const h = Math.max(1, rect.height || el.offsetHeight || 1);
+
+  const within = (x, y) => {
+    const next = clampDockRect(
+      {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+      },
+      margin
+    );
+    return next;
+  };
+
+  const tryCandidate = (cand) => {
+    const x = typeof cand?.x === "number" ? cand.x : margin;
+    const y =
+      typeof cand?.y === "number"
+        ? cand.y
+        : cand?.dock === "top"
+          ? topInset
+          : cand?.dock === "bottom"
+            ? window.innerHeight - margin - h
+            : topInset;
+    const next = within(x, y);
+    const padded = inflateRect(next, 10);
+    const collides =
+      (avoidRects || []).some((other) => rectIntersects(padded, other)) ||
+      (placedRects || []).some((other) => rectIntersects(padded, other));
+    if (collides) return null;
+    return next;
+  };
+
+  let chosen = null;
+  for (let i = 0; i < (candidates || []).length; i += 1) {
+    const next = tryCandidate(candidates[i]);
+    if (next) {
+      chosen = next;
+      break;
+    }
+  }
+
+  if (!chosen) {
+    chosen = within(margin, topInset);
+  }
+
+  el.style.left = `${Math.round(chosen.left)}px`;
+  el.style.top = `${Math.round(chosen.top)}px`;
+  el.style.right = "auto";
+  el.style.bottom = "auto";
+
+  if (Array.isArray(placedRects)) {
+    placedRects.push(inflateRect(chosen, 12));
+  }
+  return chosen;
+}
+
+function dockGraphOverlays() {
+  // Works in both flagship and legacy modes; overlays still exist in DOM.
+  if (!nodes.graphControls || !nodes.hud || !nodes.minimap) return;
+
+  const margin = 22;
+  const avoid = [];
+
+  const explorerRect =
+    nodes.sidebarPanel && elementIsInteractive(nodes.sidebarPanel)
+      ? inflateRect(nodes.sidebarPanel.getBoundingClientRect(), 12)
+      : null;
+  const detailRect =
+    nodes.detailPanel && elementIsInteractive(nodes.detailPanel)
+      ? inflateRect(nodes.detailPanel.getBoundingClientRect(), 12)
+      : null;
+
+  if (explorerRect) avoid.push(explorerRect);
+  if (detailRect) avoid.push(detailRect);
+
+  const placed = [];
+  const topInset = Math.max(margin, safeTopInsetPx());
+
+  // HUD (map context): prefer top-left but slide away from Explorer rather than disappearing.
+  const hudRect = nodes.hud.getBoundingClientRect();
+  const hudW = Math.max(1, hudRect.width || nodes.hud.offsetWidth || 1);
+  const hudH = Math.max(1, hudRect.height || nodes.hud.offsetHeight || 1);
+  placeOverlay(
+    nodes.hud,
+    [
+      { x: margin, y: topInset },
+      explorerRect ? { x: explorerRect.right + margin, y: topInset } : null,
+      { x: window.innerWidth - margin - hudW, y: topInset },
+      { x: margin, y: window.innerHeight - margin - hudH },
+    ].filter(Boolean),
+    avoid,
+    placed,
+    { margin }
+  );
+
+  // Graph controls: prefer bottom-left but slide away from Explorer.
+  const ctrlRect = nodes.graphControls.getBoundingClientRect();
+  const ctrlW = Math.max(1, ctrlRect.width || nodes.graphControls.offsetWidth || 1);
+  const ctrlH = Math.max(1, ctrlRect.height || nodes.graphControls.offsetHeight || 1);
+  placeOverlay(
+    nodes.graphControls,
+    [
+      { x: margin, y: window.innerHeight - margin - ctrlH },
+      explorerRect ? { x: explorerRect.right + margin, y: window.innerHeight - margin - ctrlH } : null,
+      { x: window.innerWidth - margin - ctrlW, y: window.innerHeight - margin - ctrlH },
+      { x: window.innerWidth - margin - ctrlW, y: topInset },
+    ].filter(Boolean),
+    avoid,
+    placed,
+    { margin }
+  );
+
+  // Minimap: prefer bottom-right but slide left of Detail if needed.
+  const miniRect = nodes.minimap.getBoundingClientRect();
+  const miniW = Math.max(1, miniRect.width || nodes.minimap.offsetWidth || 1);
+  const miniH = Math.max(1, miniRect.height || nodes.minimap.offsetHeight || 1);
+  placeOverlay(
+    nodes.minimap,
+    [
+      { x: window.innerWidth - margin - miniW, y: window.innerHeight - margin - miniH },
+      detailRect ? { x: detailRect.left - margin - miniW, y: window.innerHeight - margin - miniH } : null,
+      { x: margin, y: window.innerHeight - margin - miniH },
+      { x: window.innerWidth - margin - miniW, y: topInset },
+    ].filter(Boolean),
+    avoid,
+    placed,
+    { margin }
+  );
 }
 
 function isInteractiveElement(target) {
@@ -5197,6 +5377,8 @@ function updateHud(snapshot) {
       nodes.hudWarning.textContent = "";
     }
   }
+
+  dockGraphOverlays();
 }
 
 function renderGraphFlagship(snapshot) {
