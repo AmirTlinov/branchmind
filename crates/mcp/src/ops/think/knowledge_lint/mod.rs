@@ -316,11 +316,11 @@ pub(super) fn handle(server: &mut crate::McpServer, env: &Envelope) -> OpRespons
         }
         let title = card.get("title").and_then(|v| v.as_str());
         let text = card.get("text").and_then(|v| v.as_str());
-        let claim = super::normalized_claim(title, text);
+        let claim = super::knowledge::normalized_claim(title, text);
         if claim.is_empty() {
             continue;
         }
-        let content_hash = super::fnv1a64(&claim);
+        let content_hash = super::knowledge::fnv1a64(&claim);
         entries.push(Entry {
             anchor_id: row.anchor_id.clone(),
             key: row.key.clone(),
