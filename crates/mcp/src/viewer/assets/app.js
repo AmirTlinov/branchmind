@@ -239,6 +239,74 @@ try {
   // ignore DOM failures
 }
 
+const initialDeepLink = {
+  plan: queryParam("plan"),
+  sel: queryParam("sel"),
+  selKind: queryParam("sel_kind"),
+  local: queryParam("local"),
+  hops: (() => {
+    const raw = (queryParam("hops") || "").trim();
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    if (!Number.isFinite(parsed)) return null;
+    return clamp(parsed, 1, 2);
+  })(),
+};
+
+const deepLinkMutation = { applied: false };
+
+async function fetchSearchItems(query, limit) {
+  try {
+    const q = (query || "").trim();
+    if (!q) return [];
+    const payload = await fetchJson(
+      workspaceUrlWithParams("/api/search", {
+        q,
+        lens: state.lens || "work",
+        limit: typeof limit === "number" ? limit : 60,
+      })
+    );
+    if (!payload || typeof payload !== "object") return [];
+    if (payload.error) return [];
+    const items = payload.items;
+    return Array.isArray(items) ? items : [];
+  } catch {
+    return [];
+  }
+}
+
+async function applyDeepLinkAfterSnapshot() {
+  if (deepLinkMutation.applied) return;
+  deepLinkMutation.applied = true;
+  if (UI_MODE !== "flagship") return;
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+
+  const sel = (initialDeepLink.sel || "").trim();
+  if (sel) {
+    const match = findMatch(snapshot, sel);
+    if (match) {
+      searchFlagship(sel);
+    } else {
+      const items = await fetchSearchItems(sel, 20);
+      const needle = sel.toLowerCase();
+      const exact =
+        items.find((item) => ((item?.id || "") + "").trim().toLowerCase() === needle) || items[0];
+      if (exact) {
+        await jumpToPaletteItem(snapshot, exact);
+      }
+    }
+  }
+
+  const localId = (initialDeepLink.local || "").trim();
+  if (localId) {
+    graphState.local.centerId = localId;
+    if (initialDeepLink.hops) graphState.local.hops = initialDeepLink.hops;
+    graphState.local.key = null;
+    renderGraphFlagship(state.snapshot || snapshot);
+    pushNavEntry();
+  }
+}
+
 function workspaceUrl(path) {
   const parts = [];
   const project = (state.projectOverride || "").trim();
@@ -342,6 +410,10 @@ function loadWorkspaceOverrideFromStorage() {
       state.workspaceOverride = trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : null;
       return;
     }
+  }
+
+  if (state.workspaceOverride) {
+    return;
   }
 
   let stored = null;
@@ -513,8 +585,10 @@ async function loadProjects() {
     const storedCandidate = (stored || "").trim() || null;
     const queryCandidateRaw = queryOverrides.enabled ? queryParam("project") : null;
     const queryCandidate = (queryCandidateRaw || "").trim() || null;
+    const currentCandidate = (state.projectOverride || "").trim() || null;
 
     const candidates = [];
+    if (currentCandidate) candidates.push({ value: currentCandidate, persist: false });
     if (queryCandidate) candidates.push({ value: queryCandidate, persist: false });
     if (storedCandidate) candidates.push({ value: storedCandidate, persist: true });
 
@@ -936,6 +1010,17 @@ async function fetchGraphLocal(nodeId, opts) {
   return await fetchJson(url);
 }
 
+async function fetchKnowledgeCard(cardId, opts) {
+  const id = (cardId || "").trim();
+  if (!id) throw new Error("card_id: missing");
+  const params = {};
+  if (opts && typeof opts === "object") {
+    if (typeof opts.max_chars === "number") params.max_chars = opts.max_chars;
+  }
+  const url = workspaceUrlWithParams(`/api/knowledge/${id}`, params);
+  return await fetchJson(url);
+}
+
 async function postJson(path, body) {
   const response = await fetchWithTimeout(
     path,
@@ -1306,6 +1391,145 @@ function renderDetailMeta(lines) {
   });
 }
 
+const toastState = { el: null, timer: 0 };
+
+function ensureToastEl() {
+  if (toastState.el && document.contains(toastState.el)) return toastState.el;
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+  el.hidden = true;
+  document.body.append(el);
+  toastState.el = el;
+  return el;
+}
+
+function showToast(message) {
+  const text = ((message || "") + "").trim();
+  if (!text) return;
+  const el = ensureToastEl();
+  el.textContent = text;
+  el.hidden = false;
+  el.classList.add("is-open");
+  if (toastState.timer) window.clearTimeout(toastState.timer);
+  toastState.timer = window.setTimeout(() => {
+    toastState.timer = 0;
+    try {
+      el.classList.remove("is-open");
+      el.hidden = true;
+    } catch {
+      // ignore
+    }
+  }, 1400);
+}
+
+async function copyTextToClipboard(text) {
+  const value = (text || "").toString();
+  if (!value) return false;
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // ignore and fallback
+  }
+
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    document.body.append(textarea);
+    textarea.select();
+    const ok = document.execCommand("copy");
+    textarea.remove();
+    return !!ok;
+  } catch {
+    return false;
+  }
+}
+
+function renderActionButton(label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "detail-action-btn";
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function workspaceForCommands() {
+  const ws = (state.snapshot?.workspace || state.workspaceOverride || "").trim();
+  return ws || null;
+}
+
+function buildCmdForSelection(kind, id, extra) {
+  const ws = workspaceForCommands();
+  const safeId = (id || "").trim();
+  if (!safeId) return null;
+
+  if (kind === "task") {
+    const args = JSON.stringify({ task: safeId });
+    return `tasks op="call" cmd="tasks.snapshot"${ws ? ` workspace="${ws}"` : ""} args=${args} view="compact" budget_profile="portal"`;
+  }
+  if (kind === "plan") {
+    const args = JSON.stringify({ plan: safeId });
+    return `tasks op="call" cmd="tasks.snapshot"${ws ? ` workspace="${ws}"` : ""} args=${args} view="compact" budget_profile="portal"`;
+  }
+  if (kind === "anchor") {
+    const anchor = (extra?.anchorId || safeId).toString().trim();
+    if (!anchor) return null;
+    const args = JSON.stringify({ anchor, limit: 12 });
+    return `think op="knowledge.recall"${ws ? ` workspace="${ws}"` : ""} args=${args} view="compact" budget_profile="portal"`;
+  }
+  if (kind === "knowledge_key") {
+    const anchor = (extra?.anchorId || "").toString().trim();
+    if (!anchor) return null;
+    const args = JSON.stringify({ anchor, limit: 12 });
+    return `think op="knowledge.recall"${ws ? ` workspace="${ws}"` : ""} args=${args} view="compact" budget_profile="portal"`;
+  }
+  return null;
+}
+
+function renderDetailActionBar(entry) {
+  const kind = (entry?.kind || "").trim();
+  const id = (entry?.id || "").trim();
+  if (!kind || !id) return null;
+
+  const bar = document.createElement("div");
+  bar.className = "detail-actionbar";
+
+  const shareUrl = buildUrlFromNavEntry({
+    selectedPlanId: state.selectedPlanId || null,
+    selection: { kind, id },
+    local: localSnapshot(),
+  });
+
+  bar.append(
+    renderActionButton("Copy link", async () => {
+      const ok = await copyTextToClipboard(shareUrl || window.location.href);
+      showToast(ok ? "Link copied" : "Copy failed");
+    })
+  );
+
+  const cmd = buildCmdForSelection(kind, id, entry);
+  if (cmd) {
+    bar.append(
+      renderActionButton("Copy cmd", async () => {
+        const ok = await copyTextToClipboard(cmd);
+        showToast(ok ? "Command copied" : "Copy failed");
+      })
+    );
+  }
+
+  return bar;
+}
+
 function renderDetailSection(title, content) {
   const section = document.createElement("div");
   const header = document.createElement("div");
@@ -1587,8 +1811,7 @@ function renderStepsBlock(steps) {
 }
 
 function renderAnchorDetail(snapshot, anchor) {
-  const token = startDetailLoad("plan", anchor.id);
-  void token;
+  const token = startDetailLoad("anchor", anchor.id);
   nodes.detailKicker.textContent = "Anchor";
   nodes.detailTitle.textContent = anchor.title || anchor.id;
 
@@ -1602,6 +1825,8 @@ function renderAnchorDetail(snapshot, anchor) {
   ]);
 
   clear(nodes.detailBody);
+  const actionBar = renderDetailActionBar({ kind: "anchor", id: anchor.id, anchorId: anchor.id });
+  if (actionBar) nodes.detailBody.append(actionBar);
   nodes.detailBody.append(
     renderDetailSection("Anchor", [
       renderDetailText(anchor.description, "No anchor description yet."),
@@ -1648,6 +1873,8 @@ function renderPlanDetail(snapshot, plan) {
     `Tasks: ${plan.task_counts.done}/${plan.task_counts.total} done`,
   ]);
   clear(nodes.detailBody);
+  const actionBar = renderDetailActionBar({ kind: "plan", id: plan.id });
+  if (actionBar) nodes.detailBody.append(actionBar);
 
   const sections = [];
   const derived = chooseDerivedPlanText(snapshot, plan);
@@ -1881,8 +2108,7 @@ function renderPlanDetail(snapshot, plan) {
 }
 
 function renderKnowledgeKeyDetail(snapshot, task) {
-  const token = startDetailLoad("task", task.id);
-  void token;
+  const token = startDetailLoad("knowledge_key", task.id);
   nodes.detailKicker.textContent = "Knowledge";
   nodes.detailTitle.textContent = task.title || task.key || task.id;
 
@@ -1897,18 +2123,24 @@ function renderKnowledgeKeyDetail(snapshot, task) {
   ]);
 
   clear(nodes.detailBody);
-  const hints = [];
+  const actionBar = renderDetailActionBar({
+    kind: "knowledge_key",
+    id: task.id,
+    anchorId: anchor?.id || task.plan_id || "",
+    cardId,
+  });
+  if (actionBar) nodes.detailBody.append(actionBar);
+
+  const cardHost = document.createElement("div");
+  cardHost.className = "detail-list";
   if (cardId) {
-    hints.push(
-      renderDetailText(
-        `This key maps to card_id=${cardId} (open via BranchMind tools).`,
-        ""
-      )
-    );
+    cardHost.append(renderDetailText(null, "Loading card…"));
+    nodes.detailBody.append(renderDetailSection("Card", [cardHost]));
+    void loadKnowledgeCard(cardId, token, cardHost, { max_chars: 20_000 });
   } else {
-    hints.push(renderDetailText(null, "No card id for this key."));
+    cardHost.append(renderDetailText(null, "No card id for this key."));
+    nodes.detailBody.append(renderDetailSection("Card", [cardHost]));
   }
-  nodes.detailBody.append(renderDetailSection("TL;DR", hints));
   setDetailVisible(true, { focus: false });
 }
 
@@ -1930,6 +2162,8 @@ function renderTaskDetail(snapshot, task) {
     `Updated: ${formatDate(task.updated_at_ms)}`,
   ]);
   clear(nodes.detailBody);
+  const actionBar = renderDetailActionBar({ kind: "task", id: task.id });
+  if (actionBar) nodes.detailBody.append(actionBar);
 
   nodes.detailBody.append(
     renderDetailSection("Task", [renderDetailText(task.description, "No task description yet.")])
@@ -2020,6 +2254,44 @@ async function loadTaskExtras(taskId, token, stepsHost, activityHost) {
     stepsHost.append(renderDetailText(null, "Unable to load steps."));
     clear(activityHost);
     activityHost.append(renderDetailText(null, formatApiError(err?.message)));
+  }
+}
+
+async function loadKnowledgeCard(cardId, token, host, opts) {
+  const id = (cardId || "").toString().trim();
+  if (!id) return;
+  const maxChars = typeof opts?.max_chars === "number" ? opts.max_chars : 20_000;
+  try {
+    const payload = await fetchKnowledgeCard(id, { max_chars: maxChars });
+    if (!isCurrentDetail(token)) return;
+    clear(host);
+
+    if (payload && typeof payload === "object" && payload.error) {
+      host.append(renderDetailText(null, payload.error.message || "Unable to load card."));
+      return;
+    }
+
+    const card = payload?.card || null;
+    const text = card?.text ?? null;
+    host.append(renderDetailText(text, "No card text."));
+
+    const truncated = !!payload?.truncated;
+    if (truncated) {
+      const nextMax = Math.min(Math.max(40_000, maxChars * 2), 200_000);
+      host.append(
+        renderLoadMoreButton(
+          `Load more (max_chars=${nextMax})`,
+          () => {
+            void loadKnowledgeCard(id, token, host, { max_chars: nextMax });
+          },
+          false
+        )
+      );
+    }
+  } catch (err) {
+    if (!isCurrentDetail(token)) return;
+    clear(host);
+    host.append(renderDetailText(null, formatApiError(err?.message)));
   }
 }
 
@@ -2254,6 +2526,10 @@ function renderGoals(snapshot) {
 
     item.append(title, meta);
     item.addEventListener("click", () => {
+      if (UI_MODE === "flagship") {
+        searchFlagship(plan.id);
+        return;
+      }
       state.selectedPlanId = plan.id;
       render(snapshot);
       renderPlanDetail(snapshot, plan);
@@ -2404,6 +2680,10 @@ function renderTasks(snapshot) {
 
     item.append(title, meta);
     item.addEventListener("click", () => {
+      if (UI_MODE === "flagship") {
+        searchFlagship(task.id);
+        return;
+      }
       renderTaskDetail(snapshot, task);
     });
     nodes.taskList.append(item);
@@ -5291,6 +5571,7 @@ if (nodes.project) {
       setProjectOverride(next);
     }
     workspaceMutation.recoveredGuardMismatch = false;
+    setWorkspaceOverride(null, { persist: false });
     loadWorkspaceOverrideFromStorage();
     applyExplorerWindowPreference({ defaultOpen: true });
     applyDetailWindowPreference({ defaultOpen: false });
@@ -5510,6 +5791,65 @@ function navEntryEquals(a, b) {
   );
 }
 
+const URL_MANAGED_KEYS = new Set([
+  "project",
+  "workspace",
+  "lens",
+  "plan",
+  "sel",
+  "sel_kind",
+  "local",
+  "hops",
+]);
+
+function buildUrlFromNavEntry(entry) {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    URL_MANAGED_KEYS.forEach((key) => params.delete(key));
+
+    const lens = normalizeLens(state.lens || "work");
+    params.set("lens", lens);
+
+    const project = (state.projectOverride || "").trim();
+    if (project) params.set("project", project);
+
+    const workspace = (state.workspaceOverride || "").trim();
+    if (workspace) params.set("workspace", workspace);
+
+    const plan = ((entry?.selectedPlanId || state.selectedPlanId || "") + "").trim();
+    if (plan) params.set("plan", plan);
+
+    const sel = entry?.selection || null;
+    if (sel && sel.id) {
+      params.set("sel", sel.id);
+      if (sel.kind) params.set("sel_kind", sel.kind);
+    }
+
+    const local = entry?.local || null;
+    if (local && local.centerId) {
+      params.set("local", local.centerId);
+      params.set("hops", String(local.hops || 2));
+    }
+
+    const query = params.toString();
+    const path = window.location.pathname || "/";
+    return query ? `${path}?${query}` : path;
+  } catch {
+    return null;
+  }
+}
+
+function syncUrlFromNavEntry(entry) {
+  if (!urlSync.enabled) return;
+  const url = buildUrlFromNavEntry(entry);
+  if (!url) return;
+  try {
+    window.history.replaceState(null, "", url);
+  } catch {
+    // ignore history failures
+  }
+}
+
 function updateNavButtons() {
   const canBack = state.navIndex > 0;
   const canForward = state.navIndex >= 0 && state.navIndex < state.navStack.length - 1;
@@ -5530,6 +5870,7 @@ function pushNavEntry(override) {
   const current = state.navStack[state.navIndex] || null;
   if (current && navEntryEquals(current, entry)) {
     updateNavButtons();
+    syncUrlFromNavEntry(entry);
     return;
   }
 
@@ -5539,6 +5880,7 @@ function pushNavEntry(override) {
   state.navStack.push(entry);
   state.navIndex = state.navStack.length - 1;
   updateNavButtons();
+  syncUrlFromNavEntry(entry);
 }
 
 function applyNavEntry(entry) {
@@ -5561,12 +5903,12 @@ function applyNavEntry(entry) {
     renderGraphFlagship(state.snapshot);
 
     const sel = entry.selection || null;
-    if (sel?.kind === "plan") {
+    if (sel?.kind === "plan" || sel?.kind === "anchor") {
       const plan = (state.snapshot.plans || []).find((p) => p && p.id === sel.id);
       if (plan) {
         renderPlanDetail(state.snapshot, plan);
       }
-    } else if (sel?.kind === "task") {
+    } else if (sel?.kind === "task" || sel?.kind === "knowledge_key") {
       const task = (state.snapshot.tasks || []).find((t) => t && t.id === sel.id);
       if (task) {
         renderTaskDetail(state.snapshot, task);
@@ -5584,6 +5926,7 @@ function applyNavEntry(entry) {
   } finally {
     navMutation.applying = false;
     updateNavButtons();
+    syncUrlFromNavEntry(entry);
   }
 }
 
@@ -6377,6 +6720,9 @@ function startLiveEvents() {
 }
 
 async function boot() {
+  const initialPlan = (initialDeepLink.plan || "").trim();
+  state.selectedPlanId = initialPlan || null;
+
   await loadProjects();
   renderProjectSelect();
   applyExplorerWindowPreference({ defaultOpen: true });
@@ -6386,6 +6732,16 @@ async function boot() {
   loadLensFromStorage();
   loadAbout();
   await loadSnapshot();
+  await applyDeepLinkAfterSnapshot();
+
+  // Query params are treated as initial overrides only (deep links). After boot, the URL is
+  // derived state and should not override interactive selections.
+  queryOverrides.enabled = false;
+
+  // Enable shareable deep links after the initial state is established.
+  urlSync.enabled = true;
+  syncUrlFromNavEntry(state.navStack[state.navIndex] || null);
+
   startLiveEvents();
 }
 

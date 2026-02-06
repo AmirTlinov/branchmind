@@ -532,6 +532,56 @@ html[data-ui="legacy"] .graph-overlay {
   outline-offset: 2px;
 }
 
+.detail-actionbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-action-btn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 19, 26, 0.7);
+  color: rgba(238, 242, 246, 0.9);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.detail-action-btn:hover {
+  border-color: rgba(125, 211, 199, 0.6);
+  color: var(--ink);
+}
+
+.detail-action-btn:focus-visible {
+  outline: 2px solid rgba(132, 169, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 2000;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 16, 22, 0.82);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(14px);
+  color: rgba(238, 242, 246, 0.92);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.toast.is-open {
+  opacity: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sidebar,
   .detail-panel,
