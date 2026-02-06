@@ -1128,7 +1128,66 @@ fn probe_daemon_info(
         "method": "branchmind/daemon_info",
         "params": {}
     });
-    let resp = send_internal_request(stream, &req, Duration::from_millis(400))?;
+    // Flagship stability:
+    // - daemon warmup (SQLite open, filesystem cache misses) can be slow on cold machines.
+    // - probe is best-effort; in `connect_or_spawn` we fail-open on errors to avoid killing a
+    //   shared daemon due to transient timeouts.
+    //
+    // IMPORTANT: do not re-send the request on timeout. The shared proxy must emit exactly one
+    // `daemon_info` frame before the first forwarded client request (copy/paste determinism and
+    // testability).
+    struct TimeoutReset<'a> {
+        stream: &'a UnixStream,
+    }
+    impl Drop for TimeoutReset<'_> {
+        fn drop(&mut self) {
+            let _ = self.stream.set_read_timeout(None);
+            let _ = self.stream.set_write_timeout(None);
+        }
+    }
+    let _reset = TimeoutReset { stream };
+
+    let body = serde_json::to_vec(&req)?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut writer = BufWriter::new(stream.try_clone()?);
+
+    let short = Duration::from_millis(400);
+    let long = Duration::from_millis(1500);
+    let _ = stream.set_read_timeout(Some(short));
+    let _ = stream.set_write_timeout(Some(short));
+
+    write_content_length_raw(&mut writer, &body)?;
+
+    let resp_body = match read_content_length_frame(&mut reader, None) {
+        Ok(Some(body)) => body,
+        Ok(None) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "daemon closed during daemon_info probe",
+            )
+            .into());
+        }
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            // Retry the read once with a more forgiving timeout, without rewriting the request.
+            let _ = stream.set_read_timeout(Some(long));
+            let _ = stream.set_write_timeout(Some(long));
+            let Some(body) = read_content_length_frame(&mut reader, None)? else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "daemon closed during daemon_info probe retry",
+                )
+                .into());
+            };
+            body
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let resp = serde_json::from_slice::<Value>(&resp_body)?;
     if resp.get("error").is_some() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
