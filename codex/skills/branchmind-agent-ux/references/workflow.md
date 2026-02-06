@@ -124,13 +124,15 @@ If you are unsure about schemas: `system.schema.get(cmd="think.reasoning.seed")`
 
 ## Deep branching (when the task is risky or architectural)
 
-1) Create **2 alternative branches**:
-   - `think.idea.branch.create` (twice)
+1) Create **≥2 alternative branches**:
+   - Preferred/mainline
+   - Counter / devil’s advocate (how it fails; what would falsify it fast)
 2) Each branch must include:
    - why it might fail
    - a falsifier test
 3) Merge back with a decision:
    - `think.idea.branch.merge`
+   - the merge decision MUST list “best-of stolen from losers” + falsifier(s) (run or planned)
 
 Templates: `templates.md`.
 

@@ -55,8 +55,10 @@ Falsifier test:
 Winner:
 Why winner:
 Why losers fail:
+Best-of (stolen from losers):
 Risks accepted:
 Rollback signals:
+Falsifier(s) (run or planned):
 Next steps:
 ```
 
