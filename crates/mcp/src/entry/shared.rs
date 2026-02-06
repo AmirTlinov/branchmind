@@ -1210,6 +1210,48 @@ fn try_shutdown_daemon(stream: &UnixStream) -> Result<(), Box<dyn std::error::Er
         "method": "branchmind/daemon_shutdown",
         "params": {}
     });
-    let _ = send_internal_request(stream, &req, Duration::from_millis(400));
+    // Best-effort shutdown, but still flagship-stable:
+    // - Use a slightly more forgiving timeout than other internal probes (slow machines / cold IO).
+    // - Wait briefly for the daemon to actually drop the connection so we don't leave orphaned
+    //   background daemons behind when rotating builds.
+    let mut ok = false;
+    for timeout in [Duration::from_millis(400), Duration::from_millis(1500)] {
+        if send_internal_request(stream, &req, timeout).is_ok() {
+            ok = true;
+            break;
+        }
+    }
+    if ok {
+        let _ = wait_for_stream_close(stream, Duration::from_millis(1500));
+    }
+    Ok(())
+}
+
+fn wait_for_stream_close(
+    stream: &UnixStream,
+    timeout: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let start = Instant::now();
+    let mut probe = stream.try_clone()?;
+    let _ = probe.set_read_timeout(Some(Duration::from_millis(50)));
+    let mut buf = [0u8; 1];
+    while start.elapsed() < timeout {
+        match probe.read(&mut buf) {
+            Ok(0) => return Ok(()), // EOF: remote closed (daemon exiting).
+            Ok(_) => continue,      // Unexpected bytes; keep waiting.
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(_) => return Ok(()), // Treat other I/O errors as “closed enough”.
+        }
+    }
     Ok(())
 }
