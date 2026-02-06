@@ -158,6 +158,8 @@ pub(crate) fn derive_next(
             checkout,
         }
     } else {
+        let tasks_count = server.store.count_tasks(workspace).ok().unwrap_or(0);
+
         if queued > 0 && runner_is_offline {
             actions.push(Action {
                 action_id: "next::runner.start".to_string(),
@@ -174,19 +176,108 @@ pub(crate) fn derive_next(
                 risk: "Низкий (first-party runner only).".to_string(),
             });
         }
-        actions.push(Action {
-            action_id: "next::tasks.plan.create".to_string(),
-            priority: ActionPriority::High,
-            tool: ToolName::TasksOps.as_str().to_string(),
-            args: json!({
-                "workspace": workspace.as_str(),
-                "op": "plan.create",
-                "args": { "title": "<Plan title>" },
-                "budget_profile": "default"
-            }),
-            why: "Создать план (золотой старт).".to_string(),
-            risk: "Низкий".to_string(),
-        });
+
+        if tasks_count <= 0 {
+            // Flagship UX invariant: NextEngine actions must be runnable without placeholders.
+            // When the workspace is truly empty, guide the agent to create the first task via
+            // the macro (sets focus, creates reasoning refs lazily, emits events).
+            actions.push(Action {
+                action_id: "next::tasks.macro.start".to_string(),
+                priority: ActionPriority::High,
+                tool: ToolName::TasksOps.as_str().to_string(),
+                args: json!({
+                    "workspace": workspace.as_str(),
+                    "op": "call",
+                    "cmd": "tasks.macro.start",
+                    "args": { "task_title": "First task" },
+                    "budget_profile": "default",
+                    "view": "compact"
+                }),
+                why: "Создать первую задачу и установить focus (golden start).".to_string(),
+                risk: "Низкий (создаёт новую задачу).".to_string(),
+            });
+        } else {
+            // No focus, but tasks exist. Prefer opening snapshots of the first couple tasks so
+            // the agent can select a target without expanding into full context.
+            let tasks = server
+                .store
+                .list_tasks(workspace, 2, 0)
+                .ok()
+                .unwrap_or_default();
+            if tasks.is_empty() {
+                actions.push(Action {
+                    action_id: "next::tasks.context".to_string(),
+                    priority: ActionPriority::High,
+                    tool: ToolName::TasksOps.as_str().to_string(),
+                    args: json!({
+                        "workspace": workspace.as_str(),
+                        "op": "call",
+                        "cmd": "tasks.context",
+                        "args": {},
+                        "budget_profile": "default",
+                        "view": "compact"
+                    }),
+                    why: "Показать планы и задачи, чтобы выбрать focus.".to_string(),
+                    risk: "Низкий".to_string(),
+                });
+            } else {
+                for (idx, row) in tasks.iter().enumerate() {
+                    let priority = if idx == 0 {
+                        ActionPriority::High
+                    } else {
+                        ActionPriority::Medium
+                    };
+                    actions.push(Action {
+                        action_id: format!("next::tasks.snapshot.{}", row.id.as_str()),
+                        priority,
+                        tool: ToolName::TasksOps.as_str().to_string(),
+                        args: json!({
+                            "workspace": workspace.as_str(),
+                            "op": "call",
+                            "cmd": "tasks.snapshot",
+                            "args": { "task": row.id.as_str(), "view": "smart" },
+                            "budget_profile": "portal"
+                        }),
+                        why: "Открыть snapshot для выбора focus.".to_string(),
+                        risk: "Низкий".to_string(),
+                    });
+                }
+
+                // Optional: if the workspace is active, let the agent see the full chooser.
+                actions.push(Action {
+                    action_id: "next::tasks.context".to_string(),
+                    priority: ActionPriority::Low,
+                    tool: ToolName::TasksOps.as_str().to_string(),
+                    args: json!({
+                        "workspace": workspace.as_str(),
+                        "op": "call",
+                        "cmd": "tasks.context",
+                        "args": {},
+                        "budget_profile": "default",
+                        "view": "compact"
+                    }),
+                    why: "Показать полный список планов/задач (если нужно).".to_string(),
+                    risk: "Низкий".to_string(),
+                });
+
+                actions.push(Action {
+                    action_id: "next::tasks.macro.start".to_string(),
+                    priority: ActionPriority::Low,
+                    tool: ToolName::TasksOps.as_str().to_string(),
+                    args: json!({
+                        "workspace": workspace.as_str(),
+                        "op": "call",
+                        "cmd": "tasks.macro.start",
+                        "args": { "task_title": "New task" },
+                        "budget_profile": "default",
+                        "view": "compact"
+                    }),
+                    why: "Создать новую задачу (если текущие не подходят).".to_string(),
+                    risk: "Низкий (создаёт новую задачу).".to_string(),
+                });
+            }
+        }
+
         if queued > 0 || running > 0 {
             actions.push(Action {
                 action_id: "next::jobs.radar".to_string(),
@@ -203,8 +294,24 @@ pub(crate) fn derive_next(
                 risk: "Низкий".to_string(),
             });
         }
+
+        actions.push(Action {
+            action_id: "next::think.knowledge.recall".to_string(),
+            priority: ActionPriority::Low,
+            tool: ToolName::ThinkOps.as_str().to_string(),
+            args: json!({
+                "workspace": workspace.as_str(),
+                "op": "knowledge.recall",
+                "args": { "limit": 12 },
+                "budget_profile": "portal",
+                "view": "compact"
+            }),
+            why: "Подтянуть самые свежие knowledge cards (bounded) перед решением.".to_string(),
+            risk: "Низкий".to_string(),
+        });
         NextEngineReport {
-            headline: "No focus: create a plan (or set focus) to begin.".to_string(),
+            headline: "No focus: pick a task snapshot (or create the first task) to begin."
+                .to_string(),
             refs,
             actions,
             state_fingerprint,
