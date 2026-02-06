@@ -4182,7 +4182,8 @@ function viewStorageKey(workspace) {
 function layoutStorageKey(workspace) {
   const ws = (workspace || "").trim() || "auto";
   const lens = state.lens || "work";
-  return `bm_viewer_layout:${activeProjectKey()}:${ws}:${lens}`;
+  // Bump when layout physics changes so old stored positions don't "lock" users into a bad map.
+  return `bm_viewer_layout_v2:${activeProjectKey()}:${ws}:${lens}`;
 }
 
 function loadStoredViewState(key) {
