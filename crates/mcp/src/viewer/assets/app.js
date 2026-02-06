@@ -284,7 +284,12 @@ async function applyDeepLinkAfterSnapshot() {
   if (!snapshot) return;
 
   const sel = (initialDeepLink.sel || "").trim();
+  const selKind = (initialDeepLink.selKind || "").trim().toLowerCase();
   if (sel) {
+    if (selKind === "code_ref" && isCodeRef(sel)) {
+      renderCodeRefDetail(snapshot, sel);
+      pushNavEntry();
+    } else {
     const match = findMatch(snapshot, sel);
     if (match) {
       searchFlagship(sel);
@@ -296,6 +301,7 @@ async function applyDeepLinkAfterSnapshot() {
       if (exact) {
         await jumpToPaletteItem(snapshot, exact);
       }
+    }
     }
   }
 
@@ -1710,6 +1716,11 @@ function buildCmdForSelection(kind, id, extra) {
     const args = JSON.stringify({ anchor, limit: 12 });
     return `think op="knowledge.recall"${ws ? ` workspace="${ws}"` : ""} args=${args} view="compact" budget_profile="portal"`;
   }
+  if (kind === "code_ref") {
+    if (!ws) return null;
+    const args = JSON.stringify({ workspace: ws, id: safeId, max_chars: 12_000, verbosity: "compact" });
+    return `open args=${args}`;
+  }
   return null;
 }
 
@@ -1767,6 +1778,54 @@ function renderDetailText(value, emptyMessage) {
   }
   block.textContent = text;
   return block;
+}
+
+function renderDetailCode(value, emptyMessage) {
+  const block = renderDetailText(value, emptyMessage);
+  block.classList.add("detail-code");
+  return block;
+}
+
+function isCodeRef(value) {
+  const raw = ((value || "") + "").trim().toLowerCase();
+  return raw.startsWith("code:");
+}
+
+function renderRefRow(snapshot, ref) {
+  const value = ((ref || "") + "").trim();
+  const row = document.createElement("div");
+  row.className = "list-item";
+  if (!value) {
+    row.textContent = "(invalid)";
+    return row;
+  }
+
+  if (isCodeRef(value)) {
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "detail-link";
+    link.textContent = value;
+    link.addEventListener("click", () => {
+      renderCodeRefDetail(snapshot, value);
+      pushNavEntry();
+    });
+    row.append(link);
+    return row;
+  }
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    const link = document.createElement("a");
+    link.className = "detail-link";
+    link.href = value;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = value;
+    row.append(link);
+    return row;
+  }
+
+  row.textContent = value;
+  return row;
 }
 
 function chooseDerivedPlanText(snapshot, plan) {
@@ -2071,6 +2130,12 @@ function renderAnchorDetail(snapshot, anchor) {
       renderDetailText(anchor.description, "No anchor description yet."),
     ])
   );
+
+  const refs = Array.isArray(anchor.refs) ? anchor.refs : [];
+  if (refs.length) {
+    const items = refs.slice(0, 32).map((ref) => renderRefRow(snapshot, ref));
+    nodes.detailBody.append(renderDetailSection("Refs", items));
+  }
 
   const keys = (snapshot.tasks || [])
     .filter((task) => task && (task.plan_id || "").trim() === anchor.id)
@@ -2401,6 +2466,27 @@ function renderKnowledgeKeyDetail(snapshot, task) {
   setDetailVisible(true, { focus: false });
 }
 
+function renderCodeRefDetail(snapshot, ref) {
+  const value = ((ref || "") + "").trim();
+  if (!value) return;
+
+  const token = startDetailLoad("code_ref", value);
+  nodes.detailKicker.textContent = "Code";
+  nodes.detailTitle.textContent = value;
+  renderDetailMeta([`Ref: ${value}`]);
+  clear(nodes.detailBody);
+  const actionBar = renderDetailActionBar({ kind: "code_ref", id: value });
+  if (actionBar) nodes.detailBody.append(actionBar);
+
+  const snippetHost = document.createElement("div");
+  snippetHost.className = "detail-list";
+  snippetHost.append(renderDetailText(null, "Loading snippet…"));
+  nodes.detailBody.append(renderDetailSection("Snippet", [snippetHost]));
+  setDetailVisible(true, { focus: false });
+
+  loadCodeRefExtras(value, token, snippetHost);
+}
+
 function renderTaskDetail(snapshot, task) {
   if (normalizeLens(snapshot?.lens || state.lens) === "knowledge") {
     renderKnowledgeKeyDetail(snapshot, task);
@@ -2511,6 +2597,48 @@ async function loadTaskExtras(taskId, token, stepsHost, activityHost) {
     stepsHost.append(renderDetailText(null, "Unable to load steps."));
     clear(activityHost);
     activityHost.append(renderDetailText(null, formatApiError(err?.message)));
+  }
+}
+
+async function loadCodeRefExtras(codeRef, token, host) {
+  const ref = ((codeRef || "") + "").trim();
+  if (!ref) return;
+  try {
+    const payload = await fetchJson(
+      workspaceUrlWithParams("/api/code", { ref, max_chars: 20_000 })
+    );
+    if (!isCurrentDetail(token)) return;
+
+    const path = ((payload?.path || "") + "").trim() || ref;
+    const start = payload?.range?.start ?? null;
+    const end = payload?.range?.end ?? null;
+    const sha = ((payload?.sha256 || "") + "").trim();
+    const stale = !!payload?.stale;
+    const truncated = !!payload?.truncated;
+
+    nodes.detailTitle.textContent =
+      start && end ? `${path}#L${start}-L${end}` : path;
+
+    const meta = [];
+    meta.push(`Path: ${path}`);
+    if (start && end) meta.push(`Range: L${start}-L${end}`);
+    if (sha) meta.push(`Sha256: ${sha.slice(0, 12)}…`);
+    meta.push(`Stale: ${stale ? "yes" : "no"}`);
+    if (truncated) meta.push("Truncated: yes");
+    renderDetailMeta(meta);
+
+    clear(host);
+    if (stale) {
+      const hint = document.createElement("div");
+      hint.className = "detail-caption";
+      hint.textContent = "Stale ref: file contents changed since the recorded sha256.";
+      host.append(hint);
+    }
+    host.append(renderDetailCode(payload?.content ?? null, "No snippet content."));
+  } catch (err) {
+    if (!isCurrentDetail(token)) return;
+    clear(host);
+    host.append(renderDetailText(null, formatApiError(err?.message)));
   }
 }
 

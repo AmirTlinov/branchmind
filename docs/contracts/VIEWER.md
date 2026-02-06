@@ -308,6 +308,43 @@ Notes:
 - Lens `knowledge` searches anchors/knowledge keys by `id`/`title`/`key` (best-effort match).
 - Ordering is stable (deterministic) and bounded; it is not a full-text index.
 
+### `GET /api/code`
+
+Open a **repo line anchor** (`code:*`) and return a bounded snippet for human inspection.
+
+Required query params:
+
+- `ref=<string>`: a `code:` ref (URL-encoded).
+  - Format: `code:<repo-relative-path>#L<start>-L<end>@sha256:<64-hex>`
+
+Optional query params:
+
+- `project=<project_guard>`: open a code ref in another active project (read-only).
+- `max_chars=<int>`: response budget for the snippet (default: `12000`; clamped to `2000..80000`).
+
+Response (high-level):
+
+```json
+{
+  "generated_at": "RFC3339",
+  "generated_at_ms": 0,
+  "ref": "code:crates/mcp/src/main.rs#L10-L42@sha256:...",
+  "path": "crates/mcp/src/main.rs",
+  "range": { "start": 10, "end": 42 },
+  "sha256": "64-hex",
+  "expected_sha256": "64-hex|null",
+  "stale": false,
+  "stats": { "lines": 33, "reached_eof": false },
+  "content": "  10 | ...\n  11 | ...",
+  "truncated": false
+}
+```
+
+Notes:
+
+- `stale=true` indicates the input ref included `@sha256:` and it no longer matches current content.
+- Paths are repo-relative; traversal and symlinks are rejected.
+
 ### `GET /api/graph/plan/<plan_id>`
 
 Returns a bounded **plan-scoped** subgraph page so the viewer can materialize plan tasks even when

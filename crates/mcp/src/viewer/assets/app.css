@@ -656,6 +656,13 @@ body[data-narrow="1"][data-explorer-open="1"][data-detail-open="1"][data-front="
   white-space: pre-wrap;
 }
 
+.detail-text.detail-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .detail-text.muted {
   color: var(--muted);
 }

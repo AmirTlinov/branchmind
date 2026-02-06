@@ -591,6 +591,119 @@ fn handle_connection(
                 method == "HEAD",
             )
         }
+        "/api/code" => {
+            if project_param_invalid {
+                return write_api_error(
+                    &mut stream,
+                    "400 Bad Request",
+                    "INVALID_PROJECT",
+                    "project: invalid project guard.",
+                    Some("Use a value like repo:0123abcd… from /api/projects."),
+                    method == "HEAD",
+                );
+            }
+            if project_unknown {
+                return write_api_error(
+                    &mut stream,
+                    "404 Not Found",
+                    "UNKNOWN_PROJECT",
+                    "Unknown project.",
+                    Some("Pick one of the active projects returned by /api/projects."),
+                    method == "HEAD",
+                );
+            }
+
+            let raw_ref = extract_query_param_raw(&request.path, "ref")
+                .as_deref()
+                .and_then(decode_query_value)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+
+            let Some(code_ref) = raw_ref else {
+                return write_api_error(
+                    &mut stream,
+                    "400 Bad Request",
+                    "INVALID_INPUT",
+                    "ref: required.",
+                    Some("Use /api/code?ref=code:<path>#L<start>-L<end>@sha256:<hex>."),
+                    method == "HEAD",
+                );
+            };
+
+            let max_chars_raw = extract_query_param_raw(&request.path, "max_chars")
+                .as_deref()
+                .and_then(decode_query_value);
+            let max_chars = match max_chars_raw.as_deref() {
+                None => crate::CODE_REF_DEFAULT_MAX_CHARS,
+                Some(raw) => match raw.trim().parse::<usize>() {
+                    Ok(v) => v.clamp(2_000, 80_000),
+                    Err(_) => {
+                        return write_api_error(
+                            &mut stream,
+                            "400 Bad Request",
+                            "INVALID_INPUT",
+                            "max_chars: invalid integer.",
+                            Some("Use a value like max_chars=12000."),
+                            method == "HEAD",
+                        );
+                    }
+                },
+            };
+
+            let Some(opened) =
+                crate::maybe_open_code_ref(&request_storage_dir, &code_ref, max_chars)
+            else {
+                return write_api_error(
+                    &mut stream,
+                    "400 Bad Request",
+                    "INVALID_INPUT",
+                    "ref: expected a code:* ref.",
+                    Some("Use a value like code:crates/mcp/src/main.rs#L10-L42."),
+                    method == "HEAD",
+                );
+            };
+
+            let opened = match opened {
+                Ok(v) => v,
+                Err(err) => {
+                    let status = match err.code {
+                        "INVALID_INPUT" => "400 Bad Request",
+                        "CODE_REF_UNAVAILABLE" => "409 Conflict",
+                        _ => "500 Internal Server Error",
+                    };
+                    return write_api_error(
+                        &mut stream,
+                        status,
+                        err.code,
+                        &err.message,
+                        err.recovery.as_deref(),
+                        method == "HEAD",
+                    );
+                }
+            };
+
+            let body = json!({
+                "generated_at": now_rfc3339(),
+                "generated_at_ms": now_ms_i64(),
+                "ref": opened.normalized_ref,
+                "path": opened.rel_path,
+                "range": { "start": opened.start_line, "end": opened.end_line },
+                "sha256": opened.sha256,
+                "expected_sha256": opened.expected_sha256,
+                "stale": opened.stale,
+                "stats": { "lines": opened.lines_returned, "reached_eof": opened.reached_eof },
+                "content": opened.content,
+                "truncated": opened.truncated
+            })
+            .to_string();
+            write_response(
+                &mut stream,
+                "200 OK",
+                "application/json; charset=utf-8",
+                body.as_bytes(),
+                method == "HEAD",
+            )
+        }
         "/api/workspaces" => {
             if project_param_invalid {
                 return write_api_error(

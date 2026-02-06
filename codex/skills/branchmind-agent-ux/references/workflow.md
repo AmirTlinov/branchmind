@@ -106,6 +106,32 @@ If you need 2-phase:
 1) `tasks.evidence.capture`
 2) `tasks.step.close`
 
+## Code anchors (repo line refs)
+
+When referencing code in decisions/evidence (or anchor `refs[]`), prefer a **stable, openable**
+`code:` ref instead of a raw path:
+
+```text
+code:<repo-relative-path>#L<start>-L<end>@sha256:<64-hex>
+```
+
+How to use:
+
+1) Open it (gets a bounded snippet + normalized ref):
+
+Tool: `mcp__branchmind__open`
+
+```json
+{ \"workspace\": \"my-workspace\", \"id\": \"code:crates/mcp/src/main.rs#L10-L42\" }
+```
+
+2) Copy the returned `ref` (now includes `@sha256:`) into:
+   - a decision/evidence card (`Proof:` line),
+   - an anchor (`refs[]`),
+   - a handoff note.
+
+If the file changes later, reopening the old ref will surface `CODE_REF_STALE` (drift detector).
+
 ## Finish
 
 When all steps are closed:
