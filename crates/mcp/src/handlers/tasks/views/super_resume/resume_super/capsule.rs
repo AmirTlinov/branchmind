@@ -421,6 +421,134 @@ fn recommended_prep_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Valu
                     // *writes* a step-scoped, anchor-tagged artifact (draft) so nothing is lost across
                     // /compact or restarts. This stays low-noise because step-scoped drafts are shown
                     // only while that step is focused.
+                    //
+                    // Additionally: when a strict/deep reasoning gate is likely to block closure,
+                    // prioritize a 1-command fix-up action over the generic skeptic preflight.
+
+                    let reasoning_mode = args
+                        .target
+                        .get("reasoning_mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("normal")
+                        .trim()
+                        .to_ascii_lowercase();
+                    let signal_code = args
+                        .primary_signal
+                        .as_ref()
+                        .and_then(|v| v.get("code"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let signal_ref_id = args
+                        .primary_signal
+                        .as_ref()
+                        .and_then(|v| v.get("refs"))
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|r| r.get("id"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    if matches!(reasoning_mode.as_str(), "deep" | "strict")
+                        && matches!(
+                            signal_code.as_str(),
+                            "DEEP_NEEDS_RESOLVED_DECISION"
+                                | "DEEP_MIN_2_HYPOTHESES"
+                                | "BM4_HYPOTHESIS_NO_TEST"
+                                | "BM10_NO_COUNTER_EDGES"
+                        )
+                    {
+                        let tool = "think_card";
+                        if !args.omit_workspace {
+                            args_obj.insert(
+                                "workspace".to_string(),
+                                Value::String(args.workspace.as_str().to_string()),
+                            );
+                        }
+                        if need_target && let Some(task) = target_id.clone() {
+                            args_obj.insert("target".to_string(), Value::String(task));
+                        }
+                        args_obj.insert("step".to_string(), Value::String("focus".to_string()));
+
+                        let (purpose, card, supports, blocks) = match signal_code.as_str() {
+                            "DEEP_NEEDS_RESOLVED_DECISION" => (
+                                "record a resolved synthesis decision (deep gate)",
+                                json!({
+                                    "type": "decision",
+                                    "title": "Decision: <fill>",
+                                    "text": "Synthesis: winner + tradeoffs + rollback/stop rule + what would change your mind.",
+                                    "status": "resolved",
+                                    "tags": ["bm-deep"]
+                                }),
+                                None,
+                                None,
+                            ),
+                            "DEEP_MIN_2_HYPOTHESES" => (
+                                "add a second hypothesis branch (deep gate)",
+                                json!({
+                                    "type": "hypothesis",
+                                    "title": "Hypothesis (alt): <fill>",
+                                    "text": "Write the best alternative hypothesis; add one disconfirming test idea.",
+                                    "status": "open",
+                                    "tags": ["bm-deep", "branch"]
+                                }),
+                                None,
+                                None,
+                            ),
+                            "BM4_HYPOTHESIS_NO_TEST" => (
+                                "add a falsifier test stub for the current hypothesis (strict gate)",
+                                json!({
+                                    "type": "test",
+                                    "title": "Test: <fill>",
+                                    "text": "Define the smallest runnable check for this hypothesis.",
+                                    "status": "open",
+                                    "tags": ["bm4"]
+                                }),
+                                signal_ref_id.clone(),
+                                None,
+                            ),
+                            "BM10_NO_COUNTER_EDGES" => (
+                                "steelman a counter-hypothesis (strict gate)",
+                                json!({
+                                    "type": "hypothesis",
+                                    "title": "Counter-hypothesis: <fill>",
+                                    "text": "Steelman the opposite case; include 1 disconfirming test idea.",
+                                    "status": "open",
+                                    "tags": ["bm7", "counter"]
+                                }),
+                                None,
+                                signal_ref_id.clone(),
+                            ),
+                            _ => ("", Value::Null, None, None),
+                        };
+
+                        if purpose.is_empty() || card.is_null() {
+                            return (Value::Null, None);
+                        }
+                        args_obj.insert("card".to_string(), card);
+                        if let Some(id) = supports {
+                            args_obj.insert(
+                                "supports".to_string(),
+                                Value::Array(vec![Value::String(id)]),
+                            );
+                        }
+                        if let Some(id) = blocks {
+                            args_obj.insert(
+                                "blocks".to_string(),
+                                Value::Array(vec![Value::String(id)]),
+                            );
+                        }
+
+                        let action = json!({
+                            "tool": tool,
+                            "purpose": purpose,
+                            "available": tool_available(args.toolset, tool),
+                            "args_hint": Value::Object(args_obj)
+                        });
+                        return (action, None);
+                    }
+
                     let where_id = args
                         .map_hud
                         .get("where")

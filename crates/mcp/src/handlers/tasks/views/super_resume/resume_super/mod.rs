@@ -417,7 +417,91 @@ impl McpServer {
                 actions_limit: args.engine_actions_limit,
             },
         );
-        let primary_signal = engine.as_ref().and_then(primary_engine_signal);
+        let mut primary_signal = engine.as_ref().and_then(primary_engine_signal);
+
+        // Deep mode is a strict superset: proactively surface the *synthesis blockers*
+        // (2+ hypotheses + resolved decision) so the capsule can guide the agent before
+        // they attempt a gated close.
+        let reasoning_mode = context
+            .target
+            .get("reasoning_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("normal")
+            .trim()
+            .to_ascii_lowercase();
+        if reasoning_mode == "deep" {
+            let strict_blocker = primary_signal
+                .as_ref()
+                .and_then(|v| v.get("code"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|code| {
+                    matches!(code, "BM4_HYPOTHESIS_NO_TEST" | "BM10_NO_COUNTER_EDGES")
+                });
+            if strict_blocker {
+                // Respect gate order: strict discipline blockers come first.
+            } else {
+                let step_tag = focus_step_tag
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty());
+                if let Some(step_tag) = step_tag {
+                    let types = vec!["hypothesis".to_string(), "decision".to_string()];
+                    let cards = match self.store.graph_query(
+                        &args.workspace,
+                        &reasoning.branch,
+                        &reasoning.graph_doc,
+                        bm_storage::GraphQueryRequest {
+                            ids: None,
+                            types: Some(types),
+                            status: None,
+                            tags_any: None,
+                            tags_all: Some(vec![step_tag.to_string()]),
+                            text: None,
+                            cursor: None,
+                            limit: 80,
+                            include_edges: false,
+                            edges_limit: 0,
+                        },
+                    ) {
+                        Ok(v) => graph_nodes_to_cards(v.nodes),
+                        Err(StoreError::UnknownBranch) => Vec::new(),
+                        Err(_) => Vec::new(),
+                    };
+                    let hypotheses_total = cards
+                        .iter()
+                        .filter(|c| c.get("type").and_then(|v| v.as_str()) == Some("hypothesis"))
+                        .count();
+                    let has_resolved_decision = cards.iter().any(|card| {
+                        if card.get("type").and_then(|v| v.as_str()) != Some("decision") {
+                            return false;
+                        }
+                        let status = card
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("open")
+                            .trim();
+                        status.eq_ignore_ascii_case("closed")
+                            || status.eq_ignore_ascii_case("done")
+                            || status.eq_ignore_ascii_case("resolved")
+                    });
+                    if !has_resolved_decision {
+                        primary_signal = Some(json!({
+                            "code": "DEEP_NEEDS_RESOLVED_DECISION",
+                            "severity": "warning",
+                            "message": "deep reasoning: missing a resolved synthesis decision for this step",
+                            "refs": []
+                        }));
+                    } else if hypotheses_total < 2 {
+                        primary_signal = Some(json!({
+                            "code": "DEEP_MIN_2_HYPOTHESES",
+                            "severity": "warning",
+                            "message": "deep reasoning: add a second hypothesis branch for this step",
+                            "refs": []
+                        }));
+                    }
+                }
+            }
+        }
 
         let step_focus = if matches!(
             focus_view,
