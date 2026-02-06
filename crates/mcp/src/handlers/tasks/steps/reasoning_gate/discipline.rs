@@ -137,9 +137,6 @@ pub(super) fn enforce_discipline_signals(
                 json!({
                     "workspace": ctx.workspace.as_str(),
                     "target": ctx.task_id.to_string(),
-                    "branch": reasoning_ref.branch.clone(),
-                    "trace_doc": reasoning_ref.trace_doc.clone(),
-                    "graph_doc": reasoning_ref.graph_doc.clone(),
                     "step": step_ref.step_id.clone(),
                     "card": {
                         "type": "test",
@@ -160,9 +157,6 @@ pub(super) fn enforce_discipline_signals(
                 json!({
                     "workspace": ctx.workspace.as_str(),
                     "target": ctx.task_id.to_string(),
-                    "branch": reasoning_ref.branch.clone(),
-                    "trace_doc": reasoning_ref.trace_doc.clone(),
-                    "graph_doc": reasoning_ref.graph_doc.clone(),
                     "step": step_ref.step_id.clone(),
                     "card": {
                         "type": "hypothesis",

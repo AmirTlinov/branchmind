@@ -3,6 +3,56 @@
 use super::super::support::*;
 use serde_json::json;
 
+fn assert_step_scoped_think_card_actions_are_copy_paste_valid(blocked_text: &str) {
+    let mut saw = false;
+    for line in blocked_text.lines() {
+        if !line.starts_with("think args=") || !line.contains("cmd=think.card") {
+            continue;
+        }
+        saw = true;
+
+        let prefix = "think args=";
+        let start = line.find(prefix).expect("think args prefix") + prefix.len();
+        let rest = &line[start..];
+        let end = rest
+            .find(" budget_profile=")
+            .or_else(|| rest.find(" cmd="))
+            .unwrap_or(rest.len());
+        let args_json = &rest[..end];
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(args_json).expect("think args must be valid JSON");
+        let obj = parsed
+            .as_object()
+            .expect("think args must be a JSON object");
+
+        // Step-scoped card creation is tied to `target`/focus. Branch/doc overrides are forbidden
+        // (and would force agents to manually patch recovery actions).
+        assert!(
+            obj.contains_key("step"),
+            "expected step-scoped think.card action: {line}"
+        );
+        assert!(
+            obj.contains_key("target"),
+            "expected target-scoped think.card action: {line}"
+        );
+        for forbidden in [
+            "branch",
+            "trace_doc",
+            "graph_doc",
+            "notes_doc",
+            "ref",
+            "doc",
+        ] {
+            assert!(
+                !obj.contains_key(forbidden),
+                "unexpected {forbidden} override in step-scoped recovery action: {line}"
+            );
+        }
+    }
+    assert!(saw, "expected at least one think.card recovery action line");
+}
+
 #[test]
 fn deep_reasoning_mode_requires_resolved_synthesis_decision() {
     let mut server = Server::start_initialized("tasks_deep_reasoning_gate");
@@ -52,6 +102,7 @@ fn deep_reasoning_mode_requires_resolved_synthesis_decision() {
         "expected deep gate error"
     );
     assert!(blocked_1_text.contains("REASONING_REQUIRED"));
+    assert_step_scoped_think_card_actions_are_copy_paste_valid(&blocked_1_text);
 
     // Add a hypothesis + test (step-scoped).
     let _h1 = server.request(json!({
@@ -91,6 +142,7 @@ fn deep_reasoning_mode_requires_resolved_synthesis_decision() {
         "expected deep gate error"
     );
     assert!(blocked_2_text.contains("BM10_NO_COUNTER_EDGES"));
+    assert_step_scoped_think_card_actions_are_copy_paste_valid(&blocked_2_text);
 
     // Add a counter-hypothesis + test (step-scoped).
     let _h2 = server.request(json!({
@@ -135,6 +187,7 @@ fn deep_reasoning_mode_requires_resolved_synthesis_decision() {
         blocked_3_text.contains("DEEP_NEEDS_RESOLVED_DECISION"),
         "expected deep gate to require a resolved decision"
     );
+    assert_step_scoped_think_card_actions_are_copy_paste_valid(&blocked_3_text);
 
     // Add a resolved decision (step-scoped).
     let _d1 = server.request(json!({

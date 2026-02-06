@@ -97,18 +97,6 @@ pub(crate) fn enforce_reasoning_gate(
             Value::String(ctx.workspace.as_str().to_string()),
         );
         params.insert("target".to_string(), Value::String(ctx.task_id.to_string()));
-        params.insert(
-            "branch".to_string(),
-            Value::String(reasoning_ref.branch.clone()),
-        );
-        params.insert(
-            "trace_doc".to_string(),
-            Value::String(reasoning_ref.trace_doc.clone()),
-        );
-        params.insert(
-            "graph_doc".to_string(),
-            Value::String(reasoning_ref.graph_doc.clone()),
-        );
         params.insert("step".to_string(), Value::String(step_ref.step_id.clone()));
         params.insert(
             "card".to_string(),

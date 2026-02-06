@@ -3,6 +3,54 @@
 use super::super::support::*;
 use serde_json::json;
 
+fn assert_step_scoped_think_card_actions_are_copy_paste_valid(blocked_text: &str) {
+    let mut saw = false;
+    for line in blocked_text.lines() {
+        if !line.starts_with("think args=") || !line.contains("cmd=think.card") {
+            continue;
+        }
+        saw = true;
+
+        let prefix = "think args=";
+        let start = line.find(prefix).expect("think args prefix") + prefix.len();
+        let rest = &line[start..];
+        let end = rest
+            .find(" budget_profile=")
+            .or_else(|| rest.find(" cmd="))
+            .unwrap_or(rest.len());
+        let args_json = &rest[..end];
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(args_json).expect("think args must be valid JSON");
+        let obj = parsed
+            .as_object()
+            .expect("think args must be a JSON object");
+
+        assert!(
+            obj.contains_key("step"),
+            "expected step-scoped think.card action: {line}"
+        );
+        assert!(
+            obj.contains_key("target"),
+            "expected target-scoped think.card action: {line}"
+        );
+        for forbidden in [
+            "branch",
+            "trace_doc",
+            "graph_doc",
+            "notes_doc",
+            "ref",
+            "doc",
+        ] {
+            assert!(
+                !obj.contains_key(forbidden),
+                "unexpected {forbidden} override in step-scoped recovery action: {line}"
+            );
+        }
+    }
+    assert!(saw, "expected at least one think.card recovery action line");
+}
+
 #[test]
 fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
     let mut server = Server::start_initialized("tasks_strict_reasoning_gate");
@@ -68,6 +116,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         blocked_status_text.contains("BM4_HYPOTHESIS_NO_TEST"),
         "expected strict gate to treat status-drift hypotheses as active and require tests"
     );
+    assert_step_scoped_think_card_actions_are_copy_paste_valid(&blocked_status_text);
 
     let bootstrap = server.request(json!({
         "jsonrpc": "2.0",
