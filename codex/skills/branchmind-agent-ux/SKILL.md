@@ -143,7 +143,9 @@ Templates live in `references/templates.md`.
 - Daily workflow + copy/paste calls: `references/workflow.md`
 - Planning + branching templates: `references/templates.md`
 - Delegation protocol (multi-agent): `references/delegation.md`
+- Teamlead protocol (manage 3–10 agents): `references/teamlead.md`
 - Architecture mental map + anchors + graph: `references/architecture-map.md`
+- Portable taxonomy (anchors + knowledge keys): `references/taxonomy.md`
 - Viewer (read-only) navigation: `references/viewer.md`
 - Troubleshooting: `references/troubleshooting.md`
 

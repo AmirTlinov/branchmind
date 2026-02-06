@@ -81,3 +81,8 @@ Best practice:
 - `branchmind.jobs op="call" cmd="jobs.radar"` (glanceable job state)
 - `branchmind.jobs op="call" cmd="jobs.tail"` (when you need progress logs)
   - use `jobs.wait` when you need bounded polling (timeout returns success + done=false)
+
+## See also
+
+- Teamlead protocol: `teamlead.md`
+- Portable anchors + keys taxonomy: `taxonomy.md`
