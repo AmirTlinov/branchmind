@@ -1,0 +1,63 @@
+/* ── Root Application Shell ── */
+
+import { useEffect } from "react";
+import { useSnapshotStore } from "./store/snapshot-store";
+import { useSSE } from "./hooks/useSSE";
+import { TopBar } from "./overlays/TopBar";
+import { ExplorerPanel } from "./panels/ExplorerPanel";
+import { DetailPanel } from "./panels/DetailPanel";
+import { CommandPalette } from "./overlays/CommandPalette";
+import { HUD } from "./overlays/HUD";
+import { GraphShell } from "./graph/GraphShell";
+import { useKeyboard } from "./hooks/useKeyboard";
+
+export function App() {
+  const boot = useSnapshotStore((s) => s.boot);
+  const loading = useSnapshotStore((s) => s.loading);
+  const error = useSnapshotStore((s) => s.error);
+
+  useEffect(() => { boot(); }, [boot]);
+  useSSE();
+  useKeyboard();
+
+  if (loading && !useSnapshotStore.getState().snapshot) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-bg">
+        <div className="flex items-center gap-3 text-ink-muted">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent/40 border-t-accent" />
+          Loading...
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !useSnapshotStore.getState().snapshot) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-bg">
+        <div className="max-w-md rounded-lg bg-danger/10 p-6 text-center text-sm text-danger">
+          <p className="font-semibold mb-2">Connection Error</p>
+          <p className="text-xs text-ink-muted">{error}</p>
+          <button
+            onClick={() => boot()}
+            className="mt-4 rounded bg-accent/20 px-3 py-1.5 text-xs text-accent hover:bg-accent/30 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg">
+      <TopBar />
+      <div className="flex flex-1 overflow-hidden">
+        <ExplorerPanel />
+        <GraphShell />
+        <DetailPanel />
+      </div>
+      <HUD />
+      <CommandPalette />
+    </div>
+  );
+}
