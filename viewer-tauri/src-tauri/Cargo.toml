@@ -1,0 +1,13 @@
+[package]
+name = "bm_viewer_tauri"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+
+[workspace]

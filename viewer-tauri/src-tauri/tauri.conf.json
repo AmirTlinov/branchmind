@@ -1,0 +1,18 @@
+{
+  "productName": "BranchMind Viewer",
+  "version": "0.1.0",
+  "identifier": "com.branchmind.viewer",
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "",
+    "devUrl": "http://127.0.0.1:7331/",
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": []
+  },
+  "bundle": {
+    "active": false
+  }
+}
+

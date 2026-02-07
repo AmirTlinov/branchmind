@@ -23,6 +23,25 @@ Zero-arg invocation enables flagship DX defaults:
 - workspace lock (guards against accidental cross-workspace calls)
 - DX mode defaults (compact outputs + snapshot delta on by default)
 
+## 2b) Run the viewer as a desktop app (Tauri, optional)
+
+In one terminal, keep the local viewer HTTP server running (it is enabled by default in `bm_mcp`):
+
+```bash
+make run-mcp
+```
+
+In another terminal, start the Tauri desktop shell:
+
+```bash
+make run-viewer-tauri
+```
+
+Behavior:
+
+- Closing the window hides it to the system tray (Linux/Windows/macOS).
+- Use the tray menu **Quit** to fully exit the app.
+
 ## OpenCode (recommended)
 
 Configure the server as a local MCP backend and let BranchMind auto-configure everything:

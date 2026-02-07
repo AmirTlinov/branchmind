@@ -6,3 +6,5 @@
 /tmp
 /dist
 .agents/
+target/
+viewer-tauri/src-tauri/gen/

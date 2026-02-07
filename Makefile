@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check clippy test check run-mcp
+.PHONY: help fmt fmt-check clippy test check run-mcp run-viewer-tauri
 
 CARGO ?= cargo
 
@@ -10,7 +10,8 @@ help:
 		"  make fmt-check  Verify formatting" \
 		"  make clippy     Run clippy (deny warnings)" \
 		"  make test       Run workspace tests" \
-		"  make run-mcp    Run MCP server (DX defaults)"
+		"  make run-mcp    Run MCP server (DX defaults)" \
+		"  make run-viewer-tauri  Run viewer desktop shell (Tauri, optional)"
 
 fmt:
 	$(CARGO) fmt
@@ -29,3 +30,6 @@ check: fmt-check clippy test
 # Golden path: zero-arg run enables DX defaults.
 run-mcp:
 	$(CARGO) run -p bm_mcp
+
+run-viewer-tauri:
+	$(CARGO) run --manifest-path viewer-tauri/src-tauri/Cargo.toml
