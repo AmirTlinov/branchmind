@@ -37,18 +37,4 @@ If “0 deps strict” is required, replace these with in-house minimal implemen
 - `sha2`: deterministic in-process SHA-256 for local artifacts (proof receipts) without calling external programs (keeps `bm_mcp` “no arbitrary exec”).
 - `time`: RFC3339 timestamps in agent-facing payloads.
 - `nix` (unix-only): poll/select wrappers used to poll stdin with a timeout so hot reload can
-  trigger even when the MCP client is idle (no manual restarts). Also used for POSIX signals
-  in the local viewer process-takeover flow (no external `kill` command).
-
-### `bm_viewer_tauri` (desktop viewer shell, optional)
-
-- `tauri` (+ transitive WebView stack): cross-platform desktop window + tray wrapper that loads the
-  bundled Vite+React UI (`viewer-tauri/`) and talks to the loopback viewer API exposed by `bm_mcp`
-  on `http://127.0.0.1:${BRANCHMIND_VIEWER_PORT:-7331}`.
-- `tauri-build`: build-time glue for Tauri config embedding.
-
-Notes:
-
-- This app is **not** part of the core MCP server and is kept out of the main Cargo workspace to
-  avoid introducing GUI/system library requirements into CI for `bm_mcp`.
-- Local HTTP viewer (optional) uses `std::net` only (no additional dependencies).
+  trigger even when the MCP client is idle (no manual restarts).

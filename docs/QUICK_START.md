@@ -14,11 +14,6 @@ make check
 make run-mcp
 ```
 
-Then open the local viewer (loopback-only, read-only):
-
-- UI: `http://127.0.0.1:7331/`
-- API: `http://127.0.0.1:7331/api/*`
-
 Zero-arg invocation enables flagship DX defaults:
 
 - shared proxy (session-scoped)
@@ -27,37 +22,6 @@ Zero-arg invocation enables flagship DX defaults:
 - daily toolset
 - workspace lock (guards against accidental cross-workspace calls)
 - DX mode defaults (compact outputs + snapshot delta on by default)
-
-## 2b) Run the viewer as a desktop app (Tauri, optional)
-
-In one terminal, keep the local viewer HTTP server running (UI + API; enabled by default in
-`bm_mcp` session mode):
-
-```bash
-make run-mcp
-```
-
-In another terminal, start the Tauri desktop app (Tauri+Vite+React):
-
-```bash
-make run-viewer-tauri
-```
-
-Behavior:
-
-- Closing the window hides it to the system tray (Linux/Windows/macOS).
-- Use the tray menu **Quit** to fully exit the app.
-
-## 2c) Develop the viewer UI (Vite/React, optional)
-
-The viewer UI lives in `viewer-tauri/` (Vite+React). The desktop app talks to the loopback viewer
-API provided by `bm_mcp`.
-
-```bash
-cd viewer-tauri
-npm i
-npm run tauri:dev
-```
 
 ## OpenCode (recommended)
 

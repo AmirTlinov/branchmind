@@ -22,7 +22,6 @@ impl ContentLengthClient {
             .arg(&storage_dir)
             .arg("--toolset")
             .arg("full")
-            .arg("--no-viewer")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

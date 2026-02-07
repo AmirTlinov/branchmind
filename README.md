@@ -77,16 +77,6 @@ Notes:
 - Build/install both binaries so runner autostart works:
   `bm_mcp` and `bm_runner` should sit in the same directory (or `bm_runner` in `PATH`).
 
-## Optional local viewer (read‑only)
-
-BranchMind can serve a local‑only viewer on `127.0.0.1:7331`.
-
-- Enabled by default in **session** modes (`stdio` / `--shared`).
-- Disabled by default in `--daemon` mode.
-- Disable explicitly: `--no-viewer` or `BRANCHMIND_VIEWER=0`.
-
-See `docs/contracts/VIEWER.md` for details.
-
 ## Runtime flags (selected)
 
 - `--storage-dir <path>` — embedded store directory.

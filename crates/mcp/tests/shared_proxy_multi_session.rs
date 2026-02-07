@@ -26,8 +26,7 @@ mod unix {
                 .arg("--storage-dir")
                 .arg(storage_dir)
                 .arg("--toolset")
-                .arg("full")
-                .arg("--no-viewer");
+                .arg("full");
             if let Some(socket_path) = socket_path {
                 cmd.arg("--socket").arg(socket_path);
             }
@@ -148,7 +147,6 @@ mod unix {
             .arg("full")
             .arg("--workspace")
             .arg("ws_multi")
-            .arg("--no-viewer")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

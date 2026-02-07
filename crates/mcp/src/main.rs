@@ -6,7 +6,6 @@ mod ops;
 mod server;
 mod support;
 mod tools_v1;
-mod viewer;
 
 pub(crate) use support::*;
 
@@ -238,39 +237,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = parse_socket_path(&storage_dir, Some(&socket_tag));
     let shared_mode = parse_shared_mode();
     let daemon_mode = parse_daemon_mode();
-    let viewer_enabled = parse_viewer_enabled();
-    let viewer_enabled_daemon = parse_viewer_enabled_daemon();
-    let viewer_port = parse_viewer_port();
     let hot_reload_enabled = parse_hot_reload_enabled();
     let hot_reload_poll_ms = parse_hot_reload_poll_ms();
     let runner_autostart_enabled =
         parse_runner_autostart_override().unwrap_or(toolset != Toolset::Full);
     let runner_autostart_dry_run = parse_runner_autostart_dry_run();
-
-    let workspace_recommended = viewer::recommended_workspace_from_storage_dir(&storage_dir);
-    let presence_mode = if daemon_mode {
-        "daemon"
-    } else if shared_mode {
-        "shared"
-    } else {
-        "stdio"
-    };
-    viewer::record_catalog_entry(viewer::PresenceConfig {
-        storage_dir: storage_dir.clone(),
-        project_guard: project_guard.clone(),
-        workspace_default: default_workspace.clone(),
-        workspace_recommended: Some(workspace_recommended.clone()),
-        mode: presence_mode,
-    });
-    if !daemon_mode {
-        viewer::start_presence_writer(viewer::PresenceConfig {
-            storage_dir: storage_dir.clone(),
-            project_guard: project_guard.clone(),
-            workspace_default: default_workspace.clone(),
-            workspace_recommended: Some(workspace_recommended.clone()),
-            mode: if shared_mode { "shared" } else { "stdio" },
-        });
-    }
 
     if shared_mode {
         #[cfg(unix)]
@@ -295,8 +266,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 project_guard_rebind_enabled,
                 default_agent_id_config,
                 socket_path,
-                viewer_enabled,
-                viewer_port,
                 hot_reload_enabled,
                 hot_reload_poll_ms,
                 runner_autostart_dry_run,
@@ -339,8 +308,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 project_guard_rebind_enabled,
                 default_agent_id_config,
                 socket_path,
-                viewer_enabled: viewer_enabled_daemon,
-                viewer_port,
                 hot_reload_enabled,
                 hot_reload_poll_ms,
                 runner_autostart_dry_run,
@@ -391,36 +358,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             runner_autostart: runner_autostart_state.clone(),
         },
     );
-    if viewer_enabled {
-        let viewer_config = viewer::ViewerConfig {
-            storage_dir: storage_dir.clone(),
-            workspace: server.default_workspace.clone(),
-            project_guard: server.project_guard.clone(),
-            port: viewer_port,
-            runner_autostart_enabled: Some(runner_autostart_enabled.clone()),
-            runner_autostart_dry_run: server.runner_autostart_dry_run,
-            runner_autostart: Some(runner_autostart_state.clone()),
-        };
-        // Viewer is optional and must not break MCP startup.
-        let _ = viewer::start_viewer(viewer_config);
-        // Operational UX: if another session currently owns :7331, retry periodically so the
-        // viewer self-heals when the port becomes free (multi-Codex sessions).
-        let retry_config = viewer::ViewerConfig {
-            storage_dir: storage_dir.clone(),
-            workspace: server.default_workspace.clone(),
-            project_guard: server.project_guard.clone(),
-            port: viewer_port,
-            runner_autostart_enabled: Some(runner_autostart_enabled.clone()),
-            runner_autostart_dry_run: server.runner_autostart_dry_run,
-            runner_autostart: Some(runner_autostart_state.clone()),
-        };
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                let _ = viewer::start_viewer(retry_config.clone());
-            }
-        });
-    }
     let result = entry::run_stdio(&mut server, hot_reload_enabled, hot_reload_poll_ms);
     if let Err(err) = &result {
         write_last_crash(&storage_dir_for_errors, "error", &format!("{err:?}"));

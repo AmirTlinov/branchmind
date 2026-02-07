@@ -79,7 +79,6 @@ mod unix {
             .arg(&storage_dir)
             .arg("--toolset")
             .arg("full")
-            .arg("--no-viewer")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -210,7 +209,6 @@ mod unix {
             .arg(&storage_dir)
             .arg("--toolset")
             .arg("daily")
-            .arg("--no-viewer")
             // Ensure any daemon spawned by this proxy exits quickly after the proxy is gone.
             .env("BRANCHMIND_MCP_DAEMON_IDLE_EXIT_SECS", "1")
             .stdin(Stdio::piped())

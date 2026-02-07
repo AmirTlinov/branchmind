@@ -38,9 +38,9 @@ An agent can only trust a tool that behaves predictably:
 
 ## 4) Human situational awareness is optional, not a dependency
 
-The core remains MCP-only and automation-first. A **local read-only HTTP viewer** may exist as an
-optional adapter for non-technical users, but it must never become a dependency of core execution
-or reasoning behavior.
+The core remains MCP-only and automation-first. Human situational awareness must be achieved via
+MCP outputs and explicit exports; it must never become a dependency of core execution or
+reasoning behavior.
 
 ## 5) Branching is how uncertainty is handled
 

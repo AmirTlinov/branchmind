@@ -35,8 +35,6 @@ pub(crate) struct SharedProxyConfig {
     pub(crate) project_guard_rebind_enabled: bool,
     pub(crate) default_agent_id_config: Option<DefaultAgentIdConfig>,
     pub(crate) socket_path: PathBuf,
-    pub(crate) viewer_enabled: bool,
-    pub(crate) viewer_port: u16,
     pub(crate) hot_reload_enabled: bool,
     pub(crate) hot_reload_poll_ms: u64,
     pub(crate) runner_autostart_dry_run: bool,
@@ -50,37 +48,6 @@ pub(crate) fn run_shared_proxy(
     let mut daemon: Option<DaemonPipe> = None;
     let mut local_server: Option<McpServer> = None;
     let mut session_log = crate::SessionLog::new(&config.storage_dir);
-
-    if config.viewer_enabled {
-        let viewer_config = crate::viewer::ViewerConfig {
-            storage_dir: config.storage_dir.clone(),
-            workspace: config.default_workspace.clone(),
-            project_guard: config.project_guard.clone(),
-            port: config.viewer_port,
-            runner_autostart_enabled: Some(config.runner_autostart_enabled_shared.clone()),
-            runner_autostart_dry_run: config.runner_autostart_dry_run,
-            runner_autostart: Some(config.runner_autostart_state_shared.clone()),
-        };
-        // Viewer is optional and must not break MCP startup.
-        let _ = crate::viewer::start_viewer(viewer_config);
-        // Operational UX: if another session currently owns :7331, retry periodically so the
-        // viewer self-heals when the port becomes free (multi-Codex sessions).
-        let retry_config = crate::viewer::ViewerConfig {
-            storage_dir: config.storage_dir.clone(),
-            workspace: config.default_workspace.clone(),
-            project_guard: config.project_guard.clone(),
-            port: config.viewer_port,
-            runner_autostart_enabled: Some(config.runner_autostart_enabled_shared.clone()),
-            runner_autostart_dry_run: config.runner_autostart_dry_run,
-            runner_autostart: Some(config.runner_autostart_state_shared.clone()),
-        };
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(5));
-                let _ = crate::viewer::start_viewer(retry_config.clone());
-            }
-        });
-    }
 
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
@@ -389,20 +356,6 @@ fn ensure_local_server<'a>(
                 runner_autostart: config.runner_autostart_state_shared.clone(),
             },
         ));
-
-        if config.viewer_enabled {
-            let viewer_config = crate::viewer::ViewerConfig {
-                storage_dir: config.storage_dir.clone(),
-                workspace: config.default_workspace.clone(),
-                project_guard: config.project_guard.clone(),
-                port: config.viewer_port,
-                runner_autostart_enabled: Some(config.runner_autostart_enabled_shared.clone()),
-                runner_autostart_dry_run: config.runner_autostart_dry_run,
-                runner_autostart: Some(config.runner_autostart_state_shared.clone()),
-            };
-            // Viewer is optional and must not break MCP startup.
-            let _ = crate::viewer::start_viewer(viewer_config);
-        }
     }
 
     Ok(local_server
@@ -811,9 +764,6 @@ fn spawn_daemon(config: &SharedProxyConfig) -> Result<(), Box<dyn std::error::Er
         if let Some(project_guard) = &config.project_guard {
             command.arg("--project-guard").arg(project_guard);
         }
-        // IMPORTANT: the shared proxy owns the session-scoped viewer. The daemon must not start
-        // it implicitly (otherwise it can outlive the calling session and keep :7331 occupied).
-        command.arg("--no-viewer");
         if let Some(agent_cfg) = &config.default_agent_id_config {
             match agent_cfg {
                 DefaultAgentIdConfig::Auto => {
@@ -992,14 +942,6 @@ fn daemon_is_compatible(
         return Ok(false);
     }
 
-    let daemon_viewer_enabled = info
-        .get("viewer_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_viewer_enabled {
-        return Ok(false);
-    }
-
     Ok(true)
 }
 
@@ -1086,20 +1028,6 @@ fn recover_daemon(
     // cannot be terminated (e.g. an older build that doesn't support shutdown).
     let _ = std::fs::remove_file(&config.socket_path);
     spawn_daemon(config)?;
-
-    if config.viewer_enabled {
-        let viewer_config = crate::viewer::ViewerConfig {
-            storage_dir: config.storage_dir.clone(),
-            workspace: config.default_workspace.clone(),
-            project_guard: config.project_guard.clone(),
-            port: config.viewer_port,
-            runner_autostart_enabled: Some(config.runner_autostart_enabled_shared.clone()),
-            runner_autostart_dry_run: config.runner_autostart_dry_run,
-            runner_autostart: Some(config.runner_autostart_state_shared.clone()),
-        };
-        // Viewer is optional and must not break MCP recovery.
-        let _ = crate::viewer::start_viewer(viewer_config);
-    }
     Ok(())
 }
 

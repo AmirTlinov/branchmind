@@ -37,14 +37,6 @@ impl Server {
         } else {
             &["--toolset", "full"]
         };
-        let has_viewer_flag = extra_args
-            .iter()
-            .any(|arg| matches!(arg.trim(), "--viewer" | "--no-viewer"));
-        let default_viewer: &[&str] = if has_viewer_flag {
-            &[]
-        } else {
-            &["--no-viewer"]
-        };
         let has_response_verbosity = extra_args
             .iter()
             .any(|arg| arg.trim() == "--response-verbosity");
@@ -57,7 +49,6 @@ impl Server {
             .arg("--storage-dir")
             .arg(&storage_dir)
             .args(default_toolset)
-            .args(default_viewer)
             .args(default_response_verbosity)
             .args(extra_args)
             .stdin(Stdio::piped())

@@ -656,34 +656,6 @@ fn fnv1a_update(mut hash: u64, bytes: &[u8]) -> u64 {
     hash
 }
 
-pub(crate) fn parse_viewer_enabled() -> bool {
-    parse_viewer_enabled_with_default(true, "BRANCHMIND_VIEWER")
-}
-
-pub(crate) fn parse_viewer_enabled_daemon() -> bool {
-    // Daemons are long-lived by design; a local HTTP viewer would otherwise persist beyond the
-    // calling session. Keep the daemon viewer opt-in.
-    parse_viewer_enabled_with_default(false, "BRANCHMIND_VIEWER_DAEMON")
-}
-
-fn parse_viewer_enabled_with_default(default_enabled: bool, env_key: &str) -> bool {
-    for arg in std::env::args().skip(1) {
-        if arg.as_str() == "--no-viewer" {
-            return false;
-        }
-        if arg.as_str() == "--viewer" {
-            return true;
-        }
-    }
-    match std::env::var(env_key) {
-        Ok(raw) => matches!(
-            raw.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        Err(_) => default_enabled,
-    }
-}
-
 pub(crate) fn parse_ux_proof_v2_enabled() -> bool {
     parse_feature_enabled_with_default(
         true,
@@ -731,29 +703,6 @@ fn parse_feature_enabled_with_default(
             "1" | "true" | "yes" | "on"
         ),
         Err(_) => default_enabled,
-    }
-}
-
-pub(crate) fn parse_viewer_port() -> u16 {
-    const DEFAULT_VIEWER_PORT: u16 = 7331;
-    let mut cli: Option<String> = None;
-    let mut saw_flag = false;
-    for arg in std::env::args().skip(1) {
-        if saw_flag {
-            cli = Some(arg);
-            break;
-        }
-        saw_flag = arg.as_str() == "--viewer-port";
-    }
-
-    let raw = cli.or_else(|| std::env::var("BRANCHMIND_VIEWER_PORT").ok());
-    let Some(raw) = raw else {
-        return DEFAULT_VIEWER_PORT;
-    };
-    let parsed = raw.trim().parse::<u16>().ok();
-    match parsed {
-        Some(0) | None => DEFAULT_VIEWER_PORT,
-        Some(value) => value,
     }
 }
 

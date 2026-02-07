@@ -22,7 +22,6 @@ mod unix {
                 .arg(storage_dir)
                 .arg("--toolset")
                 .arg("full")
-                .arg("--no-viewer")
                 .arg("--socket")
                 .arg(socket_path)
                 .stdin(Stdio::piped())

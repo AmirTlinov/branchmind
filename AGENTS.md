@@ -13,8 +13,6 @@ Build a **single MCP server** that makes AI agents dramatically better at:
 
 No GUI/TUI in the core. MCP-first (stdio). Rust-first. Deterministic.
 
-Optional: a local-only, read-only HTTP viewer may be enabled for human situational awareness.
-
 ## Golden files (read first)
 
 - `GOALS.md` — explicit goals and non-goals
@@ -32,7 +30,6 @@ Optional: a local-only, read-only HTTP viewer may be enabled for human situation
 ### Determinism & safety
 
 - No outbound network calls (no remote I/O).
-- Loopback-only HTTP viewer is allowed when enabled (read-only, local-first).
 - No arbitrary external program execution in `bm_mcp`.
   - Exception: `bm_mcp` may optionally auto-start the first-party delegation runner (`bm_runner`).
     See `docs/contracts/DELEGATION.md`.

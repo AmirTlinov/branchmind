@@ -65,7 +65,7 @@ impl SqliteStore {
     ///
     /// Notes:
     /// - This does not create directories or run migrations.
-    /// - Intended for passive read-only consumers (e.g. the local viewer when inspecting
+    /// - Intended for passive read-only consumers (e.g. offline inspection tooling reading
     ///   other projects via the registry).
     pub fn open_read_only(storage_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
         let storage_dir = storage_dir.as_ref().to_path_buf();

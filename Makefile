@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check clippy test check run-mcp run-viewer-tauri
+.PHONY: help fmt fmt-check clippy test check run-mcp
 
 CARGO ?= cargo
 
@@ -11,7 +11,7 @@ help:
 		"  make clippy     Run clippy (deny warnings)" \
 		"  make test       Run workspace tests" \
 		"  make run-mcp    Run MCP server (DX defaults)" \
-		"  make run-viewer-tauri  Run viewer desktop app (Tauri+Vite+React, optional)"
+		""
 
 fmt:
 	$(CARGO) fmt
@@ -30,6 +30,3 @@ check: fmt-check clippy test
 # Golden path: zero-arg run enables DX defaults.
 run-mcp:
 	$(CARGO) run -p bm_mcp
-
-run-viewer-tauri:
-	cd viewer-tauri && npm run tauri:dev

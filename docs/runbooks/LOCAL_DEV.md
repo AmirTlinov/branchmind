@@ -25,10 +25,6 @@ make run-mcp
 
 Override with `--toolset` or `BRANCHMIND_TOOLSET`.
 
-## Viewer UI
-
-Viewer assets are plain JS/CSS served from `crates/mcp/src/viewer/assets/` with no build step.
-
 ## Multi-session stability (shared mode)
 
 For multiple concurrent agent CLIs (Codex/Claude/Gemini/etc.), prefer running the MCP server in `--shared` mode.
@@ -74,7 +70,7 @@ Notes:
 [mcp_servers.branchmind]
 command = "/home/amir/.local/bin/bm_mcp"
 startup_timeout_sec = 120
-args = ["--shared", "--toolset", "daily", "--agent-id", "auto", "--no-viewer"]
+args = ["--shared", "--toolset", "daily", "--agent-id", "auto"]
 ```
 
 Notes:

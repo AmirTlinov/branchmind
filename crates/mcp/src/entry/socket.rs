@@ -30,8 +30,6 @@ pub(crate) struct DaemonConfig {
     pub(crate) project_guard_rebind_enabled: bool,
     pub(crate) default_agent_id_config: Option<DefaultAgentIdConfig>,
     pub(crate) socket_path: PathBuf,
-    pub(crate) viewer_enabled: bool,
-    pub(crate) viewer_port: u16,
     pub(crate) hot_reload_enabled: bool,
     pub(crate) hot_reload_poll_ms: u64,
     pub(crate) runner_autostart_dry_run: bool,
@@ -56,20 +54,6 @@ pub(crate) fn run_socket_daemon(config: DaemonConfig) -> Result<(), Box<dyn std:
 
     if config.socket_path.exists() {
         let _ = std::fs::remove_file(&config.socket_path);
-    }
-
-    if config.viewer_enabled {
-        let viewer_config = crate::viewer::ViewerConfig {
-            storage_dir: config.storage_dir.clone(),
-            workspace: config.default_workspace.clone(),
-            project_guard: config.project_guard.clone(),
-            port: config.viewer_port,
-            runner_autostart_enabled: Some(config.runner_autostart_enabled_shared.clone()),
-            runner_autostart_dry_run: config.runner_autostart_dry_run,
-            runner_autostart: Some(config.runner_autostart_state_shared.clone()),
-        };
-        // Viewer is optional and must not break daemon startup.
-        let _ = crate::viewer::start_viewer(viewer_config);
     }
 
     let listener = match UnixListener::bind(&config.socket_path) {
@@ -206,11 +190,9 @@ fn handle_connection(
                         "dx_mode": config.dx_mode,
                         "default_workspace": config.default_workspace,
                         "workspace_explicit": config.workspace_explicit,
-                        "workspace_allowlist": config.workspace_allowlist,
+                                        "workspace_allowlist": config.workspace_allowlist,
                                         "workspace_lock": config.workspace_lock,
                         "project_guard": config.project_guard,
-                        "viewer_enabled": config.viewer_enabled,
-                                        "viewer_port": config.viewer_port
                                     }),
                     ))
                 } else {
@@ -378,20 +360,6 @@ fn daemon_is_compatible(
         .map(|s| s.to_string());
     if daemon_project_guard != config.project_guard {
         return Ok(false);
-    }
-
-    let daemon_viewer_enabled = info
-        .get("viewer_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_viewer_enabled != config.viewer_enabled {
-        return Ok(false);
-    }
-    if daemon_viewer_enabled {
-        let daemon_viewer_port = info.get("viewer_port").and_then(|v| v.as_u64());
-        if daemon_viewer_port != Some(config.viewer_port as u64) {
-            return Ok(false);
-        }
     }
 
     Ok(true)

@@ -55,19 +55,10 @@ fn start_with_env(
     extra_args: &[&str],
     env_vars: &[(&str, &str)],
 ) -> RawServer {
-    let has_viewer_flag = extra_args
-        .iter()
-        .any(|arg| matches!(arg.trim(), "--viewer" | "--no-viewer"));
-    let default_viewer: &[&str] = if has_viewer_flag {
-        &[]
-    } else {
-        &["--no-viewer"]
-    };
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_bm_mcp"));
     cmd.arg("--storage-dir")
         .arg(storage_dir)
         .args(["--toolset", "full"])
-        .args(default_viewer)
         .args(extra_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped());

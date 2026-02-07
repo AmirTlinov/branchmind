@@ -42,7 +42,6 @@ mod unix {
             .arg(&storage_dir)
             .arg("--toolset")
             .arg("full")
-            .arg("--no-viewer")
             // Ensure PATH fallback cannot find `bm_mcp` if daemon spawning breaks.
             .env("PATH", "")
             .stdin(Stdio::piped())
