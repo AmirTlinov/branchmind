@@ -1,0 +1,25 @@
+{
+  "productName": "BranchMind Viewer",
+  "version": "0.1.0",
+  "identifier": "com.branchmind.viewer",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173/",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "BranchMind Viewer",
+        "width": 1280,
+        "height": 800,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}
+

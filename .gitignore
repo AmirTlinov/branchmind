@@ -7,3 +7,11 @@
 /dist
 .agents/
 target/
+
+# Tauri viewer app (Vite + React)
+/apps/viewer-tauri/node_modules/
+/apps/viewer-tauri/dist/
+/apps/viewer-tauri/.vite/
+/apps/viewer-tauri/src-tauri/target/
+/apps/viewer-tauri/tsconfig.tsbuildinfo
+/apps/viewer-tauri/src-tauri/gen/

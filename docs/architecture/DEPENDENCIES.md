@@ -38,3 +38,28 @@ If “0 deps strict” is required, replace these with in-house minimal implemen
 - `time`: RFC3339 timestamps in agent-facing payloads.
 - `nix` (unix-only): poll/select wrappers used to poll stdin with a timeout so hot reload can
   trigger even when the MCP client is idle (no manual restarts).
+
+### `apps/viewer-tauri` (optional desktop viewer; outside the workspace)
+
+This is a **read-only** desktop viewer built with **Tauri v2** (WebView runtime) + Vite/React.
+
+Why it exists:
+
+- Gives humans a way to understand *what/how/why* an agent is working (tasks/steps/notes/trace/graph),
+  without turning `bm_mcp` into a web server.
+
+Why it is acceptable (dependency budget):
+
+- It is **isolated from the domain core** (`bm_core` remains std-only).
+- It is **not** part of `cargo test --workspace` / `make check`.
+- It performs **no outbound network calls** and reads stores using `open_read_only`.
+
+Rust dependencies (viewer backend):
+
+- `tauri` / `tauri-build`: desktop shell and IPC for local read-only commands.
+- `serde` / `serde_json`: DTO serialization across IPC boundary.
+
+Frontend dependencies (viewer UI):
+
+- `react` + `vite`: UI runtime + build tooling.
+- `zustand`: minimal predictable state container.

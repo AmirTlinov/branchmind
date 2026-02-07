@@ -69,3 +69,22 @@ Notes:
 - Contracts: `docs/contracts/OVERVIEW.md`
 - Architecture: `docs/architecture/ARCHITECTURE.md`
 - Agent map: `AGENTS.md`
+
+## Optional: Desktop Viewer (Tauri)
+
+This repo ships an **optional read-only desktop viewer** under `apps/viewer-tauri/`.
+It is intentionally **not** part of the Rust workspace (so `make check` stays fast and deterministic).
+
+```bash
+make viewer-install
+make viewer-tauri-dev
+```
+
+Notes:
+
+- The viewer is **read-only** and opens stores via `SqliteStore::open_read_only`.
+- Store discovery scans common roots; override with:
+
+```bash
+export BRANCHMIND_VIEWER_SCAN_ROOTS="/abs/path/one;/abs/path/two"
+```
