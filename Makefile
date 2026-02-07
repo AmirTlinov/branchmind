@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check clippy test check run-mcp viewer-install viewer-typecheck viewer-build viewer-tauri-dev
+.PHONY: help fmt fmt-check clippy test check run-mcp run-viewer viewer-install viewer-typecheck viewer-build viewer-tauri-dev
 
 CARGO ?= cargo
 
@@ -13,10 +13,10 @@ help:
 		"  make run-mcp    Run MCP server (DX defaults)" \
 		"" \
 		"Viewer (Tauri, optional):" \
+		"  make run-viewer       Run the desktop viewer (tauri dev)" \
 		"  make viewer-install   Install npm deps (apps/viewer-tauri/)" \
 		"  make viewer-typecheck Typecheck the viewer" \
 		"  make viewer-build     Build the viewer frontend (Vite)" \
-		"  make viewer-tauri-dev Run the desktop viewer (tauri dev)" \
 		""
 
 fmt:
@@ -37,8 +37,10 @@ check: fmt-check clippy test
 run-mcp:
 	$(CARGO) run -p bm_mcp
 
+run-viewer: viewer-tauri-dev
+
 viewer-install:
-	cd apps/viewer-tauri && npm install
+	cd apps/viewer-tauri && npm ci
 
 viewer-typecheck:
 	cd apps/viewer-tauri && npm run typecheck
@@ -47,4 +49,5 @@ viewer-build:
 	cd apps/viewer-tauri && npm run build
 
 viewer-tauri-dev:
+	@test -d apps/viewer-tauri/node_modules || (echo "ERROR: viewer deps missing. Run: make viewer-install" && exit 1)
 	cd apps/viewer-tauri && npm run tauri:dev

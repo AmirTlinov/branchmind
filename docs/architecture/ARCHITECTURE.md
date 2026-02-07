@@ -33,6 +33,15 @@ Dependency direction is strict for the core server:
 `bm_runner` is intentionally not part of the core dependency chain; it is an external operator/worker
 process that talks to BranchMind via MCP tools and/or shared store.
 
+## Optional apps (out of the Rust workspace)
+
+This repo may ship optional “apps” under `apps/` that are **not** part of the Cargo workspace, so the
+golden path (`make check`) stays **pure Rust** and does not require Node/Tauri.
+
+- `apps/viewer-tauri/`: read-only desktop viewer (Tauri v2 + Vite/React). See:
+  - `docs/architecture/VIEWER_TAURI.md`
+  - `docs/contracts/VIEWER.md`
+
 ## Boundaries (ports & adapters)
 
 - **Core (pure):**

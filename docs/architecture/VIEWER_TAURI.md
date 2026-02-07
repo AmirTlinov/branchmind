@@ -38,6 +38,5 @@ Sidebar (projects/workspaces/tasks)
 
 ```bash
 make viewer-install
-make viewer-tauri-dev
+make run-viewer
 ```
-

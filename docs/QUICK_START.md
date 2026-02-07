@@ -77,7 +77,7 @@ It is intentionally **not** part of the Rust workspace (so `make check` stays fa
 
 ```bash
 make viewer-install
-make viewer-tauri-dev
+make run-viewer
 ```
 
 Notes:
