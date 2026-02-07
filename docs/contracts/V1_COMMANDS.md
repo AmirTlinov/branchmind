@@ -189,6 +189,11 @@ Notes:
 - On timeout/clamp, the tool returns `success=true` with `result.done=false` (not an error).
 - Output includes: `waited_ms`, `requested_timeout_ms`, `effective_timeout_ms`, `remaining_ms`, and
   the current `job` row snapshot.
+- Optional `mode`:
+  - `mode="default"` (default): structured JSON + `actions[]`.
+  - `mode="watch"`: returns **1–2 lines** (line protocol) intended for agent polling loops:
+    a compact status line with **stop-condition hints**, plus (when `done=false`) a copy/paste
+    continuation command that preserves `mode="watch"`.
 - Use `system` → `schema.get(cmd)` for the exact arguments.
 
 ## jobs.runner.start

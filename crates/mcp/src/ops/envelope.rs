@@ -37,6 +37,12 @@ impl OpError {
 pub(crate) struct OpResponse {
     pub(crate) intent: String,
     pub(crate) result: Value,
+    /// When true, the tool result is intended to be rendered as compact tagged lines (BM-L1)
+    /// rather than pretty-printed JSON.
+    ///
+    /// This is a transport-level UX knob: it affects `tool_text_content` rendering only and does
+    /// not change the semantic meaning of the payload.
+    pub(crate) line_protocol: bool,
     pub(crate) refs: Vec<String>,
     pub(crate) warnings: Vec<Value>,
     pub(crate) actions: Vec<Action>,
@@ -48,6 +54,7 @@ impl OpResponse {
         Self {
             intent,
             result,
+            line_protocol: false,
             refs: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
@@ -59,6 +66,7 @@ impl OpResponse {
         Self {
             intent,
             result: json!({}),
+            line_protocol: false,
             refs: Vec::new(),
             warnings: Vec::new(),
             actions: Vec::new(),
@@ -73,7 +81,7 @@ impl OpResponse {
                 .cmp(&b.priority.rank())
                 .then_with(|| a.action_id.cmp(&b.action_id))
         });
-        json!({
+        let mut out = json!({
             "success": self.error.is_none(),
             "intent": self.intent,
             "result": self.result,
@@ -84,7 +92,13 @@ impl OpResponse {
             "context": {},
             "error": self.error.as_ref().map(|e| e.to_value()).unwrap_or(Value::Null),
             "timestamp": now_rfc3339(),
-        })
+        });
+        if self.line_protocol
+            && let Some(obj) = out.as_object_mut()
+        {
+            obj.insert("line_protocol".to_string(), Value::Bool(true));
+        }
+        out
     }
 }
 

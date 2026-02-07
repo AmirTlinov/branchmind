@@ -37,6 +37,7 @@ pub(crate) fn handler_to_op_response(
         return OpResponse {
             intent: cmd.to_string(),
             result,
+            line_protocol: false,
             refs: Vec::new(),
             warnings,
             actions,
@@ -81,6 +82,7 @@ pub(crate) fn handler_to_op_response(
     OpResponse {
         intent: cmd.to_string(),
         result: json!({}),
+        line_protocol: false,
         refs: Vec::new(),
         warnings,
         actions,

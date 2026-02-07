@@ -17,6 +17,12 @@ const DEFAULT_POLL_MS: u64 = 200;
 const MIN_POLL_MS: u64 = 10;
 const MAX_POLL_MS: u64 = 5_000;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum WaitOutputMode {
+    Default,
+    Watch,
+}
+
 fn is_terminal(status: &str) -> bool {
     matches!(status, "DONE" | "FAILED" | "CANCELED")
 }
@@ -30,6 +36,24 @@ fn require_string(args_obj: &serde_json::Map<String, Value>, key: &str) -> Resul
         });
     };
     Ok(v.to_string())
+}
+
+fn optional_string(
+    args_obj: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, OpError> {
+    let Some(v) = args_obj.get(key) else {
+        return Ok(None);
+    };
+    match v {
+        Value::Null => Ok(None),
+        Value::String(s) => Ok(Some(s.to_string())),
+        _ => Err(OpError {
+            code: "INVALID_INPUT".to_string(),
+            message: format!("{key}: expected string"),
+            recovery: Some(format!("Provide args.{key} as a string")),
+        }),
+    }
 }
 
 fn optional_u64(
@@ -99,6 +123,29 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
         Ok(v) => v,
         Err(err) => return OpResponse::error(env.cmd.clone(), err),
     };
+
+    let mode = match optional_string(args_obj, "mode") {
+        Ok(v) => v,
+        Err(err) => return OpResponse::error(env.cmd.clone(), err),
+    };
+    let mode = match mode.as_deref() {
+        None | Some("default") => WaitOutputMode::Default,
+        Some("watch") => WaitOutputMode::Watch,
+        Some(other) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: format!("mode: unknown value {other:?}"),
+                    recovery: Some(
+                        "Use mode=\"default\" (structured) or mode=\"watch\" (1-2 lines)"
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+    };
+
     let timeout_ms = match optional_u64(args_obj, "timeout_ms") {
         Ok(v) => v.unwrap_or(DEFAULT_TIMEOUT_MS),
         Err(err) => return OpResponse::error(env.cmd.clone(), err),
@@ -235,6 +282,47 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
     }
 
     let waited_ms = started.elapsed().as_millis() as u64;
+
+    if mode == WaitOutputMode::Watch {
+        let remaining_ms = requested_timeout_ms.saturating_sub(waited_ms);
+        let stop_hint = "stop: done=true (DONE|FAILED|CANCELED)";
+        let hint = match job.status.as_str() {
+            "QUEUED" => "hint: jobs.runner.start / jobs.open / system.daemon.restart",
+            "RUNNING" => "hint: jobs.open / jobs.tail / system.daemon.restart",
+            _ => "hint: jobs.open / system.daemon.restart",
+        };
+
+        let mut lines = Vec::<String>::new();
+        lines.push(format!(
+            "job={job_id} status={} done={} waited={}ms eff={}ms remaining~{}ms | {stop_hint} | {hint}",
+            job.status,
+            done,
+            waited_ms,
+            call_timeout_ms,
+            remaining_ms
+        ));
+
+        if !done {
+            // Copy/paste‑valid continuation: repeats the same bounded wait with mode=watch so an
+            // agent can loop without thinking.
+            let args_json = json!({
+                "job": job_id,
+                "timeout_ms": requested_timeout_ms,
+                "poll_ms": poll_ms,
+                "mode": "watch"
+            });
+            let args_str = serde_json::to_string(&args_json).unwrap_or_else(|_| "{}".to_string());
+            lines.push(format!(
+                "jobs workspace={} op=wait args={} budget_profile=portal view=compact",
+                workspace.as_str(),
+                args_str
+            ));
+        }
+
+        let mut resp = OpResponse::success(env.cmd.clone(), Value::String(lines.join("\n")));
+        resp.line_protocol = true;
+        return resp;
+    }
 
     let mut resp = OpResponse::success(
         env.cmd.clone(),

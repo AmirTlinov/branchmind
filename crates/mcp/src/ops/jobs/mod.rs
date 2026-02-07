@@ -96,6 +96,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 "type": "object",
                 "properties": {
                     "job": { "type": "string" },
+                    "mode": { "type": "string", "enum": ["default", "watch"] },
                     "timeout_ms": { "type": "integer" },
                     "poll_ms": { "type": "integer" }
                 },
