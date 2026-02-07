@@ -17,7 +17,15 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
 
   if (tauriInvoke) {
     // Desktop viewer (Tauri): route via Rust backend to avoid CORS + keep API loopback-only.
-    return (await tauriInvoke("viewer_api_get_json", { path: url })) as T;
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method === "GET" || method === "HEAD") {
+      return (await tauriInvoke("viewer_api_get_json", { path: url })) as T;
+    }
+    if (method === "POST") {
+      const body = typeof init?.body === "string" ? init.body : "";
+      return (await tauriInvoke("viewer_api_post_json", { path: url, body })) as T;
+    }
+    throw new Error(`Unsupported viewer API method: ${method}`);
   }
 
   // Browser/dev fallback (best-effort).

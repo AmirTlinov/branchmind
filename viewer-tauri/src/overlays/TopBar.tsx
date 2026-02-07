@@ -62,7 +62,7 @@ export function TopBar() {
       >
         <option value="">current</option>
         {projects.map((p) => (
-          <option key={p.project_guard} value={p.label}>
+          <option key={p.project_guard} value={p.project_guard}>
             {p.label}{p.is_temp ? " (tmp)" : ""}
           </option>
         ))}

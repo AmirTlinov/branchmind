@@ -43,6 +43,40 @@ fn viewer_api_get_json(
     }
 }
 
+#[tauri::command]
+fn viewer_api_post_json(
+    config: tauri::State<'_, ViewerApiConfig>,
+    path: String,
+    body: String,
+) -> Result<Value, String> {
+    let path = path.trim();
+    if !path.starts_with("/api/") {
+        return Err("path: expected /api/*".to_string());
+    }
+    if path.contains("://") || path.contains('\n') || path.contains('\r') {
+        return Err("path: invalid characters".to_string());
+    }
+    if body.len() > 256 * 1024 {
+        return Err("body: too large".to_string());
+    }
+
+    let url = format!("{}{}", config.base_url, path);
+    let req = ureq::post(&url).set("Content-Type", "application/json");
+    match req.send_string(&body) {
+        Ok(resp) => resp
+            .into_json::<Value>()
+            .map_err(|err| format!("invalid json: {err}")),
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            Err(format!(
+                "HTTP {code}: {}",
+                body.chars().take(400).collect::<String>()
+            ))
+        }
+        Err(err) => Err(format!("request failed: {err}")),
+    }
+}
+
 fn parse_viewer_port() -> u16 {
     const DEFAULT_VIEWER_PORT: u16 = 7331;
     let mut cli: Option<String> = None;
@@ -123,7 +157,10 @@ fn main() {
         .manage(ViewerApiConfig {
             base_url: api_base_url,
         })
-        .invoke_handler(tauri::generate_handler![viewer_api_get_json])
+        .invoke_handler(tauri::generate_handler![
+            viewer_api_get_json,
+            viewer_api_post_json
+        ])
         .setup(move |app| {
             let mut builder = tauri::WebviewWindowBuilder::new(
                 app.handle(),

@@ -151,6 +151,7 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
       }
     } catch (err) {
       set({ error: String(err) });
+      throw err;
     }
   },
 }));
