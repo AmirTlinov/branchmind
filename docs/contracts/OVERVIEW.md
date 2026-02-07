@@ -31,6 +31,7 @@ Many MCP clients require tool names to match `^[a-zA-Z0-9_-]+$`.
 - `SKILLS.md` — built-in behavior packs (`skill` tool)
 - `INTEGRATION.md` — how tasks and memory stay consistent (events, refs, conflicts)
 - `PARITY.md` — parity target with apply_task + branchmind tool surfaces
+- `VIEWER.md` — local-only Tauri viewer IPC contract (not part of MCP surface)
 
 Related:
 
