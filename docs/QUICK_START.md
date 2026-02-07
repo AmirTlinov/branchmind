@@ -14,6 +14,11 @@ make check
 make run-mcp
 ```
 
+Then open the local viewer (loopback-only, read-only):
+
+- UI: `http://127.0.0.1:7331/`
+- API: `http://127.0.0.1:7331/api/*`
+
 Zero-arg invocation enables flagship DX defaults:
 
 - shared proxy (session-scoped)
@@ -25,7 +30,7 @@ Zero-arg invocation enables flagship DX defaults:
 
 ## 2b) Run the viewer as a desktop app (Tauri, optional)
 
-In one terminal, keep the local viewer HTTP **API** server running (it is enabled by default in
+In one terminal, keep the local viewer HTTP server running (UI + API; enabled by default in
 `bm_mcp` session mode):
 
 ```bash

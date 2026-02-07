@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[test]
-fn viewer_root_is_stub_page() {
+fn viewer_root_serves_ui_shell() {
     let Some(port) = pick_free_port() else {
         // Some sandboxed environments disallow TCP bind() even on loopback.
         return;
@@ -35,15 +35,13 @@ fn viewer_root_is_stub_page() {
     wait_for_viewer(port);
     let index = http_get_text(port, "/");
 
-    // Viewer UI is now a separate desktop app; the MCP server exposes a minimal
-    // root HTML page + read-only API under /api/*.
     assert!(
-        index.contains("BranchMind Viewer API"),
-        "expected viewer root stub page"
+        index.contains("<div id=\"root\"></div>"),
+        "expected viewer UI shell root node"
     );
     assert!(
-        index.contains("make run-viewer-tauri"),
-        "expected viewer root stub to point to the desktop app entrypoint"
+        index.contains("<title>BranchMind</title>"),
+        "expected viewer UI shell title"
     );
 
     let _ = proc.kill();

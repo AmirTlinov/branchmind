@@ -35,12 +35,15 @@ Notes:
 
 ### `GET /` (and `GET /index.html`)
 
-Returns a **minimal** HTML page.
+Returns the viewer **UI shell** as a single HTML page (inlined JS/CSS).
 
 Notes:
 
-- The full viewer UI is shipped as a separate desktop app (`viewer-tauri/`, Tauri+Vite+React).
-- The MCP server exposes the read-only viewer **API** under `/api/*` (this contract).
+- The UI source of truth lives in `viewer-tauri/` (Vite+React). The built `dist/index.html`
+  is copied into `crates/mcp/src/viewer/assets/index.html` so `bm_mcp` can serve the UI without
+  requiring Node tooling at runtime.
+- The same UI can also be wrapped as a desktop app via Tauri (`make run-viewer-tauri`).
+- The read-only viewer **API** lives under `/api/*` (this contract).
 
 ### `GET /api/about`
 
