@@ -260,7 +260,9 @@ fn is_step_id(raw: &str) -> bool {
         return false;
     }
     if let Some(rest) = raw.strip_prefix("STEP-") {
-        return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit());
+        // Step IDs are generated as a fixed-width uppercase hex counter (e.g. STEP-0000000A),
+        // so they may include A-F. Accept ASCII hex digits to keep `open STEP-*` stable.
+        return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit());
     }
     false
 }

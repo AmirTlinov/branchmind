@@ -37,9 +37,12 @@ fn open_step_deeplink_is_supported() {
             "kind": "task",
             "parent": plan_id,
             "title": "Open step task",
-            "steps": [
-                { "title": "S1", "success_criteria": ["c1"] }
-            ]
+            // We intentionally create enough steps so the hex step counter includes A-F
+            // (e.g. STEP-0000000A). This guards `open STEP-*` for real-world workspaces.
+            "steps": (0..12).map(|i| json!({
+                "title": format!("S{i}"),
+                "success_criteria": [format!("c{i}")]
+            })).collect::<Vec<_>>()
         } } }
     }));
     let created = extract_tool_text(&created);
@@ -99,10 +102,59 @@ fn open_step_deeplink_is_supported() {
         Some(path.as_str())
     );
 
+    let steps = result
+        .get("steps")
+        .and_then(|v| v.as_array())
+        .expect("steps array");
+    let (hex_step_id, hex_path) = steps
+        .iter()
+        .find_map(|s| {
+            let step_id = s.get("step_id")?.as_str()?;
+            let rest = step_id.strip_prefix("STEP-").unwrap_or(step_id);
+            let has_hex_letter = rest.chars().any(|c| matches!(c, 'A'..='F' | 'a'..='f'));
+            if !has_hex_letter {
+                return None;
+            }
+            let path = s.get("path")?.as_str()?;
+            Some((step_id.to_string(), path.to_string()))
+        })
+        .expect("a STEP-* id with hex A-F in its suffix");
+
+    let opened_hex = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "open", "arguments": { "workspace": "ws_open_step", "id": hex_step_id } }
+    }));
+    let opened_hex = extract_tool_text(&opened_hex);
+    assert_eq!(
+        opened_hex.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let opened_hex = opened_hex.get("result").expect("result");
+    assert_eq!(
+        opened_hex.get("kind").and_then(|v| v.as_str()),
+        Some("step")
+    );
+    assert_eq!(
+        opened_hex
+            .get("step")
+            .and_then(|v| v.get("step_id"))
+            .and_then(|v| v.as_str()),
+        Some(hex_step_id.as_str())
+    );
+    assert_eq!(
+        opened_hex
+            .get("step")
+            .and_then(|v| v.get("path"))
+            .and_then(|v| v.as_str()),
+        Some(hex_path.as_str())
+    );
+
     let deeplink = format!("{task_id}@{path}");
     let opened_path = server.request(json!({
         "jsonrpc": "2.0",
-        "id": 4,
+        "id": 5,
         "method": "tools/call",
         "params": { "name": "open", "arguments": { "workspace": "ws_open_step", "id": deeplink } }
     }));
