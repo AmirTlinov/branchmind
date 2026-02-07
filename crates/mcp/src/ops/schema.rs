@@ -102,7 +102,10 @@ pub(crate) fn schema_bundle_for_cmd(
             "budget_profile".to_string(),
             Value::String(spec.budget.default_profile.as_str().to_string()),
         );
-        env.insert("view".to_string(), Value::String("compact".to_string()));
+        env.insert(
+            "portal_view".to_string(),
+            Value::String("compact".to_string()),
+        );
 
         json!({
             "tool": spec.domain_tool.as_str(),
@@ -166,7 +169,10 @@ pub(crate) fn append_schema_actions(resp: &mut OpResponse, cmd: &str, workspace:
             "budget_profile".to_string(),
             Value::String(spec.budget.default_profile.as_str().to_string()),
         );
-        env.insert("view".to_string(), Value::String("compact".to_string()));
+        env.insert(
+            "portal_view".to_string(),
+            Value::String("compact".to_string()),
+        );
 
         resp.actions.push(Action {
             action_id: example_action_id,

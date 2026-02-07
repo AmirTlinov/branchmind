@@ -32,6 +32,28 @@ BranchMind v1 стандартизирует MCP‑поверхность вок
 - Golden‑ops доступны через `op` (см. `V1_COMMANDS.md`).
 - Long‑tail всегда через `op="call" + cmd`.
 
+## Portal envelope (ops) — `portal_view` vs cmd args `view`
+
+Все ops‑порталы (`workspace|tasks|jobs|think|graph|vcs|docs|system`) принимают единый envelope:
+
+```json
+{
+  "workspace": "string?",
+  "op": "string",
+  "cmd": "string? (required for op=\"call\")",
+  "args": {},
+  "budget_profile": "portal|default|audit",
+  "portal_view": "compact|smart|audit"
+}
+```
+
+Правило UX:
+
+- `portal_view` влияет **только на портал‑ответ** (сколько/как показывать для resume‑UX).
+- cmd‑специфичный `view` (например `tasks.resume.super args.view`) остаётся **внутри `args`**.
+- `view` на уровне envelope принимается как deprecated‑alias для `portal_view` (для совместимости),
+  но сервер/`actions[]` печатает canonical `portal_view` чтобы copy/paste не путал два разных “view”.
+
 ## actions‑first
 
 Единственный механизм “что дальше” — `actions[]`.

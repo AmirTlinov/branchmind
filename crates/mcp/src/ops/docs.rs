@@ -172,7 +172,7 @@ fn handle_transcripts_digest(server: &mut crate::McpServer, env: &Envelope) -> O
                     "cmd": "docs.transcripts.digest",
                     "args": Value::Object(inner),
                     "budget_profile": "default",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Повторить digest с большим scan budget (bounded).".to_string(),
                 risk: "Низкий".to_string(),
@@ -239,7 +239,7 @@ fn handle_transcripts_open(server: &mut crate::McpServer, env: &Envelope) -> OpR
                     "content": capture_content
                 },
                 "budget_profile": "default",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: "Зафиксировать окно транскрипта как идею/капсулу (личная полоса).".to_string(),
             risk: "Низкий".to_string(),
@@ -261,7 +261,7 @@ fn handle_transcripts_open(server: &mut crate::McpServer, env: &Envelope) -> OpR
                     "content": capture_content
                 },
                 "budget_profile": "default",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: "Зафиксировать окно транскрипта как идею/капсулу (shared lane).".to_string(),
             risk: "Низкий".to_string(),

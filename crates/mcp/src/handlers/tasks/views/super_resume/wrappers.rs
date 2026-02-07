@@ -160,6 +160,61 @@ impl McpServer {
             }
         }
 
+        // UX: surface the recommended next action (capsule.action) as a portal-first action object.
+        // This keeps the "what do I do next?" rail structured and copy/paste-ready without
+        // requiring callers to parse the capsule payload.
+        let success = response
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if success {
+            let (tool, available, purpose, params) = {
+                let capsule_action = response
+                    .get("result")
+                    .and_then(|v| v.get("capsule"))
+                    .and_then(|v| v.get("action"))
+                    .and_then(|v| v.as_object());
+
+                let tool = capsule_action
+                    .and_then(|v| v.get("tool"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let available = capsule_action
+                    .and_then(|v| v.get("available"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let purpose = capsule_action
+                    .and_then(|v| v.get("purpose"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "next action".to_string());
+                let params = capsule_action
+                    .and_then(|v| v.get("args").or_else(|| v.get("args_hint")))
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+
+                (tool, available, purpose, params)
+            };
+
+            if let Some(tool) = tool
+                && available
+                && let Some(obj) = response.as_object_mut()
+            {
+                let entry = suggest_call(&tool, &purpose, "high", params);
+                match obj.get_mut("suggestions") {
+                    Some(Value::Array(arr)) => arr.push(entry),
+                    Some(_) => {
+                        obj.insert("suggestions".to_string(), Value::Array(vec![entry]));
+                    }
+                    None => {
+                        obj.insert("suggestions".to_string(), Value::Array(vec![entry]));
+                    }
+                }
+            }
+        }
+
         if delta {
             let view = args_obj.get("view").and_then(|v| v.as_str());
             let include_drafts = view.unwrap_or("").trim().eq_ignore_ascii_case("audit");

@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug)]
 pub(crate) struct Envelope {
     pub(crate) workspace: Option<String>,
+    pub(crate) budget_profile: BudgetProfile,
+    pub(crate) portal_view: Option<String>,
     pub(crate) cmd: String,
     pub(crate) args: Value,
 }
@@ -112,7 +114,7 @@ pub(crate) fn error_unknown_tool(name: &str) -> Value {
         action_id: "recover.status.portal".to_string(),
         priority: ActionPriority::Medium,
         tool: ToolName::Status.as_str().to_string(),
-        args: json!({ "budget_profile": "portal", "view": "compact" }),
+        args: json!({ "budget_profile": "portal", "portal_view": "compact" }),
         why: "Открыть портал status (следующие действия + refs).".to_string(),
         risk: "Низкий".to_string(),
     });
@@ -224,7 +226,75 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
             env.workspace.as_deref(),
         );
     }
+    append_budget_truncation_actions(&mut response, tool, &env);
     response.into_value()
+}
+
+fn append_budget_truncation_actions(resp: &mut OpResponse, tool: ToolName, env: &Envelope) {
+    if resp.error.is_some() {
+        return;
+    }
+    let truncated = resp.warnings.iter().any(|w| {
+        matches!(
+            w.get("code").and_then(|v| v.as_str()),
+            Some("BUDGET_TRUNCATED") | Some("BUDGET_MINIMAL")
+        )
+    });
+    if !truncated {
+        return;
+    }
+
+    let target_profile = match env.budget_profile {
+        BudgetProfile::Portal => BudgetProfile::Default,
+        BudgetProfile::Default => BudgetProfile::Audit,
+        BudgetProfile::Audit => BudgetProfile::Audit,
+    };
+
+    let mut retry_args = env.args.as_object().cloned().unwrap_or_default();
+    // Retry should be copy/paste-ready: drop explicit budget knobs so the selected budget_profile
+    // can re-apply its defaults (including larger caps).
+    retry_args.remove("max_chars");
+    retry_args.remove("context_budget");
+
+    // Hygiene: strip inner workspace duplication when we already have an outer workspace.
+    if let Some(ws) = env.workspace.as_deref()
+        && retry_args.get("workspace").and_then(|v| v.as_str()) == Some(ws)
+    {
+        retry_args.remove("workspace");
+    }
+
+    let mut retry_env = serde_json::Map::new();
+    if let Some(ws) = env.workspace.as_deref() {
+        retry_env.insert("workspace".to_string(), Value::String(ws.to_string()));
+    }
+    retry_env.insert("op".to_string(), Value::String("call".to_string()));
+    retry_env.insert("cmd".to_string(), Value::String(env.cmd.clone()));
+    retry_env.insert("args".to_string(), Value::Object(retry_args));
+    retry_env.insert(
+        "budget_profile".to_string(),
+        Value::String(target_profile.as_str().to_string()),
+    );
+    retry_env.insert(
+        "portal_view".to_string(),
+        Value::String(env.portal_view.as_deref().unwrap_or("compact").to_string()),
+    );
+
+    // Avoid action spam.
+    let action_id = format!("recover.budget.truncation::{}", env.cmd);
+    if resp.actions.iter().any(|a| a.action_id == action_id) {
+        return;
+    }
+
+    resp.actions.push(Action {
+        action_id,
+        priority: ActionPriority::High,
+        tool: tool.as_str().to_string(),
+        args: Value::Object(retry_env),
+        why: "Повторить вызов с большим budget_profile (и без жёстких max_chars/context_budget)."
+            .to_string(),
+        risk: "Ответ может стать более объёмным; при необходимости сузьте limit/фильтры."
+            .to_string(),
+    });
 }
 
 fn cmd_for_error_recovery(
@@ -404,16 +474,32 @@ fn parse_envelope(
         }
     };
 
-    let view = args_obj
-        .get("view")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let portal_view_raw = args_obj.get("portal_view").and_then(|v| v.as_str());
+    let legacy_view_raw = args_obj.get("view").and_then(|v| v.as_str());
+    let view = match (portal_view_raw, legacy_view_raw) {
+        (Some(portal_view), Some(view)) => {
+            if !portal_view.trim().eq_ignore_ascii_case(view.trim()) {
+                return Err(OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "provide portal_view or view, not both".to_string(),
+                    recovery: Some(
+                        "Use portal_view for envelope response shaping; cmd-specific view remains inside args."
+                            .to_string(),
+                    ),
+                });
+            }
+            Some(portal_view.to_string())
+        }
+        (Some(portal_view), None) => Some(portal_view.to_string()),
+        (None, Some(view)) => Some(view.to_string()),
+        (None, None) => None,
+    };
     if let Some(view) = &view
-        && !matches!(view.as_str(), "compact" | "smart" | "audit")
+        && !matches!(view.trim(), "compact" | "smart" | "audit")
     {
         return Err(OpError {
             code: "INVALID_INPUT".to_string(),
-            message: "view must be one of: compact|smart|audit".to_string(),
+            message: "portal_view must be one of: compact|smart|audit".to_string(),
             recovery: None,
         });
     }
@@ -493,6 +579,8 @@ fn parse_envelope(
 
     Ok(Envelope {
         workspace,
+        budget_profile,
+        portal_view: view,
         cmd,
         args,
     })

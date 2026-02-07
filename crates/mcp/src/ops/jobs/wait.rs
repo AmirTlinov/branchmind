@@ -249,7 +249,7 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
                 "op": "open",
                 "args": { "job": job_id },
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: "Истёк timeout: открыть job и проверить прогресс/состояние.".to_string(),
             risk: "Низкий".to_string(),

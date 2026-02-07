@@ -108,8 +108,12 @@ fn portalize_tasks_verify_as_macro_close_step(
             Value::String(profile.to_string()),
         );
     }
-    if let Some(view) = verify_env.get("view").and_then(|v| v.as_str()) {
-        env.insert("view".to_string(), Value::String(view.to_string()));
+    if let Some(view) = verify_env
+        .get("portal_view")
+        .or_else(|| verify_env.get("view"))
+        .and_then(|v| v.as_str())
+    {
+        env.insert("portal_view".to_string(), Value::String(view.to_string()));
     }
 
     // If the macro cmd doesn't exist (registry drift), fail closed and keep the original action.

@@ -108,6 +108,14 @@ Confirm checkpoints and close a step (legacy `tasks_close_step`).
 
 Return NextEngine actions for the current focus.
 
+## tasks.search
+
+Jump/search for `TASK-*` / `PLAN-*` by text (id/title/description/context) and return openable ids.
+
+Notes:
+- Intended to avoid “cmd.list → scroll → copy id” loops.
+- The response includes `actions[]` to `open id=...` for each returned hit (bounded by `limit`).
+
 ---
 
 ## jobs.create
@@ -213,6 +221,15 @@ Notes:
   - `include_history=false` (latest-only; no duplicate historical versions unless explicitly requested)
 - Use `think.knowledge.recall` for fast “what do we know about X?” recall; use `include_history=true`
   here when you need audit/history across versions.
+
+## think.knowledge.search
+
+Jump/search for knowledge cards by text (anchor/key/card_id) and return openable ids.
+
+Notes:
+- Intended to avoid “knowledge.query → scroll → copy card_id” loops.
+- The response includes `actions[]` to `open id=CARD-... include_content=true` for each returned hit
+  (bounded by `limit`).
 
 ## think.knowledge.recall
 

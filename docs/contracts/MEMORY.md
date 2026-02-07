@@ -224,7 +224,7 @@ Semantics:
 
 Open a single artifact by a stable id/reference (no hunting).
 
-Input: `{ workspace, id, limit?, include_drafts?, max_chars?, verbosity? }`
+Input: `{ workspace, id, limit?, include_drafts?, include_content?, max_chars?, verbosity? }`
 
 Supported `id` forms (v1):
 
@@ -232,7 +232,9 @@ Supported `id` forms (v1):
 - `<doc>@<seq>` — a doc-entry reference by global `doc_entries.seq` (e.g. `notes@123`, `TASK-001-trace@456`).
 - `a:<slug>` — a meaning-map anchor id (e.g. `a:core`, `a:storage`).
 - `runner:<id>` — a runner diagnostic ref (opens the current lease + runner-provided meta; read-only).
+- `STEP-...` — a stable step id (deep-links to the owning task + focused step; read-only).
 - `TASK-...` / `PLAN-...` — a stable task/plan id (opens a minimal “navigation lens” derived from `tasks_resume_super`, read-only).
+- `TASK-...@s:n[.s:m...]` — deep-link to a step path inside a task (e.g. `TASK-001@s:0`; read-only).
 - `JOB-...` — a delegation job id (opens job status + bounded event tail; prompt is opt-in via `include_drafts=true`).
 - `JOB-...@<seq>` — a job event ref (opens the exact event + bounded context).
 
@@ -240,6 +242,9 @@ Optional:
 
 - `verbosity`: `full|compact` (default: `full`).
   - `compact` returns a minimal navigation payload (refs/focus/next_action when available).
+- `include_content` (bool, default `false`):
+  - For `CARD-*`, adds `{ content:{ title, text } }` for “instant read” UX.
+  - For `TASK-*` / `PLAN-*` / step deep-links, includes a bounded `content` block (`radar/steps/signals/memory/timeline/graph_diff`) so agents don’t need to bounce between `open` and `tasks.snapshot`.
 
 Output (union):
 
@@ -249,6 +254,7 @@ Output (union):
 - Anchor: `{ kind:"anchor", id:"a:...", anchor:{ id, title, kind, status, description?, refs:[...], parent_id?, depends_on:[...], created_at_ms, updated_at_ms, registered }, stats:{ links_count, links_has_more }, cards:[...], count, truncated }`
 - Runner: `{ kind:"runner", id:"runner:<id>", status:"offline"|"idle"|"live", lease:{ runner_id, status:"idle"|"live", active_job_id?, lease_expires_at_ms, created_at_ms, updated_at_ms, lease_active, expires_in_ms }, meta?, truncated }`
 - Task/plan: `{ kind:"task"|"plan", id:"TASK-..."|"PLAN-...", target:{...}, reasoning_ref:{...}, capsule, step_focus?, degradation, truncated }`
+- Step: `{ kind:"step", id:"STEP-..."|"TASK-...@s:n[.s:m...]", task_id:"TASK-...", step?:{ step_id, path }, path?:"s:n[.s:m...]", target:{...}, reasoning_ref:{...}, capsule, step_focus?, degradation, content?, truncated }`
 - Job: `{ kind:"job", id:"JOB-...", job:{ id, revision, status, title, kind, priority, task_id?, anchor_id?, runner?, summary?, created_at_ms, updated_at_ms, completed_at_ms? }, prompt?, events:[...], has_more_events, truncated }`
 - Job event: `{ kind:"job_event", ref:"JOB-...@<seq>", job:{...}, event:{...}, context:{ events:[...], has_more_events }, truncated }`
 

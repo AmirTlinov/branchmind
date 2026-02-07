@@ -36,10 +36,30 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let (step_id, path) = match super::require_step_selector(args_obj) {
+        let mut step_id = match optional_string(args_obj, "step_id") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let path = match optional_step_path(args_obj, "path") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        if step_id.is_none() && path.is_none() {
+            let summary = match self.store.task_steps_summary(&workspace, &task_id) {
+                Ok(v) => v,
+                Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown task id"),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            let Some(first_open) = summary.first_open else {
+                return ai_error_with(
+                    "INVALID_INPUT",
+                    "task has no open steps to close",
+                    Some("Provide step_id/path explicitly, or add steps to the task."),
+                    vec![],
+                );
+            };
+            step_id = Some(first_open.step_id);
+        }
 
         if enforce_strict
             && let Err(resp) = enforce_strict_reasoning_gate(StrictGateContext {

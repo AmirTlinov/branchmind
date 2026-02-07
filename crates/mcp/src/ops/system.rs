@@ -498,7 +498,10 @@ fn handle_tutorial(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse
                     "budget_profile".to_string(),
                     Value::String("portal".to_string()),
                 );
-                obj.insert("view".to_string(), Value::String("compact".to_string()));
+                obj.insert(
+                    "portal_view".to_string(),
+                    Value::String("compact".to_string()),
+                );
                 Value::Object(obj)
             }
             Some("start-task") => {
@@ -522,7 +525,10 @@ fn handle_tutorial(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse
                     "budget_profile".to_string(),
                     Value::String("portal".to_string()),
                 );
-                obj.insert("view".to_string(), Value::String("compact".to_string()));
+                obj.insert(
+                    "portal_view".to_string(),
+                    Value::String("compact".to_string()),
+                );
                 Value::Object(obj)
             }
             Some("snapshot") => {
@@ -540,7 +546,10 @@ fn handle_tutorial(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse
                     "budget_profile".to_string(),
                     Value::String("portal".to_string()),
                 );
-                obj.insert("view".to_string(), Value::String("compact".to_string()));
+                obj.insert(
+                    "portal_view".to_string(),
+                    Value::String("compact".to_string()),
+                );
                 Value::Object(obj)
             }
             _ => json!({}),

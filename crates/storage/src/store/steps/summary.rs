@@ -327,6 +327,121 @@ impl SqliteStore {
         })
     }
 
+    /// Load a single step's status payload (the same shape used by `task_steps_summary.first_open`),
+    /// but for an explicit selector.
+    pub fn step_status(
+        &mut self,
+        workspace: &WorkspaceId,
+        task_id: &str,
+        selector: StepSelector,
+    ) -> Result<StepStatus, StoreError> {
+        let tx = self.conn.transaction()?;
+
+        let (step_id, path) = resolve_step_selector_tx(
+            &tx,
+            workspace.as_str(),
+            task_id,
+            selector.step_id.as_deref(),
+            selector.path.as_ref(),
+        )?;
+
+        let row = tx
+            .query_row(
+                r#"
+                SELECT title, next_action, stop_criteria,
+                       completed, criteria_confirmed, tests_confirmed,
+                       security_confirmed, perf_confirmed, docs_confirmed,
+                       proof_tests_mode, proof_security_mode, proof_perf_mode, proof_docs_mode
+                FROM steps
+                WHERE workspace=?1 AND task_id=?2 AND step_id=?3
+                "#,
+                params![workspace.as_str(), task_id, step_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, i64>(12)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            title,
+            next_action,
+            stop_criteria,
+            completed,
+            criteria,
+            tests,
+            security,
+            perf,
+            docs,
+            proof_tests_mode_raw,
+            proof_security_mode_raw,
+            proof_perf_mode_raw,
+            proof_docs_mode_raw,
+        )) = row
+        else {
+            return Err(StoreError::StepNotFound);
+        };
+
+        let require_security =
+            checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "security")?;
+        let require_perf =
+            checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "perf")?;
+        let require_docs =
+            checkpoint_required_tx(&tx, workspace.as_str(), "step", &step_id, "docs")?;
+
+        let proof_tests_mode = ProofMode::from_i64(proof_tests_mode_raw);
+        let proof_security_mode = ProofMode::from_i64(proof_security_mode_raw);
+        let proof_perf_mode = ProofMode::from_i64(proof_perf_mode_raw);
+        let proof_docs_mode = ProofMode::from_i64(proof_docs_mode_raw);
+
+        let proof_tests_present =
+            checkpoint_proof_exists_tx(&tx, workspace.as_str(), "step", &step_id, "tests")?;
+        let proof_security_present =
+            checkpoint_proof_exists_tx(&tx, workspace.as_str(), "step", &step_id, "security")?;
+        let proof_perf_present =
+            checkpoint_proof_exists_tx(&tx, workspace.as_str(), "step", &step_id, "perf")?;
+        let proof_docs_present =
+            checkpoint_proof_exists_tx(&tx, workspace.as_str(), "step", &step_id, "docs")?;
+
+        tx.commit()?;
+        Ok(StepStatus {
+            step_id,
+            path,
+            title,
+            next_action,
+            stop_criteria,
+            completed: completed != 0,
+            criteria_confirmed: criteria != 0,
+            tests_confirmed: tests != 0,
+            security_confirmed: security != 0,
+            perf_confirmed: perf != 0,
+            docs_confirmed: docs != 0,
+            require_security,
+            require_perf,
+            require_docs,
+            proof_tests_mode,
+            proof_security_mode,
+            proof_perf_mode,
+            proof_docs_mode,
+            proof_tests_present,
+            proof_security_present,
+            proof_perf_present,
+            proof_docs_present,
+        })
+    }
+
     pub fn task_first_open_step_id_unconfirmed(
         &mut self,
         workspace: &WorkspaceId,

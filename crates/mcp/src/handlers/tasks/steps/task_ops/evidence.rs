@@ -25,7 +25,7 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let step_id = match optional_string(args_obj, "step_id") {
+        let mut step_id = match optional_string(args_obj, "step_id") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
@@ -33,6 +33,19 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        // Focus shortcut: when capturing evidence for a TASK without an explicit step selector,
+        // default to the first open step so the evidence is immediately checkpoint-relevant.
+        if step_id.is_none() && path.is_none() && task_id.starts_with("TASK-") {
+            match self.store.task_steps_summary(&workspace, &task_id) {
+                Ok(summary) => {
+                    if let Some(first_open) = summary.first_open {
+                        step_id = Some(first_open.step_id);
+                    }
+                }
+                Err(StoreError::UnknownId) => return ai_error("UNKNOWN_ID", "Unknown task id"),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        }
 
         let items_value = if args_obj.contains_key("items") {
             args_obj.get("items").cloned().unwrap_or(Value::Null)

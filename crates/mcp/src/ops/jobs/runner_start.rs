@@ -130,7 +130,7 @@ pub(super) fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope)
                 "op": "radar",
                 "args": {},
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: "Проверить статус очереди и runner leases (radar).".to_string(),
             risk: "Низкий".to_string(),

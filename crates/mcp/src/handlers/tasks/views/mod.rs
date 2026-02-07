@@ -8,4 +8,5 @@ mod focus;
 mod plan;
 mod radar;
 mod resume;
+mod search;
 mod super_resume;

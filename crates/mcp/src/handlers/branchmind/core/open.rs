@@ -246,6 +246,25 @@ fn is_task_or_plan_id(raw: &str) -> bool {
     false
 }
 
+fn is_task_id(raw: &str) -> bool {
+    let raw = raw.trim();
+    if let Some(rest) = raw.strip_prefix("TASK-") {
+        return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit());
+    }
+    false
+}
+
+fn is_step_id(raw: &str) -> bool {
+    let raw = raw.trim();
+    if raw.contains('@') {
+        return false;
+    }
+    if let Some(rest) = raw.strip_prefix("STEP-") {
+        return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit());
+    }
+    false
+}
+
 fn summary_one_line(text: Option<&str>, title: Option<&str>, max_len: usize) -> String {
     let title = title.unwrap_or("").trim();
     if !title.is_empty() {
@@ -257,6 +276,128 @@ fn summary_one_line(text: Option<&str>, title: Option<&str>, max_len: usize) -> 
     }
     let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or(text);
     truncate_string(&redact_text(first.trim()), max_len)
+}
+
+struct OpenTargetViaResumeSuperArgs<'a> {
+    open_id: &'a str,
+    target_kind: &'a str,
+    target_key: &'a str,
+    target_id: &'a str,
+    include_drafts: bool,
+    include_content: bool,
+    max_chars: Option<usize>,
+    limit: usize,
+    limit_explicit: bool,
+    extra_resume_args: Option<serde_json::Map<String, Value>>,
+}
+
+fn open_target_via_resume_super(
+    server: &mut McpServer,
+    workspace: &WorkspaceId,
+    args: OpenTargetViaResumeSuperArgs<'_>,
+) -> Result<(Value, Vec<Value>, Vec<Value>), Value> {
+    // `open` is read-only by contract. For targets, delegate to the existing
+    // super-resume machinery (budget-aware + deterministic), but shape it
+    // into a small navigation-friendly payload.
+    let resume_max_chars = args.max_chars.unwrap_or(12_000);
+    let resume_max_chars = resume_max_chars.saturating_sub(1_200).max(2_000);
+    let resume_max_chars = args
+        .max_chars
+        .map(|cap| resume_max_chars.min(cap))
+        .unwrap_or(resume_max_chars);
+
+    let mut resume_args = serde_json::Map::new();
+    resume_args.insert(
+        "workspace".to_string(),
+        Value::String(workspace.as_str().to_string()),
+    );
+    resume_args.insert(
+        args.target_key.to_string(),
+        Value::String(args.target_id.to_string()),
+    );
+    resume_args.insert("read_only".to_string(), Value::Bool(true));
+    resume_args.insert(
+        "view".to_string(),
+        Value::String(if args.include_drafts {
+            "audit".to_string()
+        } else {
+            "focus_only".to_string()
+        }),
+    );
+    resume_args.insert(
+        "max_chars".to_string(),
+        Value::Number(serde_json::Number::from(resume_max_chars as i64)),
+    );
+    if args.limit_explicit {
+        resume_args.insert(
+            "cards_limit".to_string(),
+            Value::Number(serde_json::Number::from(args.limit as i64)),
+        );
+    }
+    if let Some(extra) = args.extra_resume_args {
+        resume_args.extend(extra);
+    }
+
+    let resume_resp = server.tool_tasks_resume_super(Value::Object(resume_args));
+    if !resume_resp
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(resume_resp);
+    }
+
+    let mut warnings = Vec::new();
+    let mut suggestions = Vec::new();
+    if let Some(extra) = resume_resp.get("warnings").and_then(|v| v.as_array()) {
+        warnings.extend(extra.iter().cloned());
+    }
+    if let Some(extra) = resume_resp.get("suggestions").and_then(|v| v.as_array()) {
+        suggestions.extend(extra.iter().cloned());
+    }
+
+    let resume = resume_resp.get("result").cloned().unwrap_or(Value::Null);
+    let truncated = resume
+        .get("truncated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let mut out = json!({
+        "workspace": workspace.as_str(),
+        "kind": args.target_kind,
+        "id": args.open_id,
+        "target": resume.get("target").cloned().unwrap_or(Value::Null),
+        "reasoning_ref": resume.get("reasoning_ref").cloned().unwrap_or(Value::Null),
+        "budget": resume.get("budget").cloned().unwrap_or(Value::Null),
+        "capsule": resume.get("capsule").cloned().unwrap_or(Value::Null),
+        "step_focus": resume.get("step_focus").cloned().unwrap_or(Value::Null),
+        "degradation": resume.get("degradation").cloned().unwrap_or(Value::Null),
+        "truncated": truncated
+    });
+
+    // Portal UX: optionally include the most-used content blocks for the target so
+    // agents don't have to bounce between `open` and `tasks.snapshot` for the common
+    // “what’s next + what changed” loop.
+    if args.include_content
+        && let Some(obj) = out.as_object_mut()
+    {
+        let mut content = serde_json::Map::new();
+        for key in [
+            "radar",
+            "steps",
+            "signals",
+            "memory",
+            "timeline",
+            "graph_diff",
+        ] {
+            if let Some(v) = resume.get(key) {
+                content.insert(key.to_string(), v.clone());
+            }
+        }
+        obj.insert("content".to_string(), Value::Object(content));
+    }
+
+    Ok((out, warnings, suggestions))
 }
 
 impl McpServer {
@@ -594,101 +735,125 @@ impl McpServer {
                     .unwrap_or(Value::Null),
                 "truncated": false
             })
+        } else if is_step_id(&id) {
+            let located = match self.store.step_locate(&workspace, &id) {
+                Ok(v) => v,
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            let Some((task_id, step)) = located else {
+                return ai_error_with(
+                    "UNKNOWN_ID",
+                    "Unknown step id",
+                    Some("Copy a STEP-* id from tasks.resume.super(step_focus.step.step_id)."),
+                    vec![],
+                );
+            };
+
+            let mut extra = serde_json::Map::new();
+            extra.insert("step_id".to_string(), Value::String(step.step_id.clone()));
+
+            let (mut out, extra_warnings, extra_suggestions) = match open_target_via_resume_super(
+                self,
+                &workspace,
+                OpenTargetViaResumeSuperArgs {
+                    open_id: &id,
+                    target_kind: "step",
+                    target_key: "task",
+                    target_id: &task_id,
+                    include_drafts,
+                    include_content,
+                    max_chars,
+                    limit,
+                    limit_explicit: args_obj.contains_key("limit"),
+                    extra_resume_args: Some(extra),
+                },
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            warnings.extend(extra_warnings);
+            suggestions.extend(extra_suggestions);
+
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert("task_id".to_string(), Value::String(task_id));
+                obj.insert(
+                    "step".to_string(),
+                    json!({ "step_id": step.step_id, "path": step.path }),
+                );
+            }
+            out
+        } else if let Some((task_raw, path_raw)) = id.split_once('@')
+            && is_task_id(task_raw)
+        {
+            let task_id = task_raw.trim();
+            let path_str = path_raw.trim();
+
+            if StepPath::parse(path_str).is_err() {
+                return ai_error_with(
+                    "INVALID_INPUT",
+                    "Invalid step path",
+                    Some("Expected TASK-###@s:n[.s:m...] (e.g. TASK-001@s:0)."),
+                    vec![],
+                );
+            }
+
+            let mut extra = serde_json::Map::new();
+            extra.insert("path".to_string(), Value::String(path_str.to_string()));
+
+            let (mut out, extra_warnings, extra_suggestions) = match open_target_via_resume_super(
+                self,
+                &workspace,
+                OpenTargetViaResumeSuperArgs {
+                    open_id: &id,
+                    target_kind: "step",
+                    target_key: "task",
+                    target_id: task_id,
+                    include_drafts,
+                    include_content,
+                    max_chars,
+                    limit,
+                    limit_explicit: args_obj.contains_key("limit"),
+                    extra_resume_args: Some(extra),
+                },
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            warnings.extend(extra_warnings);
+            suggestions.extend(extra_suggestions);
+
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert("task_id".to_string(), Value::String(task_id.to_string()));
+                obj.insert("path".to_string(), Value::String(path_str.to_string()));
+            }
+            out
         } else if is_task_or_plan_id(&id) {
             let is_task = id.starts_with("TASK-");
             let target_key = if is_task { "task" } else { "plan" };
             let target_kind = if is_task { "task" } else { "plan" };
 
-            // `open` is read-only by contract. For targets, delegate to the existing
-            // super-resume machinery (budget-aware + deterministic), but shape it
-            // into a small navigation-friendly payload.
-            let resume_max_chars = max_chars.unwrap_or(12_000);
-            let resume_max_chars = resume_max_chars.saturating_sub(1_200).max(2_000);
-            let resume_max_chars = max_chars
-                .map(|cap| resume_max_chars.min(cap))
-                .unwrap_or(resume_max_chars);
-
-            let mut resume_args = serde_json::Map::new();
-            resume_args.insert(
-                "workspace".to_string(),
-                Value::String(workspace.as_str().to_string()),
-            );
-            resume_args.insert(target_key.to_string(), Value::String(id.clone()));
-            resume_args.insert("read_only".to_string(), Value::Bool(true));
-            resume_args.insert(
-                "view".to_string(),
-                Value::String(if include_drafts {
-                    "audit".to_string()
-                } else {
-                    "focus_only".to_string()
-                }),
-            );
-            resume_args.insert(
-                "max_chars".to_string(),
-                Value::Number(serde_json::Number::from(resume_max_chars as i64)),
-            );
-            if args_obj.contains_key("limit") {
-                resume_args.insert(
-                    "cards_limit".to_string(),
-                    Value::Number(serde_json::Number::from(limit as i64)),
-                );
-            }
-
-            let resume_resp = self.tool_tasks_resume_super(Value::Object(resume_args));
-            if !resume_resp
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                return resume_resp;
-            }
-
-            if let Some(extra) = resume_resp.get("warnings").and_then(|v| v.as_array()) {
-                warnings.extend(extra.iter().cloned());
-            }
-            if let Some(extra) = resume_resp.get("suggestions").and_then(|v| v.as_array()) {
-                suggestions.extend(extra.iter().cloned());
-            }
-
-            let resume = resume_resp.get("result").cloned().unwrap_or(Value::Null);
-            let truncated = resume
-                .get("truncated")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            let mut out = json!({
-                "workspace": workspace.as_str(),
-                "kind": target_kind,
-                "id": id,
-                "target": resume.get("target").cloned().unwrap_or(Value::Null),
-                "reasoning_ref": resume.get("reasoning_ref").cloned().unwrap_or(Value::Null),
-                "budget": resume.get("budget").cloned().unwrap_or(Value::Null),
-                "capsule": resume.get("capsule").cloned().unwrap_or(Value::Null),
-                "step_focus": resume.get("step_focus").cloned().unwrap_or(Value::Null),
-                "degradation": resume.get("degradation").cloned().unwrap_or(Value::Null),
-                "truncated": truncated
-            });
-
-            // Portal UX: optionally include the most-used content blocks for the target so
-            // agents don't have to bounce between `open` and `tasks.snapshot` for the common
-            // “what’s next + what changed” loop.
-            if include_content && let Some(obj) = out.as_object_mut() {
-                let mut content = serde_json::Map::new();
-                for key in [
-                    "radar",
-                    "steps",
-                    "signals",
-                    "memory",
-                    "timeline",
-                    "graph_diff",
-                ] {
-                    if let Some(v) = resume.get(key) {
-                        content.insert(key.to_string(), v.clone());
-                    }
-                }
-                obj.insert("content".to_string(), Value::Object(content));
-            }
-
+            let (out, extra_warnings, extra_suggestions) = match open_target_via_resume_super(
+                self,
+                &workspace,
+                OpenTargetViaResumeSuperArgs {
+                    open_id: &id,
+                    target_kind,
+                    target_key,
+                    target_id: &id,
+                    include_drafts,
+                    include_content,
+                    max_chars,
+                    limit,
+                    limit_explicit: args_obj.contains_key("limit"),
+                    extra_resume_args: None,
+                },
+            ) {
+                Ok(v) => v,
+                Err(resp) => return resp,
+            };
+            warnings.extend(extra_warnings);
+            suggestions.extend(extra_suggestions);
             out
         } else if let Some((job_id, seq)) = parse_job_event_ref(&id) {
             let job_row = match self
@@ -968,7 +1133,7 @@ impl McpServer {
                 "meta": opened.node.meta_json.as_ref().map(|raw| parse_json_or_string(raw)).unwrap_or(Value::Null),
             });
 
-            json!({
+            let mut out = json!({
                 "workspace": workspace.as_str(),
                 "kind": "card",
                 "id": id,
@@ -990,7 +1155,19 @@ impl McpServer {
                     120
                 ),
                 "truncated": false
-            })
+            });
+
+            if include_content && let Some(obj) = out.as_object_mut() {
+                obj.insert(
+                    "content".to_string(),
+                    json!({
+                        "title": card.get("title").cloned().unwrap_or(Value::Null),
+                        "text": card.get("text").cloned().unwrap_or(Value::Null)
+                    }),
+                );
+            }
+
+            out
         } else if let Some((doc, seq)) = parse_doc_entry_ref(&id) {
             let entry = match self.store.doc_entry_get_by_seq(&workspace, seq) {
                 Ok(v) => v,
@@ -1045,7 +1222,7 @@ impl McpServer {
                 "INVALID_INPUT",
                 "Unsupported open id format",
                 Some(
-                    "Supported: CARD-..., <doc>@<seq> (e.g. notes@123), a:<anchor>, runner:<id>, TASK-..., PLAN-..., JOB-....",
+                    "Supported: CARD-..., <doc>@<seq> (e.g. notes@123), a:<anchor>, runner:<id>, STEP-..., TASK-..., TASK-...@s:n[.s:m...], PLAN-..., JOB-....",
                 ),
                 vec![],
             );

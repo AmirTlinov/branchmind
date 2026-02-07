@@ -11,7 +11,7 @@
   "cmd": "string?",              // required only for op="call"
   "args": "object",              // required
   "budget_profile": "portal|default|audit",
-  "view": "compact|smart|audit"
+  "portal_view": "compact|smart|audit" // alias: view (deprecated)
 }
 ```
 

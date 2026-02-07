@@ -1203,6 +1203,13 @@ fn render_tasks_resume_lines(
             .and_then(|v| v.get("path"))
             .and_then(|v| v.as_str()),
     );
+    let first_open_step_id = opt_str(
+        resume
+            .get("steps")
+            .and_then(|v| v.get("first_open"))
+            .and_then(|v| v.get("step_id"))
+            .and_then(|v| v.as_str()),
+    );
     let first_open_step = resume
         .get("steps")
         .and_then(|v| v.get("first_open"))
@@ -1540,6 +1547,11 @@ fn render_tasks_resume_lines(
     let mut next_hint = if action_tool == Some("tasks_macro_close_step") {
         if let Some(path) = first_open_path {
             let mut hint = format!("next gate {path}");
+            if let Some(step_id) = first_open_step_id {
+                hint.push(' ');
+                hint.push_str("step=");
+                hint.push_str(step_id);
+            }
 
             if let Some(first_open) = first_open_step {
                 let missing = missing_checkpoints(first_open);

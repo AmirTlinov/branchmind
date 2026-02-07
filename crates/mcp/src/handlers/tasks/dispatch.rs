@@ -70,6 +70,7 @@ define_tasks_dispatch! {
     "resume_pack" => tool_tasks_resume_pack,
     "resume_super" => tool_tasks_resume_super,
     "snapshot" => tool_tasks_snapshot,
+    "search" => tool_tasks_search,
     "context_pack" => tool_tasks_context_pack,
     "mindpack" => tool_tasks_mindpack,
     "mirror" => tool_tasks_mirror,

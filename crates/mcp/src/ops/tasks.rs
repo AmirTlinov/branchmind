@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use crate::ops::{
-    BudgetPolicy, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError, OpResponse, Safety,
-    SchemaSource, Stability, Tier, ToolName, name_to_cmd_segments,
+    BudgetCaps, BudgetPolicy, BudgetProfile, CommandSpec, ConfirmLevel, DocRef, Envelope, OpError,
+    OpResponse, Safety, SchemaSource, Stability, Tier, ToolName, name_to_cmd_segments,
 };
 use serde_json::json;
 
@@ -25,18 +25,42 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             _ => format!("tasks.{}", name_to_cmd_segments(suffix)),
         };
         let mut op_aliases = Vec::<String>::new();
+        let mut tier = Tier::Advanced;
+        let mut budget = BudgetPolicy::standard();
 
         match suffix {
             "create" => op_aliases.push("plan.create".to_string()),
             "decompose" => op_aliases.push("plan.decompose".to_string()),
             "evidence_capture" => op_aliases.push("evidence.capture".to_string()),
             "close_step" => op_aliases.push("step.close".to_string()),
+            "search" => {
+                op_aliases.push("search".to_string());
+                tier = Tier::Gold;
+                budget = BudgetPolicy {
+                    default_profile: BudgetProfile::Portal,
+                    portal_caps: BudgetCaps {
+                        max_chars: Some(6_000),
+                        context_budget: Some(6_000),
+                        limit: Some(12),
+                    },
+                    default_caps: BudgetCaps {
+                        max_chars: Some(20_000),
+                        context_budget: Some(20_000),
+                        limit: Some(60),
+                    },
+                    audit_caps: BudgetCaps {
+                        max_chars: Some(80_000),
+                        context_budget: Some(80_000),
+                        limit: Some(120),
+                    },
+                };
+            }
             _ => {}
         }
 
         let doc_ref_anchor = if matches!(
             suffix,
-            "create" | "decompose" | "evidence_capture" | "close_step"
+            "create" | "decompose" | "evidence_capture" | "close_step" | "search"
         ) {
             format!("#{cmd}")
         } else {
@@ -46,7 +70,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         specs.push(CommandSpec {
             cmd,
             domain_tool: ToolName::TasksOps,
-            tier: Tier::Advanced,
+            tier,
             stability: Stability::Stable,
             doc_ref: DocRef {
                 path: "docs/contracts/V1_COMMANDS.md".to_string(),
@@ -61,7 +85,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 },
                 idempotent: !suffix.contains("create") && !suffix.contains("delete"),
             },
-            budget: BudgetPolicy::standard(),
+            budget,
             schema: SchemaSource::Handler,
             op_aliases,
             handler_name: Some(name.to_string()),

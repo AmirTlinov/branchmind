@@ -137,11 +137,54 @@ fn handler_suggestions_to_actions(
                 "budget_profile".to_string(),
                 Value::String(BudgetProfile::Portal.as_str().to_string()),
             );
-            args.insert("view".to_string(), Value::String("compact".to_string()));
+            args.insert(
+                "portal_view".to_string(),
+                Value::String("compact".to_string()),
+            );
             out.push(Action {
                 action_id: format!("recover.handler.status::{idx}"),
                 priority,
                 tool: ToolName::Status.as_str().to_string(),
+                args: Value::Object(args),
+                why,
+                risk: "Низкий".to_string(),
+            });
+            continue;
+        }
+
+        if target == "open" {
+            let mut args = serde_json::Map::new();
+            if let Some(ws) = workspace {
+                args.insert("workspace".to_string(), Value::String(ws.to_string()));
+            }
+
+            if let Some(params_obj) = params.as_object() {
+                for (k, v) in params_obj {
+                    args.insert(k.clone(), v.clone());
+                }
+            }
+
+            // Defensive: `open` requires id.
+            if args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+            {
+                continue;
+            }
+
+            // Portal-grade defaults (safe copy/paste, compact output).
+            args.entry("budget_profile".to_string())
+                .or_insert_with(|| Value::String(BudgetProfile::Portal.as_str().to_string()));
+            args.entry("portal_view".to_string())
+                .or_insert_with(|| Value::String("compact".to_string()));
+
+            out.push(Action {
+                action_id: format!("jump.open::{idx}"),
+                priority,
+                tool: ToolName::Open.as_str().to_string(),
                 args: Value::Object(args),
                 why,
                 risk: "Низкий".to_string(),
@@ -162,7 +205,10 @@ fn handler_suggestions_to_actions(
                 "budget_profile".to_string(),
                 Value::String(spec.budget.default_profile.as_str().to_string()),
             );
-            env.insert("view".to_string(), Value::String("compact".to_string()));
+            env.insert(
+                "portal_view".to_string(),
+                Value::String("compact".to_string()),
+            );
 
             out.push(Action {
                 action_id: format!(

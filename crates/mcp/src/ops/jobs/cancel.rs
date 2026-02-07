@@ -189,7 +189,7 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
                     "op": "open",
                     "args": { "job": job_id },
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Открыть job и проверить текущий статус/runner.".to_string(),
                 risk: "Низкий".to_string(),
@@ -228,7 +228,7 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
                         "cmd": "jobs.complete",
                         "args": args,
                         "budget_profile": "portal",
-                        "view": "compact"
+                        "portal_view": "compact"
                     }),
                     why: "Принудительно завершить RUNNING job как CANCELED (через complete)."
                         .to_string(),
@@ -266,7 +266,7 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
                     "op": "open",
                     "args": { "job": job_id },
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Открыть job для просмотра результата/refs.".to_string(),
                 risk: "Низкий".to_string(),
@@ -325,7 +325,7 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
                     "op": "open",
                     "args": { "job": job_id },
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Открыть job для просмотра результата/refs.".to_string(),
                 risk: "Низкий".to_string(),
@@ -353,7 +353,7 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
                     "op": "open",
                     "args": { "job": job_id },
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Открыть job и проверить текущий статус.".to_string(),
                 risk: "Низкий".to_string(),

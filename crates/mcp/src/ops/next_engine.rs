@@ -79,7 +79,7 @@ pub(crate) fn derive_next(
                 "id": focus,
                 "include_content": true,
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: "Открыть текущий focus (быстрый контекст).".to_string(),
             risk: "Низкий".to_string(),
@@ -97,7 +97,7 @@ pub(crate) fn derive_next(
                     "op": "runner.start",
                     "args": {},
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Запустить bm_runner, чтобы JOB-* начали исполняться.".to_string(),
                 risk: "Низкий (first-party runner only).".to_string(),
@@ -113,7 +113,8 @@ pub(crate) fn derive_next(
                 "op": "call",
                 "cmd": "tasks.snapshot",
                 "args": { "view": "smart" },
-                "budget_profile": "portal"
+                "budget_profile": "portal",
+                "portal_view": "compact"
             }),
             why: "Показать snapshot (focus + next signals).".to_string(),
             risk: "Низкий".to_string(),
@@ -129,7 +130,7 @@ pub(crate) fn derive_next(
                     "op": "radar",
                     "args": {},
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Показать делегацию (очередь, раннеры, последние события).".to_string(),
                 risk: "Низкий".to_string(),
@@ -144,7 +145,7 @@ pub(crate) fn derive_next(
                 "op": "knowledge.recall",
                 "args": { "limit": 12 },
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: "Подтянуть самые свежие knowledge cards (bounded) перед решением.".to_string(),
             risk: "Низкий".to_string(),
@@ -168,7 +169,7 @@ pub(crate) fn derive_next(
                     "op": "runner.start",
                     "args": {},
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Запустить bm_runner, чтобы JOB-* начали исполняться.".to_string(),
                 risk: "Низкий (first-party runner only).".to_string(),
@@ -182,7 +183,8 @@ pub(crate) fn derive_next(
                 "workspace": workspace.as_str(),
                 "op": "plan.create",
                 "args": { "title": "<Plan title>" },
-                "budget_profile": "default"
+                "budget_profile": "default",
+                "portal_view": "compact"
             }),
             why: "Создать план (золотой старт).".to_string(),
             risk: "Низкий".to_string(),
@@ -197,7 +199,7 @@ pub(crate) fn derive_next(
                     "op": "radar",
                     "args": {},
                     "budget_profile": "portal",
-                    "view": "compact"
+                    "portal_view": "compact"
                 }),
                 why: "Показать делегацию (очередь, раннеры, последние события).".to_string(),
                 risk: "Низкий".to_string(),

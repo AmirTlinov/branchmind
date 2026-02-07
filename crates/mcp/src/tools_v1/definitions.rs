@@ -13,6 +13,7 @@ fn ops_schema(golden_ops: &[&str]) -> Value {
             "cmd": { "type": "string" },
             "args": { "type": "object" },
             "budget_profile": { "type": "string", "enum": ["portal", "default", "audit"] },
+            "portal_view": { "type": "string", "enum": ["compact", "smart", "audit"] },
             "view": { "type": "string", "enum": ["compact", "smart", "audit"] }
         },
         "required": ["op", "args"]
@@ -29,6 +30,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "workspace": { "type": "string" },
                     "budget_profile": { "type": "string", "enum": ["portal", "default", "audit"] },
+                    "portal_view": { "type": "string", "enum": ["compact", "smart", "audit"] },
                     "view": { "type": "string", "enum": ["compact", "smart", "audit"] }
                 },
                 "required": []
@@ -46,6 +48,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                     "include_drafts": { "type": "boolean" },
                     "include_content": { "type": "boolean" },
                     "budget_profile": { "type": "string", "enum": ["portal", "default", "audit"] },
+                    "portal_view": { "type": "string", "enum": ["compact", "smart", "audit"] },
                     "view": { "type": "string", "enum": ["compact", "smart", "audit"] }
                 },
                 "required": ["id"]
@@ -59,7 +62,14 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "tasks",
             "description": "Tasks operations (v1).",
-            "inputSchema": ops_schema(&["plan.create", "plan.decompose", "execute.next", "evidence.capture", "step.close"])
+            "inputSchema": ops_schema(&[
+                "plan.create",
+                "plan.decompose",
+                "execute.next",
+                "evidence.capture",
+                "step.close",
+                "search"
+            ])
         }),
         json!({
             "name": "jobs",
@@ -72,6 +82,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
             "inputSchema": ops_schema(&[
                 "knowledge.upsert",
                 "knowledge.query",
+                "knowledge.search",
                 "knowledge.recall",
                 "knowledge.lint",
                 "reasoning.seed",

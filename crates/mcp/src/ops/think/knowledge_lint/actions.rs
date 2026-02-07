@@ -44,7 +44,7 @@ pub(crate) fn push_duplicate_group_actions(
                     "edges_limit": 0
                 },
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: format!(
                 "Открыть дубль-набор для консолидации: {} → k:{} ({} keys).",
@@ -96,7 +96,7 @@ pub(crate) fn push_cross_duplicate_group_actions(
                     "edges_limit": 0
                 },
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: format!(
                 "Открыть duplicate-content across anchors ({} anchors, {} keys) для консолидации: prefer {} → k:{}.",
@@ -154,7 +154,7 @@ pub(crate) fn push_overloaded_outliers_actions(
                     "edges_limit": 0
                 },
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: format!(
                 "Открыть outliers для k:{} (dominant {} of {}; hash={:016x}).",
@@ -188,7 +188,7 @@ pub(crate) fn push_overloaded_key_open_actions(
                 "cmd": "think.knowledge.query",
                 "args": { "key": key, "limit": 20 },
                 "budget_profile": "portal",
-                "view": "compact"
+                "portal_view": "compact"
             }),
             why: format!(
                 "Открыть k:{key} across anchors (проверить перегруженность/консолидацию)."

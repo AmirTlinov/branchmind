@@ -239,6 +239,20 @@ pub(crate) fn views_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "tasks_search",
+            "description": "Jump/search for tasks and plans (returns openable ids + open actions).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "text": { "type": "string" },
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "text"]
+            }
+        }),
+        json!({
             "name": "tasks_context_pack",
             "description": "Bounded summary: radar + delta slice.",
             "inputSchema": {

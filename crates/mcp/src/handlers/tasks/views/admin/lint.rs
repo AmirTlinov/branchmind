@@ -760,7 +760,7 @@ impl McpServer {
                                         "op": "knowledge.recall",
                                         "args": { "anchor": anchor_arg, "limit": 12 },
                                         "budget_profile": "portal",
-                                        "view": "compact"
+                                        "portal_view": "compact"
                                     }
                                 }
                             }));
@@ -811,7 +811,7 @@ impl McpServer {
                                             "card": { "title": seed_title, "text": seed_text }
                                         },
                                         "budget_profile": "portal",
-                                        "view": "compact"
+                                        "portal_view": "compact"
                                     }
                                 },
                                 "notes": "Keep it short; update later with real decisions/evidence. Recall will always point to the latest version for (anchor,key)."

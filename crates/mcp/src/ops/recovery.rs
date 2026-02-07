@@ -35,7 +35,7 @@ pub(crate) fn append_unknown_id_actions(resp: &mut OpResponse, cmd: &str, worksp
         env.insert("cmd".to_string(), json!("tasks.snapshot"));
         env.insert("args".to_string(), json!({}));
         env.insert("budget_profile".to_string(), json!("portal"));
-        env.insert("view".to_string(), json!("compact"));
+        env.insert("portal_view".to_string(), json!("compact"));
 
         resp.actions.push(Action {
             action_id: snapshot_action_id,
@@ -63,7 +63,7 @@ pub(crate) fn append_unknown_id_actions(resp: &mut OpResponse, cmd: &str, worksp
         env.insert("cmd".to_string(), json!("tasks.macro.start"));
         env.insert("args".to_string(), json!({ "task_title": "<task_title>" }));
         env.insert("budget_profile".to_string(), json!("portal"));
-        env.insert("view".to_string(), json!("compact"));
+        env.insert("portal_view".to_string(), json!("compact"));
 
         resp.actions.push(Action {
             action_id: start_action_id,
