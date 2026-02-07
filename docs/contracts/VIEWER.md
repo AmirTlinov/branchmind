@@ -33,17 +33,14 @@ Notes:
 
 ## Endpoints (v0)
 
-### `GET /`
+### `GET /` (and `GET /index.html`)
 
-Returns the static HTML shell for the viewer UI.
+Returns the viewer UI as a **single static HTML document**.
 
-### `GET /app.css`
+Notes:
 
-Returns the UI stylesheet.
-
-### `GET /app.js`
-
-Returns the UI script (runtime JS).
+- The UI is built as a single file: JS/CSS are inlined into `index.html`.
+- The server does not serve separate UI asset files (no `/app.js`, `/app.css`).
 
 ### `GET /api/about`
 

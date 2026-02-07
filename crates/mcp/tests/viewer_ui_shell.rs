@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -8,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[test]
-fn viewer_index_contains_flagship_graph_shell() {
+fn viewer_serves_react_single_file() {
     let Some(port) = pick_free_port() else {
         // Some sandboxed environments disallow TCP bind() even on loopback.
         return;
@@ -35,27 +34,16 @@ fn viewer_index_contains_flagship_graph_shell() {
 
     wait_for_viewer(port);
     let index = http_get_text(port, "/");
+
+    // New React single-file viewer: all JS/CSS inlined in index.html
     assert!(
-        index.contains("id=\"hud\""),
-        "expected #hud in viewer index.html"
-    );
-    assert!(
-        index.contains("id=\"graph-controls\""),
-        "expected #graph-controls in viewer index.html"
-    );
-    assert!(
-        index.contains("id=\"graph-search\""),
-        "expected #graph-search in viewer index.html"
-    );
-    assert!(
-        index.contains("id=\"minimap\""),
-        "expected #minimap in viewer index.html"
+        index.contains("<div id=\"root\">"),
+        "expected React root mount in viewer index.html"
     );
 
-    let app_js = http_get_text(port, "/app.js");
     assert!(
-        app_js.contains("?ui=legacy") || app_js.contains("ui=legacy"),
-        "expected legacy UI hint marker in app.js"
+        index.contains("<script"),
+        "expected inlined script in single-file viewer"
     );
 
     let _ = proc.kill();
@@ -141,9 +129,4 @@ fn temp_dir(test_name: &str) -> PathBuf {
         .unwrap_or_default()
         .as_millis();
     base.join(format!("bm_viewer_{test_name}_{pid}_{nonce}"))
-}
-
-#[allow(dead_code)]
-fn parse_json(body: &str) -> Value {
-    serde_json::from_str(body).unwrap_or(Value::Null)
 }

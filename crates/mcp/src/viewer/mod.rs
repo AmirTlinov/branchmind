@@ -504,20 +504,6 @@ fn handle_connection(
             assets::INDEX_HTML.as_bytes(),
             method == "HEAD",
         ),
-        "/app.css" => write_response(
-            &mut stream,
-            "200 OK",
-            "text/css; charset=utf-8",
-            assets::APP_CSS.as_bytes(),
-            method == "HEAD",
-        ),
-        "/app.js" => write_response(
-            &mut stream,
-            "200 OK",
-            "application/javascript; charset=utf-8",
-            assets::APP_JS.as_bytes(),
-            method == "HEAD",
-        ),
         "/api/projects" => {
             let projects = list_projects()
                 .into_iter()

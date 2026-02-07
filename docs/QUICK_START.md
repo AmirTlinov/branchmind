@@ -42,6 +42,17 @@ Behavior:
 - Closing the window hides it to the system tray (Linux/Windows/macOS).
 - Use the tray menu **Quit** to fully exit the app.
 
+## 2c) Rebuild the viewer UI (React/Vite, optional)
+
+The viewer UI is embedded into `bm_mcp` as a **single-file HTML asset**
+(`crates/mcp/src/viewer/assets/index.html`).
+
+After editing `viewer-app/`, rebuild and copy the asset:
+
+```bash
+make viewer-build
+```
+
 ## OpenCode (recommended)
 
 Configure the server as a local MCP backend and let BranchMind auto-configure everything:

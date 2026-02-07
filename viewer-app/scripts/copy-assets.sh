@@ -11,9 +11,5 @@ cd "$VIEWER_DIR"
 echo "==> Copying assets to $ASSETS_DIR"
 cp "$VIEWER_DIR/dist/index.html" "$ASSETS_DIR/index.html"
 
-# Legacy compat: Rust serves app.css and app.js, keep empty placeholders
-echo -n "" > "$ASSETS_DIR/app.css"
-echo -n "" > "$ASSETS_DIR/app.js"
-
 echo "==> Done. Assets:"
 ls -lh "$ASSETS_DIR/"
