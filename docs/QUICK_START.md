@@ -25,13 +25,14 @@ Zero-arg invocation enables flagship DX defaults:
 
 ## 2b) Run the viewer as a desktop app (Tauri, optional)
 
-In one terminal, keep the local viewer HTTP server running (it is enabled by default in `bm_mcp`):
+In one terminal, keep the local viewer HTTP **API** server running (it is enabled by default in
+`bm_mcp` session mode):
 
 ```bash
 make run-mcp
 ```
 
-In another terminal, start the Tauri desktop shell:
+In another terminal, start the Tauri desktop app (Tauri+Vite+React):
 
 ```bash
 make run-viewer-tauri
@@ -42,15 +43,15 @@ Behavior:
 - Closing the window hides it to the system tray (Linux/Windows/macOS).
 - Use the tray menu **Quit** to fully exit the app.
 
-## 2c) Rebuild the viewer UI (React/Vite, optional)
+## 2c) Develop the viewer UI (Vite/React, optional)
 
-The viewer UI is embedded into `bm_mcp` as a **single-file HTML asset**
-(`crates/mcp/src/viewer/assets/index.html`).
-
-After editing `viewer-app/`, rebuild and copy the asset:
+The viewer UI lives in `viewer-tauri/` (Vite+React). The desktop app talks to the loopback viewer
+API provided by `bm_mcp`.
 
 ```bash
-make viewer-build
+cd viewer-tauri
+npm i
+npm run tauri:dev
 ```
 
 ## OpenCode (recommended)

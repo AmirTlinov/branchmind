@@ -12,6 +12,7 @@ export interface DetailSelection {
 export interface UIState {
   explorerOpen: boolean;
   explorerPinned: boolean;
+  centerView: "graph" | "timeline";
   detailOpen: boolean;
   detailPinned: boolean;
   detailSelection: DetailSelection | null;
@@ -20,6 +21,7 @@ export interface UIState {
   setExplorerOpen: (open: boolean) => void;
   toggleExplorer: () => void;
   setExplorerPinned: (pinned: boolean) => void;
+  setCenterView: (view: "graph" | "timeline") => void;
   setDetailOpen: (open: boolean) => void;
   setDetailPinned: (pinned: boolean) => void;
   openDetail: (sel: DetailSelection) => void;
@@ -31,6 +33,7 @@ export interface UIState {
 export const useUIStore = create<UIState>((set) => ({
   explorerOpen: true,
   explorerPinned: true,
+  centerView: "graph",
   detailOpen: false,
   detailPinned: false,
   detailSelection: null,
@@ -39,6 +42,7 @@ export const useUIStore = create<UIState>((set) => ({
   setExplorerOpen: (open) => set({ explorerOpen: open }),
   toggleExplorer: () => set((s) => ({ explorerOpen: !s.explorerOpen })),
   setExplorerPinned: (pinned) => set({ explorerPinned: pinned }),
+  setCenterView: (view) => set({ centerView: view }),
   setDetailOpen: (open) => set({ detailOpen: open }),
   setDetailPinned: (pinned) => set({ detailPinned: pinned }),
   openDetail: (sel) => set({ detailOpen: true, detailSelection: sel }),

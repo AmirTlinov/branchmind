@@ -8,6 +8,7 @@ export function useKeyboard() {
   const toggleExplorer = useUIStore((s) => s.toggleExplorer);
   const closeDetail = useUIStore((s) => s.closeDetail);
   const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
+  const setCenterView = useUIStore((s) => s.setCenterView);
 
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -21,6 +22,17 @@ export function useKeyboard() {
       if ((e.ctrlKey || e.metaKey) && e.key === "b") {
         e.preventDefault();
         toggleExplorer();
+        return;
+      }
+      // Ctrl+1 / Ctrl+2 → switch center view
+      if ((e.ctrlKey || e.metaKey) && e.key === "1") {
+        e.preventDefault();
+        setCenterView("graph");
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "2") {
+        e.preventDefault();
+        setCenterView("timeline");
         return;
       }
       // Escape → close palette or detail
@@ -37,5 +49,5 @@ export function useKeyboard() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [togglePalette, toggleExplorer, closeDetail, setPaletteOpen]);
+  }, [togglePalette, toggleExplorer, closeDetail, setPaletteOpen, setCenterView]);
 }

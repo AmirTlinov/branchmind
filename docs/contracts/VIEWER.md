@@ -35,12 +35,12 @@ Notes:
 
 ### `GET /` (and `GET /index.html`)
 
-Returns the viewer UI as a **single static HTML document**.
+Returns a **minimal** HTML page.
 
 Notes:
 
-- The UI is built as a single file: JS/CSS are inlined into `index.html`.
-- The server does not serve separate UI asset files (no `/app.js`, `/app.css`).
+- The full viewer UI is shipped as a separate desktop app (`viewer-tauri/`, Tauri+Vite+React).
+- The MCP server exposes the read-only viewer **API** under `/api/*` (this contract).
 
 ### `GET /api/about`
 

@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check clippy test check run-mcp run-viewer-tauri viewer-build
+.PHONY: help fmt fmt-check clippy test check run-mcp run-viewer-tauri
 
 CARGO ?= cargo
 
@@ -11,8 +11,7 @@ help:
 		"  make clippy     Run clippy (deny warnings)" \
 		"  make test       Run workspace tests" \
 		"  make run-mcp    Run MCP server (DX defaults)" \
-		"  make run-viewer-tauri  Run viewer desktop shell (Tauri, optional)" \
-		"  make viewer-build      Build viewer-app + copy assets (optional)"
+		"  make run-viewer-tauri  Run viewer desktop app (Tauri+Vite+React, optional)"
 
 fmt:
 	$(CARGO) fmt
@@ -33,9 +32,4 @@ run-mcp:
 	$(CARGO) run -p bm_mcp
 
 run-viewer-tauri:
-	$(CARGO) run --manifest-path viewer-tauri/src-tauri/Cargo.toml
-
-viewer-build:
-	cd viewer-app && npm run build
-	bash viewer-app/scripts/copy-assets.sh
-	$(CARGO) check -p bm_mcp
+	cd viewer-tauri && npm run tauri:dev

@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[test]
-fn viewer_serves_react_single_file() {
+fn viewer_root_is_stub_page() {
     let Some(port) = pick_free_port() else {
         // Some sandboxed environments disallow TCP bind() even on loopback.
         return;
@@ -35,15 +35,15 @@ fn viewer_serves_react_single_file() {
     wait_for_viewer(port);
     let index = http_get_text(port, "/");
 
-    // New React single-file viewer: all JS/CSS inlined in index.html
+    // Viewer UI is now a separate desktop app; the MCP server exposes a minimal
+    // root HTML page + read-only API under /api/*.
     assert!(
-        index.contains("<div id=\"root\">"),
-        "expected React root mount in viewer index.html"
+        index.contains("BranchMind Viewer API"),
+        "expected viewer root stub page"
     );
-
     assert!(
-        index.contains("<script"),
-        "expected inlined script in single-file viewer"
+        index.contains("make run-viewer-tauri"),
+        "expected viewer root stub to point to the desktop app entrypoint"
     );
 
     let _ = proc.kill();

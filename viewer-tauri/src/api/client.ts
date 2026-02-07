@@ -11,6 +11,16 @@ export function qs(
 }
 
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const tauriInvoke = (window as any).__TAURI__?.core?.invoke as
+    | ((cmd: string, args?: any) => Promise<any>)
+    | undefined;
+
+  if (tauriInvoke) {
+    // Desktop viewer (Tauri): route via Rust backend to avoid CORS + keep API loopback-only.
+    return (await tauriInvoke("viewer_api_get_json", { path: url })) as T;
+  }
+
+  // Browser/dev fallback (best-effort).
   const res = await fetch(url, init);
   if (!res.ok) {
     const body = await res.text().catch(() => "");

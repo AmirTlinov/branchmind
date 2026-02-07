@@ -4,9 +4,44 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use serde_json::Value;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+#[derive(Clone)]
+struct ViewerApiConfig {
+    base_url: String,
+}
+
+#[tauri::command]
+fn viewer_api_get_json(
+    config: tauri::State<'_, ViewerApiConfig>,
+    path: String,
+) -> Result<Value, String> {
+    let path = path.trim();
+    if !path.starts_with("/api/") {
+        return Err("path: expected /api/*".to_string());
+    }
+    if path.contains("://") || path.contains('\n') || path.contains('\r') {
+        return Err("path: invalid characters".to_string());
+    }
+
+    let url = format!("{}{}", config.base_url, path);
+    match ureq::get(&url).call() {
+        Ok(resp) => resp
+            .into_json::<Value>()
+            .map_err(|err| format!("invalid json: {err}")),
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            Err(format!(
+                "HTTP {code}: {}",
+                body.chars().take(400).collect::<String>()
+            ))
+        }
+        Err(err) => Err(format!("request failed: {err}")),
+    }
+}
 
 fn parse_viewer_port() -> u16 {
     const DEFAULT_VIEWER_PORT: u16 = 7331;
@@ -77,7 +112,7 @@ fn toggle_main_window(app: &tauri::AppHandle) {
 fn main() {
     let viewer_port = parse_viewer_port();
     let start_hidden = parse_start_hidden();
-    let viewer_url = format!("http://127.0.0.1:{viewer_port}/");
+    let api_base_url = format!("http://127.0.0.1:{viewer_port}");
 
     let is_quitting = Arc::new(AtomicBool::new(false));
 
@@ -85,11 +120,15 @@ fn main() {
     let is_quitting_setup = is_quitting.clone();
 
     let app = tauri::Builder::default()
+        .manage(ViewerApiConfig {
+            base_url: api_base_url,
+        })
+        .invoke_handler(tauri::generate_handler![viewer_api_get_json])
         .setup(move |app| {
             let mut builder = tauri::WebviewWindowBuilder::new(
                 app.handle(),
                 "main",
-                tauri::WebviewUrl::External(viewer_url.parse().map_err(|_| "invalid viewer url")?),
+                tauri::WebviewUrl::default(),
             )
             .title("BranchMind Viewer")
             .inner_size(1280.0, 800.0);

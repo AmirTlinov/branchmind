@@ -8,7 +8,7 @@ import { ExplorerPanel } from "./panels/ExplorerPanel";
 import { DetailPanel } from "./panels/DetailPanel";
 import { CommandPalette } from "./overlays/CommandPalette";
 import { HUD } from "./overlays/HUD";
-import { GraphShell } from "./graph/GraphShell";
+import { CenterArea } from "./panels/CenterArea";
 import { useKeyboard } from "./hooks/useKeyboard";
 
 export function App() {
@@ -53,7 +53,7 @@ export function App() {
       <TopBar />
       <div className="flex flex-1 overflow-hidden">
         <ExplorerPanel />
-        <GraphShell />
+        <CenterArea />
         <DetailPanel />
       </div>
       <HUD />

@@ -8,3 +8,4 @@
 .agents/
 target/
 viewer-tauri/src-tauri/gen/
+viewer-app/

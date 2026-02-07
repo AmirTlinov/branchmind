@@ -29,6 +29,7 @@ export function ExplorerPanel() {
   const selectedPlanId = useSnapshotStore((s) => s.selectedPlanId);
   const setSelectedPlanId = useSnapshotStore((s) => s.setSelectedPlanId);
   const openDetail = useUIStore((s) => s.openDetail);
+  const togglePalette = useUIStore((s) => s.togglePalette);
 
   if (!open) return null;
 
@@ -37,6 +38,12 @@ export function ExplorerPanel() {
       <aside className="glass glass-edge noise-overlay z-40 flex h-full w-64 shrink-0 flex-col overflow-hidden border-r border-border">
         <div className="border-b border-border px-3 py-2">
           <h2 className="text-xs font-semibold text-ink uppercase tracking-wide">Knowledge</h2>
+          <button
+            onClick={togglePalette}
+            className="mt-2 w-full rounded border border-border bg-bg px-2 py-1 text-left text-[10px] text-ink-dim hover:bg-border/30 transition-colors"
+          >
+            Search… <span className="float-right font-mono opacity-70">Ctrl+K</span>
+          </button>
           <p className="text-[10px] text-ink-dim mt-0.5">
             {knowledgeSnapshot.anchors_total} anchors, {knowledgeSnapshot.keys_total} keys
           </p>
@@ -72,6 +79,12 @@ export function ExplorerPanel() {
       {/* Summary */}
       <div className="border-b border-border px-3 py-2">
         <h2 className="text-xs font-semibold text-ink uppercase tracking-wide">Explorer</h2>
+        <button
+          onClick={togglePalette}
+          className="mt-2 w-full rounded border border-border bg-bg px-2 py-1 text-left text-[10px] text-ink-dim hover:bg-border/30 transition-colors"
+        >
+          Search… <span className="float-right font-mono opacity-70">Ctrl+K</span>
+        </button>
         <div className="mt-1 flex gap-3 text-[10px] text-ink-dim">
           <span>{snapshot?.plans_total ?? 0} plans</span>
           <span>{snapshot?.tasks_total ?? 0} tasks</span>

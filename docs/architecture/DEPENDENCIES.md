@@ -43,7 +43,8 @@ If “0 deps strict” is required, replace these with in-house minimal implemen
 ### `bm_viewer_tauri` (desktop viewer shell, optional)
 
 - `tauri` (+ transitive WebView stack): cross-platform desktop window + tray wrapper that loads the
-  local HTTP viewer UI from `http://127.0.0.1:${BRANCHMIND_VIEWER_PORT:-7331}`.
+  bundled Vite+React UI (`viewer-tauri/`) and talks to the loopback viewer API exposed by `bm_mcp`
+  on `http://127.0.0.1:${BRANCHMIND_VIEWER_PORT:-7331}`.
 - `tauri-build`: build-time glue for Tauri config embedding.
 
 Notes:
