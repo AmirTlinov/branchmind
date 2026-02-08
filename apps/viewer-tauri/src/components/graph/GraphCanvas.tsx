@@ -60,16 +60,22 @@ interface DrawArgs {
 
 function drawEdges(args: DrawArgs) {
   const { canvas, nodes, edges, focusId, viewX, viewY, scale, cw, ch } = args;
+  if (cw < 2 || ch < 2) return;
   const dpr = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
-  if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
-    canvas.width = cw * dpr;
-    canvas.height = ch * dpr;
+  const pxW = Math.max(1, Math.round(cw * dpr));
+  const pxH = Math.max(1, Math.round(ch * dpr));
+  if (canvas.width !== pxW || canvas.height !== pxH) {
+    canvas.width = pxW;
+    canvas.height = pxH;
     canvas.style.width = `${cw}px`;
     canvas.style.height = `${ch}px`;
   }
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Use exact pixel ratio after rounding to avoid canvas thrash on fractional sizes.
+  const sx = pxW / cw;
+  const sy = pxH / ch;
+  ctx.setTransform(sx, 0, 0, sy, 0, 0);
   ctx.clearRect(0, 0, cw, ch);
   const toScreen = (wx: number, wy: number): [number, number] => [wx * scale + viewX, wy * scale + viewY];
   const lowDetail = edges.length >= EDGE_LOW_DETAIL_THRESHOLD || scale < 0.42;
