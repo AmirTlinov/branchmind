@@ -196,8 +196,33 @@ export const useStore = create<ViewerState>((set, get) => ({
   scan_projects: async () => {
     set({ projects_status: "loading", projects_error: null });
     try {
-      const projects = await viewerApi.projectsScan();
-      projects.sort((a, b) => a.display_name.localeCompare(b.display_name));
+      const raw = await viewerApi.projectsScan();
+
+      // Best-effort dedupe: scan roots may include multiple paths that canonicalize to the same store.
+      // We prefer keeping the first instance and unioning workspaces by id.
+      const byStorageDir = new Map<string, ProjectDto>();
+      for (const p of raw) {
+        const existing = byStorageDir.get(p.storage_dir);
+        if (!existing) {
+          byStorageDir.set(p.storage_dir, p);
+          continue;
+        }
+
+        const wsById = new Map<string, (typeof p.workspaces)[number]>();
+        for (const w of [...existing.workspaces, ...p.workspaces]) wsById.set(w.workspace, w);
+
+        byStorageDir.set(p.storage_dir, {
+          ...existing,
+          ...p,
+          workspaces: Array.from(wsById.values()).sort((a, b) =>
+            a.workspace.localeCompare(b.workspace),
+          ),
+        });
+      }
+
+      const projects = Array.from(byStorageDir.values()).sort((a, b) =>
+        a.display_name.localeCompare(b.display_name),
+      );
       set({ projects, projects_status: "ready" });
     } catch (err) {
       set({ projects_status: "error", projects_error: String(err) });

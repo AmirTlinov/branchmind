@@ -7,6 +7,7 @@ use bm_core::model::TaskKind;
 use bm_core::paths::StepPath;
 use bm_storage::*;
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 const KB_BRANCH: &str = "kb/main";
@@ -42,8 +43,14 @@ pub fn projects_scan(
     let storage_dirs = scan_storage_dirs(root_paths, max_depth, limit, timeout_ms)?;
 
     let mut out = Vec::new();
+    let mut seen = BTreeSet::<PathBuf>::new();
     for storage_dir in storage_dirs {
         let canon = canonicalize_best_effort(&storage_dir);
+        // scan_storage_dirs may return duplicates that canonicalize to the same physical path
+        // (e.g. multiple scan roots pointing to the same mount / symlinked directory).
+        if !seen.insert(canon.clone()) {
+            continue;
+        }
         let db = canon.join("branchmind_rust.db");
         let store = match open_store_read_only(&canon) {
             Ok(store) => store,
