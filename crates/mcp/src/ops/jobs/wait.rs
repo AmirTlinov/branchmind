@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use super::json::job_row_to_json;
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
-const MAX_TIMEOUT_MS: u64 = 300_000;
+// Keep jobs.wait below common MCP tool-call deadlines (~60s), otherwise a single
+// wait call can block the server thread and make subsequent calls look "hung".
+const MAX_TIMEOUT_MS: u64 = 55_000;
 const DEFAULT_POLL_MS: u64 = 200;
 const MIN_POLL_MS: u64 = 10;
 const MAX_POLL_MS: u64 = 5_000;
@@ -104,7 +106,9 @@ pub(super) fn handle_jobs_wait(server: &mut crate::McpServer, env: &Envelope) ->
             OpError {
                 code: "INVALID_INPUT".to_string(),
                 message: "timeout_ms exceeds max".to_string(),
-                recovery: Some(format!("Use timeout_ms <= {MAX_TIMEOUT_MS}")),
+                recovery: Some(format!(
+                    "Use timeout_ms <= {MAX_TIMEOUT_MS}. For longer waits, loop jobs.wait (or use jobs.radar)."
+                )),
             },
         );
     }

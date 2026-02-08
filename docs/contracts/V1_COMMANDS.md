@@ -163,6 +163,8 @@ Wait for a job to reach a terminal status (DONE/FAILED/CANCELED), bounded by `ti
 
 Notes:
 - On timeout, the tool returns `success=true` with `result.done=false` (not an error).
+- `timeout_ms` is intentionally capped (currently `<= 55000`) to stay below typical MCP call
+  deadlines; for longer waits, run multiple short `jobs.wait` calls or monitor via `jobs.radar`.
 - Use `system` → `schema.get(cmd)` for the exact arguments.
 
 ## jobs.runner.start

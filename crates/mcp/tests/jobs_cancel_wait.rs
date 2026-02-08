@@ -278,3 +278,42 @@ fn jobs_wait_timeout_zero_returns_done_true_for_terminal() {
         Some("DONE")
     );
 }
+
+#[test]
+fn jobs_wait_rejects_timeout_above_transport_safe_cap() {
+    let mut server =
+        Server::start_initialized("jobs_wait_rejects_timeout_above_transport_safe_cap");
+    let ws = "ws_jobs_wait_timeout_cap";
+    let job_id = create_job(&mut server, ws);
+
+    let resp = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "wait",
+                "args": { "job": job_id, "timeout_ms": 56_000, "poll_ms": 1_000 }
+            }
+        }
+    }));
+    let text = extract_tool_text(&resp);
+    assert_eq!(text.get("success").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(
+        text.get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_INPUT")
+    );
+    let recovery = text
+        .get("error")
+        .and_then(|v| v.get("recovery"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(
+        recovery.contains("<= 55000"),
+        "expected transport-safe timeout hint in recovery, got: {recovery}"
+    );
+}
