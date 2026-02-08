@@ -1,89 +1,15 @@
 import { useEffect } from "react";
 import { useStore } from "@/store";
-import { cn } from "@/lib/cn";
-import { formatTime } from "@/lib/format";
+import { Timeline } from "./Timeline";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { BookOpen, RefreshCw } from "lucide-react";
-
-function EntryCard({
-  seq,
-  ts_ms,
-  kind,
-  title,
-  branch,
-  content,
-  event_type,
-  task_id,
-  path,
-}: {
-  seq: number;
-  ts_ms: number;
-  kind: string;
-  title?: string | null;
-  branch: string;
-  content?: string | null;
-  event_type?: string | null;
-  task_id?: string | null;
-  path?: string | null;
-}) {
-  const isNote = kind === "note";
-  return (
-    <div className="bg-white/40 ring-1 ring-black/[0.03] rounded-2xl p-4 space-y-3">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-[12px] font-semibold text-gray-900 truncate">
-            {title || (isNote ? "Note" : "Event")}
-          </div>
-          <div className="mt-1 text-[10px] text-gray-400 font-mono flex flex-wrap gap-x-2 gap-y-1">
-            <span>seq:{seq}</span>
-            <span>•</span>
-            <span>{formatTime(ts_ms)}</span>
-            <span>•</span>
-            <span className="truncate">{branch}</span>
-            {event_type && (
-              <>
-                <span>•</span>
-                <span>{event_type}</span>
-              </>
-            )}
-            {task_id && (
-              <>
-                <span>•</span>
-                <span>{task_id}</span>
-              </>
-            )}
-            {path && (
-              <>
-                <span>•</span>
-                <span>{path}</span>
-              </>
-            )}
-          </div>
-        </div>
-        <span
-          className={cn(
-            "px-2 py-1 rounded-lg text-[10px] font-mono uppercase",
-            isNote ? "bg-emerald-50 text-emerald-700" : "bg-gray-50 text-gray-500",
-          )}
-        >
-          {kind}
-        </span>
-      </div>
-
-      {content && (
-        <pre className="text-[12px] text-gray-800 whitespace-pre-wrap leading-relaxed">
-          {content}
-        </pre>
-      )}
-      {!content && <div className="text-[12px] text-gray-500">—</div>}
-    </div>
-  );
-}
 
 export function DocsView() {
   const selected_task_id = useStore((s) => s.selected_task_id);
   const reasoning_ref = useStore((s) => s.reasoning_ref);
   const entries = useStore((s) => s.notes_entries);
   const load_tail = useStore((s) => s.load_docs_tail);
+  const notes_last_seq = useStore((s) => s.notes_last_seq);
 
   useEffect(() => {
     if (!reasoning_ref) return;
@@ -91,11 +17,7 @@ export function DocsView() {
   }, [load_tail, reasoning_ref]);
 
   if (!selected_task_id) {
-    return (
-      <div className="w-full h-full flex items-center justify-center text-[13px] text-gray-500">
-        Select a task to view notes.
-      </div>
-    );
+    return <EmptyState icon={BookOpen} heading="Select a task" description="Choose a task to view notes." />;
   }
 
   return (
@@ -105,8 +27,14 @@ export function DocsView() {
           <div className="text-[11px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
             <BookOpen size={14} /> Notes
           </div>
-          <div className="text-[12px] text-gray-600 mt-1">
-            Latest {entries.length} entries (tail)
+          <div className="text-[12px] text-gray-600 mt-1 flex items-center gap-2">
+            {entries.length} entries
+            {notes_last_seq > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-[10px] text-emerald-600">live</span>
+              </span>
+            )}
           </div>
         </div>
         <button
@@ -119,24 +47,9 @@ export function DocsView() {
       </div>
 
       {entries.length === 0 ? (
-        <div className="text-[12px] text-gray-500">No notes yet.</div>
+        <EmptyState icon={BookOpen} heading="No notes yet" description="Notes will appear here as the agent works." />
       ) : (
-        <div className="space-y-3">
-          {entries.map((e) => (
-            <EntryCard
-              key={e.seq}
-              seq={e.seq}
-              ts_ms={e.ts_ms}
-              kind={e.kind}
-              title={e.title}
-              branch={e.branch}
-              content={e.content}
-              event_type={e.event_type}
-              task_id={e.task_id}
-              path={e.path}
-            />
-          ))}
-        </div>
+        <Timeline entries={entries} />
       )}
     </div>
   );

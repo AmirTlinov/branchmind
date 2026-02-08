@@ -1,5 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { GlassPanel } from "@/components/ui/Glass";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/format";
@@ -7,11 +10,13 @@ import {
   ChevronRight,
   Command,
   Folder,
+  FolderOpen,
   RefreshCw,
   Search,
   ShieldAlert,
   Workflow,
 } from "lucide-react";
+import type { TaskSummaryDto } from "@/api/types";
 
 function storageDirLabel(storage_dir: string, repo_root?: string | null): string {
   if (repo_root && storage_dir.startsWith(repo_root)) {
@@ -23,13 +28,7 @@ function storageDirLabel(storage_dir: string, repo_root?: string | null): string
   return parts.slice(Math.max(parts.length - 3, 0)).join("/");
 }
 
-function SectionHeader({
-  title,
-  right,
-}: {
-  title: string;
-  right?: React.ReactNode;
-}) {
+function SectionHeader({ title, right }: { title: string; right?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between px-2 mb-2">
       <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">{title}</h2>
@@ -38,35 +37,25 @@ function SectionHeader({
   );
 }
 
-function StatusDot({ blocked }: { blocked: boolean }) {
-  return (
-    <div
-      className={cn(
-        "w-2 h-2 rounded-full shrink-0",
-        blocked ? "bg-rose-400" : "bg-emerald-400",
-      )}
-      title={blocked ? "Blocked" : "OK"}
-    />
-  );
-}
-
 function TaskRow({
   id,
   title,
-  blocked,
   status,
   updated_at_ms,
   selected,
+  progress,
   onClick,
 }: {
   id: string;
   title: string;
-  blocked: boolean;
   status: string;
   updated_at_ms: number;
   selected: boolean;
+  progress?: { done: number; total: number };
   onClick: () => void;
 }) {
+  const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+
   return (
     <button
       onClick={onClick}
@@ -77,27 +66,64 @@ function TaskRow({
       )}
       title={id}
     >
-      <div className="flex items-center gap-2.5 overflow-hidden">
-        <StatusDot blocked={blocked} />
-        <span
-          className={cn(
-            "text-[12px] truncate",
-            selected ? "text-gray-900 font-medium" : "text-gray-700",
-          )}
-        >
-          {title}
-        </span>
+      <div className="flex-1 min-w-0 mr-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "text-[12px] truncate",
+              selected ? "text-gray-900 font-medium" : "text-gray-700",
+            )}
+          >
+            {title}
+          </span>
+        </div>
+        {progress && progress.total > 0 && (
+          <div className="mt-1 h-1 rounded-full bg-gray-200/50 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gray-800/80 transition-all"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        {status && (
-          <span className="text-[9px] text-gray-400 font-mono uppercase">{status}</span>
-        )}
+        <StatusBadge status={status} />
         <span className="text-[10px] text-gray-300 min-w-[28px] text-right font-medium">
           {formatRelative(updated_at_ms)}
         </span>
       </div>
     </button>
   );
+}
+
+/* ── Task grouping helpers ── */
+
+type TaskGroup = { key: string; label: string; tasks: TaskSummaryDto[]; collapsedDefault: boolean };
+
+function classifyStatus(status: string): string {
+  const s = status.toLowerCase();
+  if (s === "active" || s === "in_progress" || s === "wip" || s === "running") return "running";
+  if (s === "open" || s === "pending" || s === "todo") return "open";
+  if (s === "blocked") return "blocked";
+  if (s === "completed" || s === "done" || s === "closed") return "completed";
+  return "open"; // fallback
+}
+
+function groupTasks(tasks: TaskSummaryDto[]): TaskGroup[] {
+  const buckets: Record<string, TaskSummaryDto[]> = { running: [], open: [], blocked: [], completed: [] };
+  for (const t of tasks) {
+    const cat = classifyStatus(t.status);
+    buckets[cat].push(t);
+  }
+  const order: { key: string; label: string; collapsedDefault: boolean }[] = [
+    { key: "running", label: "Running", collapsedDefault: false },
+    { key: "open", label: "Open", collapsedDefault: false },
+    { key: "blocked", label: "Blocked", collapsedDefault: false },
+    { key: "completed", label: "Completed", collapsedDefault: true },
+  ];
+  return order
+    .filter((g) => buckets[g.key].length > 0)
+    .map((g) => ({ ...g, tasks: buckets[g.key] }));
 }
 
 export function Sidebar() {
@@ -116,12 +142,14 @@ export function Sidebar() {
   const selected_task_id = useStore((s) => s.selected_task_id);
   const selected_task = useStore((s) => s.selected_task);
   const select_task = useStore((s) => s.select_task);
+  const task_step_summaries = useStore((s) => s.task_step_summaries);
 
   const set_palette_open = useStore((s) => s.set_command_palette_open);
 
   const [taskFilter, setTaskFilter] = useState("");
   const [projectsOpen, setProjectsOpen] = useState<Record<string, boolean>>({});
   const [projectGroupsOpen, setProjectGroupsOpen] = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const groupedProjects = useMemo(() => {
     const map = new Map<string, typeof projects>();
@@ -145,6 +173,28 @@ export function Sidebar() {
     return tasks.filter((t) => `${t.id} ${t.title}`.toLowerCase().includes(q));
   }, [taskFilter, tasks]);
 
+  const taskGroups = useMemo(() => groupTasks(filteredTasks), [filteredTasks]);
+
+  const toggleGroup = (key: string, collapsedDefault: boolean) =>
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !(prev[key] ?? collapsedDefault) }));
+
+  const renderTaskRow = (t: TaskSummaryDto) => {
+    const summary = task_step_summaries.get(t.id);
+    const progress = summary ? { done: summary.completed_steps, total: summary.total_steps } : undefined;
+    return (
+      <TaskRow
+        key={t.id}
+        id={t.id}
+        title={t.title}
+        status={t.status}
+        updated_at_ms={t.updated_at_ms}
+        selected={t.id === selected_task_id}
+        progress={progress}
+        onClick={() => void select_task(t.id)}
+      />
+    );
+  };
+
   return (
     <GlassPanel
       intensity="low"
@@ -155,16 +205,10 @@ export function Sidebar() {
         {selected_task ? (
           <div className="mb-2 min-w-0">
             <div className="flex items-center justify-between gap-2 min-w-0">
-              <div
-                className="text-[12px] font-semibold text-gray-800 truncate"
-                title={selected_task.title}
-              >
+              <div className="text-[12px] font-semibold text-gray-800 truncate" title={selected_task.title}>
                 {selected_task.title}
               </div>
-              <div
-                className="text-[10px] text-gray-300 font-mono shrink-0"
-                title={selected_task.id}
-              >
+              <div className="text-[10px] text-gray-300 font-mono shrink-0" title={selected_task.id}>
                 {selected_task.id}
               </div>
             </div>
@@ -207,22 +251,16 @@ export function Sidebar() {
             }
           />
 
-          {projects_status === "loading" && (
-            <div className="px-2 text-[12px] text-gray-500">Scanning…</div>
-          )}
+          {projects_status === "loading" && <Skeleton variant="list-item" count={3} />}
           {projects_status === "error" && (
-            <div className="px-2 text-[12px] text-rose-600">
-              Scan failed: {projects_error}
-            </div>
+            <div className="px-2 text-[12px] text-rose-600">Scan failed: {projects_error}</div>
           )}
           {projects_status === "ready" && projects.length === 0 && (
-            <div className="px-2 text-[12px] text-gray-500 space-y-1">
-              <div>No stores found.</div>
-              <div className="text-[11px] text-gray-400">
-                Tip: set <span className="font-mono">BRANCHMIND_VIEWER_SCAN_ROOTS</span> to add
-                scan roots.
-              </div>
-            </div>
+            <EmptyState
+              icon={FolderOpen}
+              heading="No stores found"
+              description="Set BRANCHMIND_VIEWER_SCAN_ROOTS to add scan roots."
+            />
           )}
 
           <div className="space-y-1">
@@ -236,67 +274,48 @@ export function Sidebar() {
                     <button
                       type="button"
                       onClick={() =>
-                        setProjectsOpen((prev) => ({
-                          ...prev,
-                          [p.project_id]: !isOpen,
-                        }))
+                        setProjectsOpen((prev) => ({ ...prev, [p.project_id]: !isOpen }))
                       }
                       className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary text-left"
                     >
                       <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
                         <ChevronRight
                           size={14}
-                          className={cn(
-                            "text-gray-300 shrink-0 transition-transform",
-                            isOpen && "rotate-90",
-                          )}
+                          className={cn("text-gray-300 shrink-0 transition-transform", isOpen && "rotate-90")}
                         />
-                        <Folder
-                          size={14}
-                          className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0"
-                        />
+                        <Folder size={14} className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0" />
                         <span className="text-[13px] font-medium text-gray-700 group-hover/summary:text-gray-900 transition-colors truncate">
                           {p.display_name}
                         </span>
                       </div>
                     </button>
-
                     {isOpen && (
                       <div className="space-y-[1px] pl-0 relative">
-                      {/* Guide Line */}
-                      <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
-
-                      {p.workspaces.map((w) => {
-                        const active = isActiveProject && selected_workspace === w.workspace;
-                        return (
-                          <button
-                            key={w.workspace}
-                            onClick={() => void select_workspace(p.storage_dir, w.workspace)}
-                            className={cn(
-                              "w-full flex items-center justify-between py-1.5 px-2 pl-9 rounded-lg hover:bg-black/5 cursor-pointer relative text-left",
-                              active && "bg-gray-50/70 ring-1 ring-black/[0.03]",
-                            )}
-                            title={w.project_guard ? `guard: ${w.project_guard}` : w.workspace}
-                          >
-                            <div className="flex items-center gap-2 overflow-hidden">
-                              <Workflow size={13} className="text-gray-400 shrink-0" />
-                              <span
-                                className={cn(
-                                  "text-[12px] truncate",
-                                  active ? "text-gray-900 font-medium" : "text-gray-700",
-                                )}
-                              >
-                                {w.workspace}
-                              </span>
-                            </div>
-                            {w.project_guard && (
-                              <span className="text-[10px] text-gray-400 font-mono shrink-0">
-                                guard
-                              </span>
-                          )}
-                        </button>
-                      );
-                    })}
+                        <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
+                        {p.workspaces.map((w) => {
+                          const active = isActiveProject && selected_workspace === w.workspace;
+                          return (
+                            <button
+                              key={w.workspace}
+                              onClick={() => void select_workspace(p.storage_dir, w.workspace)}
+                              className={cn(
+                                "w-full flex items-center justify-between py-1.5 px-2 pl-9 rounded-lg hover:bg-black/5 cursor-pointer relative text-left",
+                                active && "bg-gray-50/70 ring-1 ring-black/[0.03]",
+                              )}
+                              title={w.project_guard ? `guard: ${w.project_guard}` : w.workspace}
+                            >
+                              <div className="flex items-center gap-2 overflow-hidden">
+                                <Workflow size={13} className="text-gray-400 shrink-0" />
+                                <span className={cn("text-[12px] truncate", active ? "text-gray-900 font-medium" : "text-gray-700")}>
+                                  {w.workspace}
+                                </span>
+                              </div>
+                              {w.project_guard && (
+                                <span className="text-[10px] text-gray-400 font-mono shrink-0">guard</span>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -310,106 +329,80 @@ export function Sidebar() {
                   <button
                     type="button"
                     onClick={() =>
-                      setProjectGroupsOpen((prev) => ({
-                        ...prev,
-                        [g.name]: !isGroupDetailsOpen,
-                      }))
+                      setProjectGroupsOpen((prev) => ({ ...prev, [g.name]: !isGroupDetailsOpen }))
                     }
                     className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary text-left"
                   >
                     <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
                       <ChevronRight
                         size={14}
-                        className={cn(
-                          "text-gray-300 shrink-0 transition-transform",
-                          isGroupDetailsOpen && "rotate-90",
-                        )}
+                        className={cn("text-gray-300 shrink-0 transition-transform", isGroupDetailsOpen && "rotate-90")}
                       />
-                      <Folder
-                        size={14}
-                        className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0"
-                      />
+                      <Folder size={14} className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0" />
                       <span className="text-[13px] font-medium text-gray-700 group-hover/summary:text-gray-900 transition-colors truncate">
                         {g.name}
                       </span>
                     </div>
                     <span className="text-[10px] text-gray-300 font-mono shrink-0">{g.items.length}</span>
                   </button>
-
                   {isGroupDetailsOpen && (
                     <div className="space-y-1 pl-3">
-                    {g.items.map((p) => {
-                      const isActiveProject = selected_storage_dir === p.storage_dir;
-                      const label = storageDirLabel(p.storage_dir, p.repo_root);
-                      const isStoreOpen = projectsOpen[p.project_id] ?? isActiveProject;
-                      return (
-                        <div key={p.project_id} className="group">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setProjectsOpen((prev) => ({
-                                ...prev,
-                                [p.project_id]: !isStoreOpen,
-                              }))
-                            }
-                            className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 text-left"
-                          >
-                            <div className="flex items-center gap-2 overflow-hidden min-w-0">
-                              <ChevronRight
-                                size={13}
-                                className={cn(
-                                  "text-gray-300 shrink-0 transition-transform",
-                                  isStoreOpen && "rotate-90",
-                                )}
-                              />
-                              <Folder size={13} className="text-gray-300 shrink-0" />
-                              <span className="text-[12px] text-gray-600 truncate" title={p.storage_dir}>
-                                {label}
-                              </span>
-                            </div>
-                          </button>
-
-                          {isStoreOpen && (
-                            <div className="space-y-[1px] pl-0 relative">
-                            {/* Guide Line */}
-                            <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
-
-                            {p.workspaces.map((w) => {
-                              const active = isActiveProject && selected_workspace === w.workspace;
-                              return (
-                                <button
-                                  key={w.workspace}
-                                  onClick={() => void select_workspace(p.storage_dir, w.workspace)}
-                                  className={cn(
-                                    "w-full flex items-center justify-between py-1.5 px-2 pl-9 rounded-lg hover:bg-black/5 cursor-pointer relative text-left",
-                                    active && "bg-gray-50/70 ring-1 ring-black/[0.03]",
-                                  )}
-                                  title={w.project_guard ? `guard: ${w.project_guard}` : w.workspace}
-                                >
-                                  <div className="flex items-center gap-2 overflow-hidden">
-                                    <Workflow size={13} className="text-gray-400 shrink-0" />
-                                    <span
+                      {g.items.map((p) => {
+                        const isActiveProject = selected_storage_dir === p.storage_dir;
+                        const label = storageDirLabel(p.storage_dir, p.repo_root);
+                        const isStoreOpen = projectsOpen[p.project_id] ?? isActiveProject;
+                        return (
+                          <div key={p.project_id} className="group">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setProjectsOpen((prev) => ({ ...prev, [p.project_id]: !isStoreOpen }))
+                              }
+                              className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 text-left"
+                            >
+                              <div className="flex items-center gap-2 overflow-hidden min-w-0">
+                                <ChevronRight
+                                  size={13}
+                                  className={cn("text-gray-300 shrink-0 transition-transform", isStoreOpen && "rotate-90")}
+                                />
+                                <Folder size={13} className="text-gray-300 shrink-0" />
+                                <span className="text-[12px] text-gray-600 truncate" title={p.storage_dir}>
+                                  {label}
+                                </span>
+                              </div>
+                            </button>
+                            {isStoreOpen && (
+                              <div className="space-y-[1px] pl-0 relative">
+                                <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
+                                {p.workspaces.map((w) => {
+                                  const active = isActiveProject && selected_workspace === w.workspace;
+                                  return (
+                                    <button
+                                      key={w.workspace}
+                                      onClick={() => void select_workspace(p.storage_dir, w.workspace)}
                                       className={cn(
-                                        "text-[12px] truncate",
-                                        active ? "text-gray-900 font-medium" : "text-gray-700",
+                                        "w-full flex items-center justify-between py-1.5 px-2 pl-9 rounded-lg hover:bg-black/5 cursor-pointer relative text-left",
+                                        active && "bg-gray-50/70 ring-1 ring-black/[0.03]",
                                       )}
+                                      title={w.project_guard ? `guard: ${w.project_guard}` : w.workspace}
                                     >
-                                      {w.workspace}
-                                    </span>
-                                  </div>
-                                  {w.project_guard && (
-                                    <span className="text-[10px] text-gray-400 font-mono shrink-0">
-                                      guard
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                                      <div className="flex items-center gap-2 overflow-hidden">
+                                        <Workflow size={13} className="text-gray-400 shrink-0" />
+                                        <span className={cn("text-[12px] truncate", active ? "text-gray-900 font-medium" : "text-gray-700")}>
+                                          {w.workspace}
+                                        </span>
+                                      </div>
+                                      {w.project_guard && (
+                                        <span className="text-[10px] text-gray-400 font-mono shrink-0">guard</span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -422,32 +415,42 @@ export function Sidebar() {
         <div>
           <SectionHeader title="Tasks" />
 
-          {!selected_workspace && (
-            <div className="px-2 text-[12px] text-gray-500">Pick a workspace.</div>
-          )}
-          {selected_workspace && tasks_status === "loading" && (
-            <div className="px-2 text-[12px] text-gray-500">Loading tasks…</div>
-          )}
+          {!selected_workspace && <EmptyState icon={Workflow} heading="Pick a workspace" />}
+          {selected_workspace && tasks_status === "loading" && <Skeleton variant="list-item" count={4} />}
           {selected_workspace && tasks_status === "error" && (
             <div className="px-2 text-[12px] text-rose-600">Failed: {tasks_error}</div>
           )}
 
-          <div className="space-y-1">
-            {selected_workspace &&
-              tasks_status === "ready" &&
-              filteredTasks.map((t) => (
-                <TaskRow
-                  key={t.id}
-                  id={t.id}
-                  title={t.title}
-                  blocked={t.blocked}
-                  status={t.status}
-                  updated_at_ms={t.updated_at_ms}
-                  selected={t.id === selected_task_id}
-                  onClick={() => void select_task(t.id)}
-                />
-              ))}
-          </div>
+          {selected_workspace && tasks_status === "ready" && (
+            <div className="space-y-3">
+              {taskGroups.map((g) => {
+                const isCollapsed = collapsedGroups[g.key] ?? g.collapsedDefault;
+                return (
+                  <div key={g.key}>
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(g.key, g.collapsedDefault)}
+                      className="w-full flex items-center gap-2 px-2 py-0.5 group/gh"
+                    >
+                      <ChevronRight
+                        size={10}
+                        className={cn("text-gray-300 transition-transform", !isCollapsed && "rotate-90")}
+                      />
+                      <span className="text-[10px] text-gray-400 uppercase tracking-widest font-medium">
+                        {g.label}
+                      </span>
+                      <span className="text-[9px] text-gray-300 bg-gray-200/40 rounded px-1 py-px font-mono">
+                        {g.tasks.length}
+                      </span>
+                    </button>
+                    {!isCollapsed && (
+                      <div className="space-y-1 mt-1">{g.tasks.map(renderTaskRow)}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

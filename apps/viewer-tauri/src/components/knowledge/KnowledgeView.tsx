@@ -5,6 +5,9 @@ import { cn } from "@/lib/cn";
 import { formatRelative, formatTime } from "@/lib/format";
 import { useStore } from "@/store";
 import { Anchor, Book, RefreshCw, Search } from "lucide-react";
+import { Markdown } from "@/components/ui/Markdown";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 type Mode = "idle" | "loading" | "ready" | "error";
 
@@ -119,11 +122,7 @@ export function KnowledgeView() {
   }, [storage_dir, workspace]);
 
   if (!storage_dir || !workspace) {
-    return (
-      <div className="w-full h-full flex items-center justify-center text-[13px] text-gray-500">
-        Select a workspace to browse knowledge.
-      </div>
-    );
+    return <EmptyState icon={Book} heading="Select a workspace" description="Browse knowledge cards and anchors." />;
   }
 
   return (
@@ -158,7 +157,7 @@ export function KnowledgeView() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search… (e.g. determinism, viewer, graph)"
+          placeholder="Search... (e.g. determinism, viewer, graph)"
           className="flex-1 bg-transparent outline-none text-[13px] text-gray-900 placeholder:text-gray-400"
         />
       </div>
@@ -172,8 +171,10 @@ export function KnowledgeView() {
               <span className="font-mono">{cards.length}</span>
             </div>
             <div className="p-2 space-y-1 max-h-[55vh] overflow-y-auto custom-scrollbar">
-              {mode === "idle" && <div className="px-3 py-4 text-[12px] text-gray-500">Type to search.</div>}
-              {mode === "loading" && <div className="px-3 py-4 text-[12px] text-gray-500">Searching…</div>}
+              {mode === "idle" && (
+                <EmptyState icon={Search} heading="Type to search" description="Search cards and anchors by keyword." className="py-6" />
+              )}
+              {mode === "loading" && <Skeleton variant="list-item" count={4} className="px-1" />}
               {mode === "error" && <div className="px-3 py-4 text-[12px] text-rose-600">{err}</div>}
               {mode === "ready" && cards.length === 0 && (
                 <div className="px-3 py-4 text-[12px] text-gray-500">No cards.</div>
@@ -219,7 +220,7 @@ export function KnowledgeView() {
                       {a.title}
                     </span>
                   }
-                  meta={`${a.kind}${a.status ? ` • ${a.status}` : ""}`}
+                  meta={`${a.kind}${a.status ? ` \u2022 ${a.status}` : ""}`}
                   onClick={() => {
                     set_focus_card(null);
                     set_focus_anchor(a.id);
@@ -232,7 +233,7 @@ export function KnowledgeView() {
 
         <div className="bg-white/40 ring-1 ring-black/[0.03] rounded-2xl p-5 space-y-4 min-h-[240px]">
           {!selectedCard && !selectedAnchor && (
-            <div className="text-[12px] text-gray-500">Select a card or anchor to inspect.</div>
+            <EmptyState icon={Book} heading="Select an item" description="Click a card or anchor to inspect." />
           )}
 
           {selectedCard && (
@@ -244,7 +245,7 @@ export function KnowledgeView() {
                     {selectedCard.title || selectedCard.id}
                   </div>
                   <div className="text-[11px] text-gray-500 font-mono mt-1 truncate">
-                    {selectedCard.id} • {selectedCard.node_type}
+                    {selectedCard.id} &bull; {selectedCard.node_type}
                   </div>
                 </div>
                 <button
@@ -259,15 +260,16 @@ export function KnowledgeView() {
                 </button>
               </div>
 
-              {selectedCard.text && (
-                <pre className="text-[12px] text-gray-800 whitespace-pre-wrap leading-relaxed bg-white/55 ring-1 ring-black/[0.03] rounded-xl p-4">
-                  {selectedCard.text}
-                </pre>
+              {selectedCard.text ? (
+                <div className="bg-white/55 ring-1 ring-black/[0.03] rounded-xl p-4">
+                  <Markdown text={selectedCard.text} />
+                </div>
+              ) : (
+                <div className="text-[12px] text-gray-500">&mdash;</div>
               )}
-              {!selectedCard.text && <div className="text-[12px] text-gray-500">—</div>}
 
               <div className="text-[10px] text-gray-400 font-mono">
-                last: {formatTime(selectedCard.last_ts_ms)} • seq:{selectedCard.last_seq}
+                last: {formatTime(selectedCard.last_ts_ms)} &bull; seq:{selectedCard.last_seq}
               </div>
             </div>
           )}
@@ -283,7 +285,7 @@ export function KnowledgeView() {
                     {selectedAnchor.title}
                   </div>
                   <div className="text-[11px] text-gray-500 font-mono mt-1 truncate">
-                    {selectedAnchor.id} • {selectedAnchor.kind}
+                    {selectedAnchor.id} &bull; {selectedAnchor.kind}
                   </div>
                 </div>
                 <button
@@ -298,34 +300,47 @@ export function KnowledgeView() {
                 </button>
               </div>
 
-              {selectedAnchor.description && (
-                <div className="text-[12px] text-gray-800 leading-relaxed">{selectedAnchor.description}</div>
+              {selectedAnchor.description ? (
+                <div className="bg-white/55 ring-1 ring-black/[0.03] rounded-xl p-4">
+                  <Markdown text={selectedAnchor.description} />
+                </div>
+              ) : (
+                <div className="text-[12px] text-gray-500">&mdash;</div>
               )}
-              {!selectedAnchor.description && <div className="text-[12px] text-gray-500">—</div>}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <div className="text-[10px] text-gray-400 uppercase tracking-widest mb-1">refs</div>
                   {selectedAnchor.refs.length === 0 ? (
-                    <div className="text-[12px] text-gray-500">—</div>
+                    <div className="text-[12px] text-gray-500">&mdash;</div>
                   ) : (
-                    <ul className="text-[12px] text-gray-800 space-y-1">
+                    <div className="flex flex-wrap gap-1.5">
                       {selectedAnchor.refs.slice(0, 10).map((r) => (
-                        <li key={r} className="font-mono break-all">{r}</li>
+                        <span
+                          key={r}
+                          className="inline-flex items-center px-2 py-0.5 rounded-lg bg-blue-50 text-blue-700 text-[10px] font-mono ring-1 ring-blue-200/50 cursor-pointer hover:bg-blue-100 transition-colors"
+                        >
+                          {r}
+                        </span>
                       ))}
-                    </ul>
+                    </div>
                   )}
                 </div>
                 <div>
                   <div className="text-[10px] text-gray-400 uppercase tracking-widest mb-1">depends_on</div>
                   {selectedAnchor.depends_on.length === 0 ? (
-                    <div className="text-[12px] text-gray-500">—</div>
+                    <div className="text-[12px] text-gray-500">&mdash;</div>
                   ) : (
-                    <ul className="text-[12px] text-gray-800 space-y-1">
+                    <div className="flex flex-wrap gap-1.5">
                       {selectedAnchor.depends_on.slice(0, 10).map((r) => (
-                        <li key={r} className="font-mono break-all">{r}</li>
+                        <span
+                          key={r}
+                          className="inline-flex items-center px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-mono ring-1 ring-amber-200/50 cursor-pointer hover:bg-amber-100 transition-colors"
+                        >
+                          {r}
+                        </span>
                       ))}
-                    </ul>
+                    </div>
                   )}
                 </div>
               </div>
@@ -340,4 +355,3 @@ export function KnowledgeView() {
     </div>
   );
 }
-

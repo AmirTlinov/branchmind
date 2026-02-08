@@ -30,6 +30,9 @@ function ViewTabBar() {
   const active_view = useStore((s) => s.active_view);
   const set_active_view = useStore((s) => s.set_active_view);
   const steps_summary = useStore((s) => s.steps_summary);
+  const graph_status = useStore((s) => s.graph_status);
+  const steps_status = useStore((s) => s.steps_status);
+  const isLoading = graph_status === "loading" || steps_status === "loading";
 
   const handleKeyboard = useCallback(
     (e: KeyboardEvent) => {
@@ -58,65 +61,79 @@ function ViewTabBar() {
   }, [steps_summary]);
 
   return (
-    <div className="h-10 px-3 flex items-center bg-[#EBECF0]/60 border-b border-gray-200/50 shrink-0 min-w-0 overflow-hidden">
-      <div className="flex items-center mr-3 shrink-0">
-        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
-          <Layout size={10} className="text-white opacity-90" />
+    <>
+      <div className="h-10 px-3 flex items-center bg-[#EBECF0]/60 border-b border-gray-200/50 shrink-0 min-w-0 overflow-hidden">
+        <div className="flex items-center mr-3 shrink-0">
+          <div className="w-5 h-5 rounded-md bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
+            <Layout size={10} className="text-white opacity-90" />
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex items-center gap-0.5 flex-1 min-w-0">
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = active_view === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => set_active_view(tab.id)}
+                className={`
+                  relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium min-w-0
+                  transition-all duration-150 select-none
+                  ${isActive ? "text-gray-900" : "text-gray-500 hover:text-gray-700 hover:bg-white/40"}
+                `}
+              >
+                {isActive && (
+                  <motion.div
+                    layoutId="active-tab-bg"
+                    className="absolute inset-0 bg-white rounded-md shadow-sm shadow-black/5 ring-1 ring-black/[0.03]"
+                    transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                  />
+                )}
+                <span className="relative flex items-center gap-1.5 min-w-0">
+                  <Icon size={13} className={isActive ? "text-gray-700" : "text-gray-400"} />
+                  <span className="truncate">{tab.label}</span>
+                  <span className="ml-0.5 text-[9px] text-gray-300 font-mono shrink-0">
+                    {isMac ? "\u2318" : "^"}
+                    {tab.shortcut}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Status */}
+        <div className="flex items-center gap-3 pl-4 border-l border-gray-300/30 shrink-0">
+          {progress && (
+            <div className="flex items-center gap-2">
+              <div className="w-20 h-1.5 bg-white/60 rounded-full overflow-hidden ring-1 ring-black/[0.04]">
+                <div
+                  className="h-full bg-gray-800/80 rounded-full"
+                  style={{ width: `${progress.pct}%` }}
+                />
+              </div>
+              <span className="text-[10px] text-gray-500 tabular-nums">
+                {progress.done}/{progress.total}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex items-center gap-0.5 flex-1 min-w-0">
-        {TABS.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = active_view === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => set_active_view(tab.id)}
-              className={`
-                relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium min-w-0
-                transition-all duration-150 select-none
-                ${isActive ? "text-gray-900" : "text-gray-500 hover:text-gray-700 hover:bg-white/40"}
-              `}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="active-tab-bg"
-                  className="absolute inset-0 bg-white rounded-md shadow-sm shadow-black/5 ring-1 ring-black/[0.03]"
-                  transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                />
-              )}
-              <span className="relative flex items-center gap-1.5 min-w-0">
-                <Icon size={13} className={isActive ? "text-gray-700" : "text-gray-400"} />
-                <span className="truncate">{tab.label}</span>
-                <span className="ml-0.5 text-[9px] text-gray-300 font-mono shrink-0">
-                  {isMac ? "\u2318" : "^"}
-                  {tab.shortcut}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Status */}
-      <div className="flex items-center gap-3 pl-4 border-l border-gray-300/30 shrink-0">
-        {progress && (
-          <div className="flex items-center gap-2">
-            <div className="w-20 h-1.5 bg-white/60 rounded-full overflow-hidden ring-1 ring-black/[0.04]">
-              <div
-                className="h-full bg-gray-800/80 rounded-full"
-                style={{ width: `${progress.pct}%` }}
-              />
-            </div>
-            <span className="text-[10px] text-gray-500 tabular-nums">
-              {progress.done}/{progress.total}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
+      {isLoading && (
+        <div className="h-0.5 bg-gray-100 overflow-hidden shrink-0">
+          <motion.div
+            className="h-full bg-gray-800/60 rounded-full"
+            initial={{ x: "-100%" }}
+            animate={{ x: "100%" }}
+            transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
+            style={{ width: "40%" }}
+          />
+        </div>
+      )}
+    </>
   );
 }
 

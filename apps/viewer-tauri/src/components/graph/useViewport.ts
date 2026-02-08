@@ -1,114 +1,121 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 const MIN_SCALE = 0.18;
 const MAX_SCALE = 2.4;
 const DEFAULT_SCALE = 0.72;
 
 export interface ViewportResult {
-  viewX: number;
-  viewY: number;
-  scale: number;
-  containerSize: { w: number; h: number };
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Attach to the node-layer div — transform is written directly via DOM. */
+  transformRef: React.RefObject<HTMLDivElement | null>;
 
-  // refs for animation frame access
-  viewXRef: React.MutableRefObject<number>;
-  viewYRef: React.MutableRefObject<number>;
-  scaleRef: React.MutableRefObject<number>;
-  containerSizeRef: React.MutableRefObject<{ w: number; h: number }>;
+  viewXRef: React.RefObject<number>;
+  viewYRef: React.RefObject<number>;
+  scaleRef: React.RefObject<number>;
+  containerSizeRef: React.RefObject<{ w: number; h: number }>;
 
-  // handlers
   handleWheel: (e: React.WheelEvent) => void;
   handlePointerDown: (e: React.PointerEvent) => void;
   handlePointerMove: (e: React.PointerEvent) => void;
   handlePointerUp: (e: React.PointerEvent) => void;
 
-  // navigation
   centerView: () => void;
   navigateTo: (worldX: number, worldY: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
-  setViewX: React.Dispatch<React.SetStateAction<number>>;
-  setViewY: React.Dispatch<React.SetStateAction<number>>;
-  setScale: React.Dispatch<React.SetStateAction<number>>;
 }
 
+/**
+ * Ref-driven viewport — zero React re-renders on pan/zoom.
+ *
+ * All viewport state lives in refs. The node-layer DOM element is updated
+ * directly via `transformRef.current.style.transform`. This eliminates the
+ * biggest source of graph jank: React re-rendering 200+ nodes on every
+ * mouse move.
+ */
 export function useViewport(): ViewportResult {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [containerSize, setContainerSize] = useState({ w: 900, h: 600 });
-  const [viewX, setViewX] = useState(0);
-  const [viewY, setViewY] = useState(0);
-  const [scale, setScale] = useState<number>(DEFAULT_SCALE);
+  const transformRef = useRef<HTMLDivElement>(null);
 
-  const viewXRef = useRef(viewX);
-  const viewYRef = useRef(viewY);
-  const scaleRef = useRef(scale);
-  const containerSizeRef = useRef(containerSize);
-
-  viewXRef.current = viewX;
-  viewYRef.current = viewY;
-  scaleRef.current = scale;
-  containerSizeRef.current = containerSize;
+  const viewXRef = useRef(0);
+  const viewYRef = useRef(0);
+  const scaleRef = useRef(DEFAULT_SCALE);
+  const containerSizeRef = useRef({ w: 900, h: 600 });
 
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
+  const hasCenteredRef = useRef(false);
 
-  // measure container
+  // ── Direct DOM write ──
+  const syncTransform = useCallback(() => {
+    const el = transformRef.current;
+    if (el) {
+      el.style.transform = `translate(${viewXRef.current}px,${viewYRef.current}px) scale(${scaleRef.current})`;
+    }
+  }, []);
+
+  // ── Resize observer (ref only, no state) ──
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const obs = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      setContainerSize({ w: width, h: height });
+      containerSizeRef.current = { w: width, h: height };
+      if (!hasCenteredRef.current && width > 10 && height > 10) {
+        viewXRef.current = width / 2;
+        viewYRef.current = height / 2;
+        hasCenteredRef.current = true;
+        syncTransform();
+      }
     });
     obs.observe(el);
     return () => obs.disconnect();
-  }, []);
+  }, [syncTransform]);
 
-  // center on mount (once)
-  const hasCenteredRef = useRef(false);
-  useEffect(() => {
-    if (hasCenteredRef.current) return;
-    if (containerSize.w > 10 && containerSize.h > 10) {
-      setViewX(containerSize.w / 2);
-      setViewY(containerSize.h / 2);
-      hasCenteredRef.current = true;
-    }
-  }, [containerSize.w, containerSize.h]);
+  // ── Handlers (all stable — zero deps on state) ──
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const factor = e.deltaY > 0 ? 0.93 : 1.07;
-    setScale((prev) => {
-      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, prev * factor));
-      const ratio = newScale / prev;
-      setViewX((vx) => mx - (mx - vx) * ratio);
-      setViewY((vy) => my - (my - vy) * ratio);
-      return newScale;
-    });
-  }, []);
-
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA") return;
-      if ((e.target as HTMLElement).closest("[data-no-pan]")) return;
-      isPanningRef.current = true;
-      panStartRef.current = { x: e.clientX, y: e.clientY, vx: viewX, vy: viewY };
-      containerRef.current?.setPointerCapture(e.pointerId);
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      e.preventDefault();
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const factor = e.deltaY > 0 ? 0.93 : 1.07;
+      const prev = scaleRef.current;
+      const ns = Math.max(MIN_SCALE, Math.min(MAX_SCALE, prev * factor));
+      const r = ns / prev;
+      viewXRef.current = mx - (mx - viewXRef.current) * r;
+      viewYRef.current = my - (my - viewYRef.current) * r;
+      scaleRef.current = ns;
+      syncTransform();
     },
-    [viewX, viewY],
+    [syncTransform],
   );
 
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!isPanningRef.current) return;
-    setViewX(panStartRef.current.vx + (e.clientX - panStartRef.current.x));
-    setViewY(panStartRef.current.vy + (e.clientY - panStartRef.current.y));
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA") return;
+    if ((e.target as HTMLElement).closest("[data-no-pan]")) return;
+    isPanningRef.current = true;
+    panStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      vx: viewXRef.current,
+      vy: viewYRef.current,
+    };
+    containerRef.current?.setPointerCapture(e.pointerId);
   }, []);
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!isPanningRef.current) return;
+      viewXRef.current = panStartRef.current.vx + (e.clientX - panStartRef.current.x);
+      viewYRef.current = panStartRef.current.vy + (e.clientY - panStartRef.current.y);
+      syncTransform();
+    },
+    [syncTransform],
+  );
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     isPanningRef.current = false;
@@ -119,44 +126,45 @@ export function useViewport(): ViewportResult {
     }
   }, []);
 
+  // ── Navigation (all ref-driven) ──
+
   const centerView = useCallback(() => {
-    setViewX(containerSize.w / 2);
-    setViewY(containerSize.h / 2);
-    setScale(DEFAULT_SCALE);
-  }, [containerSize]);
+    viewXRef.current = containerSizeRef.current.w / 2;
+    viewYRef.current = containerSizeRef.current.h / 2;
+    scaleRef.current = DEFAULT_SCALE;
+    syncTransform();
+  }, [syncTransform]);
 
   const navigateTo = useCallback(
     (worldX: number, worldY: number) => {
-      setViewX(-worldX * scale + containerSize.w / 2);
-      setViewY(-worldY * scale + containerSize.h / 2);
+      viewXRef.current = -worldX * scaleRef.current + containerSizeRef.current.w / 2;
+      viewYRef.current = -worldY * scaleRef.current + containerSizeRef.current.h / 2;
+      syncTransform();
     },
-    [scale, containerSize],
+    [syncTransform],
   );
 
   const zoomToCenter = useCallback(
     (factor: number) => {
-      const cx = containerSize.w / 2;
-      const cy = containerSize.h / 2;
-      setScale((prev) => {
-        const ns = Math.max(MIN_SCALE, Math.min(MAX_SCALE, prev * factor));
-        const r = ns / prev;
-        setViewX((vx) => cx - (cx - vx) * r);
-        setViewY((vy) => cy - (cy - vy) * r);
-        return ns;
-      });
+      const cx = containerSizeRef.current.w / 2;
+      const cy = containerSizeRef.current.h / 2;
+      const prev = scaleRef.current;
+      const ns = Math.max(MIN_SCALE, Math.min(MAX_SCALE, prev * factor));
+      const r = ns / prev;
+      viewXRef.current = cx - (cx - viewXRef.current) * r;
+      viewYRef.current = cy - (cy - viewYRef.current) * r;
+      scaleRef.current = ns;
+      syncTransform();
     },
-    [containerSize],
+    [syncTransform],
   );
 
   const zoomIn = useCallback(() => zoomToCenter(1.2), [zoomToCenter]);
   const zoomOut = useCallback(() => zoomToCenter(0.8), [zoomToCenter]);
 
   return {
-    viewX,
-    viewY,
-    scale,
-    containerSize,
     containerRef,
+    transformRef,
     viewXRef,
     viewYRef,
     scaleRef,
@@ -169,9 +177,5 @@ export function useViewport(): ViewportResult {
     navigateTo,
     zoomIn,
     zoomOut,
-    setViewX,
-    setViewY,
-    setScale,
   };
 }
-

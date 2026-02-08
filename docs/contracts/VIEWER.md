@@ -46,6 +46,16 @@ Names are stable (breaking changes should be accompanied by a version bump of th
 
 - `graph_query(storage_dir, workspace, branch, doc, input=GraphQueryInput) -> GraphSliceDto`
 - `graph_diff(storage_dir, workspace, from_branch, to_branch, doc, cursor?, limit) -> GraphDiffSliceDto`
+- `architecture_lens_get(storage_dir, workspace, input={scope?, mode?, include_draft?, time_window?, limit?}) -> ArchitectureLensDto`
+- `architecture_provenance_get(storage_dir, workspace, input={scope?, node_id, include_draft?, time_window?, limit?}) -> ArchitectureProvenanceDto`
+- `architecture_hotspots_get(storage_dir, workspace, input={scope?, include_draft?, time_window?, limit?}) -> ArchitectureHotspotDto[]`
+
+Where:
+
+- `scope.kind ∈ {"workspace","plan","task","anchor"}`
+- `scope.id` is required for `kind != "workspace"`
+- `mode ∈ {"combined","system","execution","reasoning","risk"}`
+- `time_window ∈ {"all","7d","24h"}`
 
 ### Search / knowledge
 
@@ -60,6 +70,6 @@ Commands return `Result<..., String>` and are mapped to a **single string** (v0 
 Common prefixes:
 
 - `INVALID_INPUT: ...`
+- `scope.id is required for kind=...`
 - `UNKNOWN_ID`
 - `UNKNOWN_BRANCH`
-

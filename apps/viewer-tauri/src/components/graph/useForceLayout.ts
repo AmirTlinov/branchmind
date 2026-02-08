@@ -47,8 +47,8 @@ export function useForceLayout({
 }): {
   simNodes: SimNode[];
   nodeVersion: number;
-  draggingNodeId: React.MutableRefObject<string | null>;
-  alphaRef: React.MutableRefObject<number>;
+  draggingNodeId: React.RefObject<string | null>;
+  alphaRef: React.RefObject<number>;
   bumpAlpha: (value?: number) => void;
 } {
   const simNodesRef = useRef<SimNode[]>([]);
@@ -58,6 +58,9 @@ export function useForceLayout({
 
   const edgesRef = useRef(edges);
   edgesRef.current = edges;
+
+  const onFrameRef = useRef(onFrame);
+  onFrameRef.current = onFrame;
 
   const adjacency = useMemo(() => {
     const m = new Map<string, GraphEdgeDto[]>();
@@ -125,7 +128,7 @@ export function useForceLayout({
           n.vy = 0;
         }
       }
-      onFrame?.(simNodes, edgesRef.current);
+      onFrameRef.current?.(simNodes, edgesRef.current);
       return;
     }
 

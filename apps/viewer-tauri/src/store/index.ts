@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { viewerApi } from "@/api/viewer";
 import type {
+  ArchitectureLensDto,
+  ArchitectureProvenanceDto,
   DocEntryDto,
   GraphSliceDto,
   PlanDto,
@@ -14,6 +16,9 @@ import type {
 } from "@/api/types";
 
 export type CenterView = "graph" | "plan" | "notes" | "trace" | "knowledge";
+export type GraphMode = "architecture" | "reasoning";
+export type ArchitectureMode = "combined" | "system" | "execution" | "reasoning" | "risk";
+export type ArchitectureScopeKind = "workspace" | "plan" | "task";
 
 type LoadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -27,6 +32,11 @@ function graphSliceSignature(slice: GraphSliceDto | null): string {
 
 const LS = {
   active_view: "bm.viewer.active_view",
+  graph_mode: "bm.viewer.graph_mode",
+  architecture_mode: "bm.viewer.architecture_mode",
+  architecture_scope_kind: "bm.viewer.architecture_scope_kind",
+  architecture_time_window: "bm.viewer.architecture_time_window",
+  architecture_include_draft: "bm.viewer.architecture_include_draft",
   storage_dir: "bm.viewer.storage_dir",
   workspace: "bm.viewer.workspace",
   task_id: "bm.viewer.task_id",
@@ -46,6 +56,12 @@ function lsSet(key: string, value: string) {
   } catch {
     // ignore
   }
+}
+
+function lsGetBool(key: string, fallback = false): boolean {
+  const raw = lsGet(key);
+  if (raw == null) return fallback;
+  return raw === "1" || raw.toLowerCase() === "true";
 }
 
 let notesPollTimer: number | null = null;
@@ -96,7 +112,12 @@ function startPolling() {
 
   graphPollTimer = window.setInterval(() => {
     const s = useStore.getState();
-    if (!s.selected_storage_dir || !s.selected_workspace || !s.reasoning_ref) return;
+    if (!s.selected_storage_dir || !s.selected_workspace) return;
+    if (s.graph_mode === "architecture") {
+      void s.load_architecture_lens({ quiet: true });
+      return;
+    }
+    if (!s.reasoning_ref) return;
     void s.load_graph({ quiet: true });
   }, 2500);
 }
@@ -127,6 +148,7 @@ export interface ViewerState {
   tasks_status: LoadStatus;
   tasks_error: string | null;
   tasks: TaskSummaryDto[];
+  task_step_summaries: Map<string, TaskStepsSummaryDto>;
   load_tasks: () => Promise<void>;
 
   selected_task_id: string | null;
@@ -152,12 +174,53 @@ export interface ViewerState {
   load_docs_tail: (doc: "notes" | "trace") => Promise<void>;
 
   // Graph
+  graph_mode: GraphMode;
+  set_graph_mode: (mode: GraphMode) => void;
   graph_status: LoadStatus;
   graph_error: string | null;
   graph_slice: GraphSliceDto | null;
   graph_selected_id: string | null;
   select_graph_node: (id: string | null) => void;
   load_graph: (opts?: { quiet?: boolean }) => Promise<void>;
+
+  architecture_mode: ArchitectureMode;
+  set_architecture_mode: (mode: ArchitectureMode) => void;
+  architecture_scope_kind: ArchitectureScopeKind;
+  set_architecture_scope_kind: (kind: ArchitectureScopeKind) => void;
+  architecture_time_window: "all" | "24h" | "7d";
+  set_architecture_time_window: (window: "all" | "24h" | "7d") => void;
+  architecture_include_draft: boolean;
+  set_architecture_include_draft: (include: boolean) => void;
+  architecture_status: LoadStatus;
+  architecture_error: string | null;
+  architecture_lens: ArchitectureLensDto | null;
+  architecture_provenance_status: LoadStatus;
+  architecture_provenance_error: string | null;
+  architecture_provenance: ArchitectureProvenanceDto | null;
+  load_architecture_lens: (opts?: { quiet?: boolean }) => Promise<void>;
+  load_architecture_provenance: (node_id: string) => Promise<void>;
+}
+
+function resolveArchitectureScope(state: Pick<
+  ViewerState,
+  "architecture_scope_kind" | "selected_task_id" | "selected_plan"
+>): { kind: ArchitectureScopeKind | "workspace"; id?: string } {
+  if (state.architecture_scope_kind === "task" && state.selected_task_id) {
+    return { kind: "task", id: state.selected_task_id };
+  }
+  if (state.architecture_scope_kind === "plan" && state.selected_plan?.id) {
+    return { kind: "plan", id: state.selected_plan.id };
+  }
+  if (state.architecture_scope_kind === "workspace") {
+    return { kind: "workspace" };
+  }
+  if (state.selected_task_id) {
+    return { kind: "task", id: state.selected_task_id };
+  }
+  if (state.selected_plan?.id) {
+    return { kind: "plan", id: state.selected_plan.id };
+  }
+  return { kind: "workspace" };
 }
 
 export const useStore = create<ViewerState>((set, get) => ({
@@ -173,6 +236,22 @@ export const useStore = create<ViewerState>((set, get) => ({
   set_knowledge_focus_card_id: (card_id) => set({ knowledge_focus_card_id: card_id }),
   knowledge_focus_anchor_id: null,
   set_knowledge_focus_anchor_id: (anchor_id) => set({ knowledge_focus_anchor_id: anchor_id }),
+
+  // Graph mode
+  graph_mode: (lsGet(LS.graph_mode) as GraphMode) || "architecture",
+  set_graph_mode: (mode) => {
+    set({ graph_mode: mode });
+    lsSet(LS.graph_mode, mode);
+    const s = get();
+    if (!s.selected_storage_dir || !s.selected_workspace) return;
+    if (mode === "architecture") {
+      void s.load_architecture_lens();
+      return;
+    }
+    if (s.reasoning_ref) {
+      void s.load_graph();
+    }
+  },
 
   // Discovery
   projects_status: "idle",
@@ -248,6 +327,7 @@ export const useStore = create<ViewerState>((set, get) => ({
       knowledge_focus_anchor_id: null,
       tasks: [],
       tasks_status: "idle",
+      task_step_summaries: new Map(),
       selected_task_id: null,
       selected_task: null,
       selected_plan: null,
@@ -262,6 +342,12 @@ export const useStore = create<ViewerState>((set, get) => ({
       trace_last_seq: 0,
       graph_slice: null,
       graph_selected_id: null,
+      architecture_status: "idle",
+      architecture_error: null,
+      architecture_lens: null,
+      architecture_provenance_status: "idle",
+      architecture_provenance_error: null,
+      architecture_provenance: null,
     });
     lsSet(LS.storage_dir, storage_dir);
     lsSet(LS.workspace, workspace);
@@ -269,13 +355,21 @@ export const useStore = create<ViewerState>((set, get) => ({
     await get().load_tasks();
 
     // Prefer live focus if present (BranchMind typically keeps it set).
+    let openedTask = false;
     try {
       const focus = await viewerApi.focusGet({ storage_dir, workspace });
       const savedTask = lsGet(LS.task_id);
       const toOpen = focus || savedTask;
-      if (toOpen) await get().select_task(toOpen);
+      if (toOpen) {
+        openedTask = true;
+        await get().select_task(toOpen);
+      }
     } catch {
       // ignore focus errors; tasks still load
+    }
+    if (!openedTask) {
+      await get().load_architecture_lens();
+      startPolling();
     }
   },
 
@@ -283,10 +377,11 @@ export const useStore = create<ViewerState>((set, get) => ({
   tasks_status: "idle",
   tasks_error: null,
   tasks: [],
+  task_step_summaries: new Map(),
   load_tasks: async () => {
     const { selected_storage_dir, selected_workspace } = get();
     if (!selected_storage_dir || !selected_workspace) return;
-    set({ tasks_status: "loading", tasks_error: null });
+    set({ tasks_status: "loading", tasks_error: null, task_step_summaries: new Map() });
     try {
       const tasks = await viewerApi.tasksList({
         storage_dir: selected_storage_dir,
@@ -295,6 +390,25 @@ export const useStore = create<ViewerState>((set, get) => ({
         offset: 0,
       });
       set({ tasks, tasks_status: "ready" });
+
+      // Lazy batch-fetch step summaries for all visible tasks (non-blocking).
+      void Promise.allSettled(
+        tasks.map((t) =>
+          viewerApi
+            .taskStepsSummary({
+              storage_dir: selected_storage_dir,
+              workspace: selected_workspace,
+              task_id: t.id,
+            })
+            .then((summary) => {
+              set((prev) => {
+                const next = new Map(prev.task_step_summaries);
+                next.set(t.id, summary);
+                return { task_step_summaries: next };
+              });
+            }),
+        ),
+      );
     } catch (err) {
       set({ tasks_status: "error", tasks_error: String(err) });
     }
@@ -327,6 +441,12 @@ export const useStore = create<ViewerState>((set, get) => ({
       trace_last_seq: 0,
       graph_slice: null,
       graph_selected_id: null,
+      architecture_status: "idle",
+      architecture_error: null,
+      architecture_lens: null,
+      architecture_provenance_status: "idle",
+      architecture_provenance_error: null,
+      architecture_provenance: null,
     });
 
     // Main entities
@@ -374,11 +494,14 @@ export const useStore = create<ViewerState>((set, get) => ({
       steps_status: "ready",
     });
 
-    // Warm caches (docs + graph) so the center view has content immediately.
+    // Warm architecture lens so graph view can explain "what/why/how" immediately.
+    await get().load_architecture_lens();
+
+    // Warm reasoning caches (docs + graph) when reasoning refs are available.
     if (reasoning) {
       await Promise.all([get().load_docs_tail("notes"), get().load_docs_tail("trace"), get().load_graph()]);
-      startPolling();
     }
+    startPolling();
   },
 
   // Steps
@@ -434,11 +557,66 @@ export const useStore = create<ViewerState>((set, get) => ({
   },
 
   // Graph
+  architecture_mode: (lsGet(LS.architecture_mode) as ArchitectureMode) || "combined",
+  set_architecture_mode: (mode) => {
+    set({ architecture_mode: mode });
+    lsSet(LS.architecture_mode, mode);
+    const s = get();
+    if (s.selected_storage_dir && s.selected_workspace) {
+      void s.load_architecture_lens();
+    }
+  },
+  architecture_scope_kind: (lsGet(LS.architecture_scope_kind) as ArchitectureScopeKind) || "task",
+  set_architecture_scope_kind: (kind) => {
+    set({ architecture_scope_kind: kind });
+    lsSet(LS.architecture_scope_kind, kind);
+    const s = get();
+    if (s.selected_storage_dir && s.selected_workspace) {
+      void s.load_architecture_lens();
+    }
+  },
+  architecture_time_window:
+    ((lsGet(LS.architecture_time_window) as "all" | "24h" | "7d") || "all"),
+  set_architecture_time_window: (window) => {
+    set({ architecture_time_window: window });
+    lsSet(LS.architecture_time_window, window);
+    const s = get();
+    if (s.selected_storage_dir && s.selected_workspace) {
+      void s.load_architecture_lens();
+    }
+  },
+  architecture_include_draft: lsGetBool(LS.architecture_include_draft, false),
+  set_architecture_include_draft: (include) => {
+    set({ architecture_include_draft: include });
+    lsSet(LS.architecture_include_draft, include ? "1" : "0");
+    const s = get();
+    if (s.selected_storage_dir && s.selected_workspace) {
+      void s.load_architecture_lens();
+    }
+  },
+  architecture_status: "idle",
+  architecture_error: null,
+  architecture_lens: null,
+  architecture_provenance_status: "idle",
+  architecture_provenance_error: null,
+  architecture_provenance: null,
   graph_status: "idle",
   graph_error: null,
   graph_slice: null,
   graph_selected_id: null,
-  select_graph_node: (id) => set({ graph_selected_id: id }),
+  select_graph_node: (id) => {
+    set({ graph_selected_id: id });
+    const s = get();
+    if (s.graph_mode === "architecture" && id) {
+      void s.load_architecture_provenance(id);
+    } else {
+      set({
+        architecture_provenance: null,
+        architecture_provenance_error: null,
+        architecture_provenance_status: "idle",
+      });
+    }
+  },
   load_graph: async (opts) => {
     const quiet = opts?.quiet ?? false;
     const { selected_storage_dir, selected_workspace, reasoning_ref } = get();
@@ -464,6 +642,92 @@ export const useStore = create<ViewerState>((set, get) => ({
       });
     } catch (err) {
       if (!quiet) set({ graph_status: "error", graph_error: String(err) });
+    }
+  },
+  load_architecture_lens: async (opts) => {
+    const quiet = opts?.quiet ?? false;
+    const {
+      selected_storage_dir,
+      selected_workspace,
+      architecture_mode,
+      architecture_include_draft,
+      architecture_time_window,
+      graph_selected_id,
+    } = get();
+    if (!selected_storage_dir || !selected_workspace) return;
+    if (!quiet) set({ architecture_status: "loading", architecture_error: null });
+    try {
+      const scope = resolveArchitectureScope(get());
+      const lens = await viewerApi.architectureLensGet({
+        storage_dir: selected_storage_dir,
+        workspace: selected_workspace,
+        input: {
+          scope,
+          mode: architecture_mode,
+          include_draft: architecture_include_draft,
+          time_window: architecture_time_window,
+          limit: 220,
+        },
+      });
+      const hasSelected = !!graph_selected_id && lens.nodes.some((n) => n.id === graph_selected_id);
+      const selected = hasSelected ? graph_selected_id : null;
+      const prevProvenance = get().architecture_provenance;
+      const keepProvenance =
+        selected && prevProvenance?.node_id === selected ? prevProvenance : null;
+      set({
+        architecture_lens: lens,
+        architecture_status: "ready",
+        architecture_error: null,
+        graph_selected_id: selected,
+        architecture_provenance: keepProvenance,
+        architecture_provenance_error: null,
+        architecture_provenance_status: keepProvenance ? "ready" : "idle",
+      });
+      if (selected && get().graph_mode === "architecture" && !keepProvenance) {
+        void get().load_architecture_provenance(selected);
+      }
+    } catch (err) {
+      if (!quiet) set({ architecture_status: "error", architecture_error: String(err) });
+    }
+  },
+  load_architecture_provenance: async (node_id) => {
+    const {
+      selected_storage_dir,
+      selected_workspace,
+      architecture_include_draft,
+      architecture_time_window,
+      architecture_provenance,
+    } = get();
+    if (!selected_storage_dir || !selected_workspace) return;
+    const cleanNodeId = node_id.trim();
+    if (!cleanNodeId) return;
+    if (architecture_provenance?.node_id === cleanNodeId) return;
+    set({
+      architecture_provenance_status: "loading",
+      architecture_provenance_error: null,
+    });
+    try {
+      const scope = resolveArchitectureScope(get());
+      const data = await viewerApi.architectureProvenanceGet({
+        storage_dir: selected_storage_dir,
+        workspace: selected_workspace,
+        input: {
+          scope,
+          node_id: cleanNodeId,
+          include_draft: architecture_include_draft,
+          time_window: architecture_time_window,
+          limit: 80,
+        },
+      });
+      set({
+        architecture_provenance: data,
+        architecture_provenance_status: "ready",
+      });
+    } catch (err) {
+      set({
+        architecture_provenance_status: "error",
+        architecture_provenance_error: String(err),
+      });
     }
   },
 }));
