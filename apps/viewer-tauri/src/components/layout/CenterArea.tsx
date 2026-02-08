@@ -61,13 +61,15 @@ function ViewTabBar() {
   return (
     <div className="h-10 px-3 flex items-center bg-[#EBECF0]/60 border-b border-gray-200/50 shrink-0">
       {/* Brand */}
-      <div className="flex items-center gap-2 mr-4 pr-4 border-r border-gray-300/30 min-w-0">
+      <div className="flex items-center gap-2 mr-4 pr-4 border-r border-gray-300/30 min-w-0 basis-[clamp(200px,28vw,420px)]">
         <div className="w-5 h-5 rounded-md bg-gradient-to-br from-gray-800 to-black flex items-center justify-center shrink-0">
           <Layout size={10} className="text-white opacity-90" />
         </div>
         <div className="min-w-0">
           <div className="text-[11px] font-bold tracking-tight text-gray-700 truncate">
-            {selected_task ? selected_task.title : "BranchMind"}
+            <span title={selected_task ? selected_task.title : "BranchMind"}>
+              {selected_task ? selected_task.title : "BranchMind"}
+            </span>
           </div>
         </div>
       </div>
@@ -160,4 +162,3 @@ export function CenterArea() {
     </div>
   );
 }
-
