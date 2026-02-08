@@ -31,6 +31,13 @@ html {
   font-size: var(--font-size);
 }
 
+/* Prevent accidental browser text selection while panning/dragging graph. */
+body.bm-no-select,
+body.bm-no-select * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
 /* ── Elegant Scrollbar — Liquid Glass ── */
 .custom-scrollbar {
   scrollbar-width: thin;
@@ -61,4 +68,3 @@ html {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
-

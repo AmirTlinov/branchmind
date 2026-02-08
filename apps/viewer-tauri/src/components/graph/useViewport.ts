@@ -46,6 +46,11 @@ export function useViewport(): ViewportResult {
   const panStartRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
   const hasCenteredRef = useRef(false);
 
+  const setGlobalNoSelect = useCallback((enabled: boolean) => {
+    if (typeof document === "undefined") return;
+    document.body.classList.toggle("bm-no-select", enabled);
+  }, []);
+
   // ── Direct DOM write ──
   const syncTransform = useCallback(() => {
     const el = transformRef.current;
@@ -97,6 +102,7 @@ export function useViewport(): ViewportResult {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA") return;
     if ((e.target as HTMLElement).closest("[data-no-pan]")) return;
+    e.preventDefault();
     isPanningRef.current = true;
     panStartRef.current = {
       x: e.clientX,
@@ -105,11 +111,13 @@ export function useViewport(): ViewportResult {
       vy: viewYRef.current,
     };
     containerRef.current?.setPointerCapture(e.pointerId);
-  }, []);
+    setGlobalNoSelect(true);
+  }, [setGlobalNoSelect]);
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!isPanningRef.current) return;
+      e.preventDefault();
       viewXRef.current = panStartRef.current.vx + (e.clientX - panStartRef.current.x);
       viewYRef.current = panStartRef.current.vy + (e.clientY - panStartRef.current.y);
       syncTransform();
@@ -119,12 +127,15 @@ export function useViewport(): ViewportResult {
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     isPanningRef.current = false;
+    setGlobalNoSelect(false);
     try {
       containerRef.current?.releasePointerCapture(e.pointerId);
     } catch {
       // ignore
     }
-  }, []);
+  }, [setGlobalNoSelect]);
+
+  useEffect(() => () => setGlobalNoSelect(false), [setGlobalNoSelect]);
 
   // ── Navigation (all ref-driven) ──
 

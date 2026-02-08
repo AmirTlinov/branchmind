@@ -228,6 +228,14 @@ export function GraphCanvas() {
   selectedIdRef.current = selectedId;
 
   useEffect(() => {
+    return () => {
+      if (typeof document !== "undefined") {
+        document.body.classList.remove("bm-no-select");
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selected_workspace) return;
     if (graph_mode === "architecture") {
       if (architecture_lens) return;
@@ -421,7 +429,8 @@ export function GraphCanvas() {
     <div className="w-full h-full relative">
       <div
         ref={viewport.containerRef}
-        className="absolute inset-0 overflow-hidden"
+        className="absolute inset-0 overflow-hidden select-none"
+        style={{ touchAction: "none" }}
         onWheel={viewport.handleWheel}
         onPointerDown={viewport.handlePointerDown}
         onPointerMove={viewport.handlePointerMove}

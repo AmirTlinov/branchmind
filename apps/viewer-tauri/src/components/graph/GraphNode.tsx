@@ -98,6 +98,10 @@ export const GraphNode = React.memo(function GraphNode({
 }) {
   const dragRef = useRef(false);
   const startRef = useRef({ x: 0, y: 0, nx: 0, ny: 0 });
+  const setGlobalNoSelect = useCallback((enabled: boolean) => {
+    if (typeof document === "undefined") return;
+    document.body.classList.toggle("bm-no-select", enabled);
+  }, []);
 
   const Icon = useMemo(() => resolveIcon(node.node_type), [node.node_type]);
   const styles = useMemo(() => styleFor(node.node_type), [node.node_type]);
@@ -105,13 +109,15 @@ export const GraphNode = React.memo(function GraphNode({
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
+      e.preventDefault();
       e.stopPropagation();
       e.currentTarget.setPointerCapture(e.pointerId);
       dragRef.current = false;
       startRef.current = { x: e.clientX, y: e.clientY, nx: node._x, ny: node._y };
       onDragStart(node.id);
+      setGlobalNoSelect(true);
     },
-    [node, onDragStart],
+    [node, onDragStart, setGlobalNoSelect],
   );
 
   const handlePointerMove = useCallback(
@@ -133,9 +139,10 @@ export const GraphNode = React.memo(function GraphNode({
     (e: React.PointerEvent) => {
       e.currentTarget.releasePointerCapture(e.pointerId);
       onDragEnd();
+      setGlobalNoSelect(false);
       if (!dragRef.current) onSelect(node.id);
     },
-    [node.id, onDragEnd, onSelect],
+    [node.id, onDragEnd, onSelect, setGlobalNoSelect],
   );
 
   return (
@@ -152,6 +159,7 @@ export const GraphNode = React.memo(function GraphNode({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       data-no-pan
     >
       <div
