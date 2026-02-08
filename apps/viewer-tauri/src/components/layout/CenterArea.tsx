@@ -58,7 +58,7 @@ function ViewTabBar() {
   }, [steps_summary]);
 
   return (
-    <div className="h-10 px-3 flex items-center bg-[#EBECF0]/60 border-b border-gray-200/50 shrink-0 overflow-hidden">
+    <div className="h-10 px-3 flex items-center bg-[#EBECF0]/60 border-b border-gray-200/50 shrink-0 min-w-0 overflow-hidden">
       <div className="flex items-center mr-3 shrink-0">
         <div className="w-5 h-5 rounded-md bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
           <Layout size={10} className="text-white opacity-90" />
@@ -130,7 +130,7 @@ export function CenterArea() {
   }, [active_view]);
 
   return (
-    <div className="w-full h-full min-w-0 flex flex-col bg-[#F7F8FA]">
+    <div className="w-full h-full min-w-0 flex flex-col bg-[#F7F8FA] overflow-hidden">
       <ViewTabBar />
       <div className="flex-1 min-h-0 relative overflow-hidden">
         <AnimatePresence mode="wait" initial={false}>

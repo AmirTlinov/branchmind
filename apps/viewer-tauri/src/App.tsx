@@ -13,15 +13,15 @@ export default function App() {
   return (
     <div className="w-full h-screen overflow-hidden font-sans bg-white text-gray-900">
       <PanelGroup direction="horizontal" className="w-full h-full">
-        <Panel defaultSize={22} minSize={16} maxSize={34}>
+        <Panel defaultSize={22} minSize={16} maxSize={34} className="min-w-0">
           <Sidebar />
         </Panel>
         <PanelResizeHandle className="w-px bg-gray-200/60 hover:bg-gray-300/70 transition-colors" />
-        <Panel minSize={42}>
+        <Panel minSize={42} className="min-w-0 overflow-hidden">
           <CenterArea />
         </Panel>
         <PanelResizeHandle className="w-px bg-gray-200/60 hover:bg-gray-300/70 transition-colors" />
-        <Panel defaultSize={24} minSize={16} maxSize={40}>
+        <Panel defaultSize={24} minSize={16} maxSize={40} className="min-w-0">
           <Inspector />
         </Panel>
       </PanelGroup>
