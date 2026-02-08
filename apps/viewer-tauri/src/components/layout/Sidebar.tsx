@@ -4,6 +4,7 @@ import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/format";
 import {
+  ChevronRight,
   Command,
   Folder,
   RefreshCw,
@@ -231,19 +232,25 @@ export function Sidebar() {
                 const isActiveProject = selected_storage_dir === p.storage_dir;
                 const isOpen = projectsOpen[p.project_id] ?? isActiveProject;
                 return (
-                  <details
-                    key={p.project_id}
-                    className="group"
-                    open={isOpen}
-                    onToggle={(e) =>
-                      setProjectsOpen((prev) => ({
-                        ...prev,
-                        [p.project_id]: (e.currentTarget as HTMLDetailsElement).open,
-                      }))
-                    }
-                  >
-                    <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary">
-                      <div className="flex items-center gap-2.5 overflow-hidden">
+                  <div key={p.project_id} className="group">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setProjectsOpen((prev) => ({
+                          ...prev,
+                          [p.project_id]: !isOpen,
+                        }))
+                      }
+                      className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary text-left"
+                    >
+                      <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
+                        <ChevronRight
+                          size={14}
+                          className={cn(
+                            "text-gray-300 shrink-0 transition-transform",
+                            isOpen && "rotate-90",
+                          )}
+                        />
                         <Folder
                           size={14}
                           className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0"
@@ -252,9 +259,10 @@ export function Sidebar() {
                           {p.display_name}
                         </span>
                       </div>
-                    </summary>
+                    </button>
 
-                    <div className="space-y-[1px] pl-0 relative">
+                    {isOpen && (
+                      <div className="space-y-[1px] pl-0 relative">
                       {/* Guide Line */}
                       <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
 
@@ -285,31 +293,38 @@ export function Sidebar() {
                               <span className="text-[10px] text-gray-400 font-mono shrink-0">
                                 guard
                               </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </details>
+                          )}
+                        </button>
+                      );
+                    })}
+                      </div>
+                    )}
+                  </div>
                 );
               }
 
               const isGroupOpen = g.items.some((p) => p.storage_dir === selected_storage_dir);
               const isGroupDetailsOpen = projectGroupsOpen[g.name] ?? isGroupOpen;
               return (
-                <details
-                  key={`group:${g.name}`}
-                  className="group"
-                  open={isGroupDetailsOpen}
-                  onToggle={(e) =>
-                    setProjectGroupsOpen((prev) => ({
-                      ...prev,
-                      [g.name]: (e.currentTarget as HTMLDetailsElement).open,
-                    }))
-                  }
-                >
-                  <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary">
+                <div key={`group:${g.name}`} className="group">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProjectGroupsOpen((prev) => ({
+                        ...prev,
+                        [g.name]: !isGroupDetailsOpen,
+                      }))
+                    }
+                    className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary text-left"
+                  >
                     <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
+                      <ChevronRight
+                        size={14}
+                        className={cn(
+                          "text-gray-300 shrink-0 transition-transform",
+                          isGroupDetailsOpen && "rotate-90",
+                        )}
+                      />
                       <Folder
                         size={14}
                         className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0"
@@ -319,35 +334,43 @@ export function Sidebar() {
                       </span>
                     </div>
                     <span className="text-[10px] text-gray-300 font-mono shrink-0">{g.items.length}</span>
-                  </summary>
+                  </button>
 
-                  <div className="space-y-1 pl-3">
+                  {isGroupDetailsOpen && (
+                    <div className="space-y-1 pl-3">
                     {g.items.map((p) => {
                       const isActiveProject = selected_storage_dir === p.storage_dir;
                       const label = storageDirLabel(p.storage_dir, p.repo_root);
                       const isStoreOpen = projectsOpen[p.project_id] ?? isActiveProject;
                       return (
-                        <details
-                          key={p.project_id}
-                          className="group"
-                          open={isStoreOpen}
-                          onToggle={(e) =>
-                            setProjectsOpen((prev) => ({
-                              ...prev,
-                              [p.project_id]: (e.currentTarget as HTMLDetailsElement).open,
-                            }))
-                          }
-                        >
-                          <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5">
+                        <div key={p.project_id} className="group">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setProjectsOpen((prev) => ({
+                                ...prev,
+                                [p.project_id]: !isStoreOpen,
+                              }))
+                            }
+                            className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 text-left"
+                          >
                             <div className="flex items-center gap-2 overflow-hidden min-w-0">
+                              <ChevronRight
+                                size={13}
+                                className={cn(
+                                  "text-gray-300 shrink-0 transition-transform",
+                                  isStoreOpen && "rotate-90",
+                                )}
+                              />
                               <Folder size={13} className="text-gray-300 shrink-0" />
                               <span className="text-[12px] text-gray-600 truncate" title={p.storage_dir}>
                                 {label}
                               </span>
                             </div>
-                          </summary>
+                          </button>
 
-                          <div className="space-y-[1px] pl-0 relative">
+                          {isStoreOpen && (
+                            <div className="space-y-[1px] pl-0 relative">
                             {/* Guide Line */}
                             <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
 
@@ -382,12 +405,14 @@ export function Sidebar() {
                                 </button>
                               );
                             })}
-                          </div>
-                        </details>
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
-                  </div>
-                </details>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
