@@ -188,13 +188,38 @@ pub fn store_err_to_string(err: StoreError) -> String {
 }
 
 pub fn guess_repo_root(storage_dir: &Path) -> Option<PathBuf> {
+    // Best-effort guess of the "project root" to display a human-friendly name in the viewer.
+    //
+    // We intentionally do not require a full git repo:
+    // - Many local folders (scratch/workspaces) don't have `.git`.
+    // - Git worktrees can have `.git` as a file (not a directory).
+
+    // 1) Git indicator (dir or file).
     let mut cur = storage_dir;
     for _ in 0..10 {
         let git = cur.join(".git");
-        if git.is_dir() {
+        if git.is_dir() || git.is_file() {
             return Some(cur.to_path_buf());
         }
         cur = cur.parent()?;
     }
+
+    // 2) Store patterns: infer root even without `.git`.
+    //
+    // `<repo>/.agents/mcp/.branchmind/branchmind_rust.db`
+    for anc in storage_dir.ancestors().take(10) {
+        let name = anc.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        if name == ".agents" {
+            return anc.parent().map(|p| p.to_path_buf());
+        }
+    }
+
+    // `<repo>/.branchmind_rust/branchmind_rust.db` or `<repo>/.branchmind/branchmind_rust.db`
+    if let Some(name) = storage_dir.file_name().and_then(|s| s.to_str()) {
+        if name == ".branchmind_rust" || name == ".branchmind" {
+            return storage_dir.parent().map(|p| p.to_path_buf());
+        }
+    }
+
     None
 }

@@ -70,11 +70,30 @@ pub fn projects_scan(
             })
             .collect::<Vec<_>>();
 
-        let repo_root = guess_repo_root(&canon).map(|p| p.to_string_lossy().to_string());
-        let display_name = repo_root
+        let repo_root_path = guess_repo_root(&canon);
+        let repo_root = repo_root_path.as_ref().map(|p| p.to_string_lossy().to_string());
+        let display_name = repo_root_path
             .as_ref()
-            .and_then(|s| PathBuf::from(s).file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
-            .unwrap_or_else(|| canon.to_string_lossy().to_string());
+            .and_then(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| {
+                // Avoid showing full absolute paths in the UI: pick the nearest meaningful folder name.
+                for anc in canon.ancestors().take(10) {
+                    let Some(name) = anc.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    if name.is_empty() {
+                        continue;
+                    }
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    if matches!(name, "projects" | "Documents" | "Документы" | "documents") {
+                        continue;
+                    }
+                    return name.to_string();
+                }
+                canon.to_string_lossy().to_string()
+            });
         let project_id = canon.to_string_lossy().to_string();
 
         out.push(ProjectDto {
