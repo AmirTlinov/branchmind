@@ -4,6 +4,30 @@ import type { SimNode } from "./useForceLayout";
 const MINI_W = 180;
 const MINI_H = 120;
 
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const anyCtx = ctx as unknown as { roundRect?: (...args: any[]) => void };
+  if (typeof anyCtx.roundRect === "function") {
+    anyCtx.roundRect(x, y, w, h, r);
+    return;
+  }
+
+  // Fallback for older WebKitGTK builds where ctx.roundRect may be missing.
+  const radius = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
+}
+
 function computeBounds(nodes: SimNode[]) {
   if (nodes.length === 0) return { minX: -300, maxX: 300, minY: -220, maxY: 220 };
   let minX = Infinity;
@@ -60,7 +84,7 @@ export function Minimap({
     ctx.strokeStyle = "rgba(0,0,0,0.06)";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(0, 0, MINI_W, MINI_H, 12);
+    roundRectPath(ctx, 0, 0, MINI_W, MINI_H, 12);
     ctx.fill();
     ctx.stroke();
 
@@ -101,7 +125,7 @@ export function Minimap({
     ctx.strokeStyle = "rgba(17,24,39,0.35)";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(rx, ry, rw, rh, 6);
+    roundRectPath(ctx, rx, ry, rw, rh, 6);
     ctx.stroke();
   }, [simNodes, selectedId, containerSizeRef, navigateTo, scaleRef, viewXRef, viewYRef]);
 

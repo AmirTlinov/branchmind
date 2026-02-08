@@ -207,7 +207,12 @@ export function GraphCanvas() {
         onPointerMove={viewport.handlePointerMove}
         onPointerUp={viewport.handlePointerUp}
         onPointerCancel={viewport.handlePointerUp}
-        onClick={() => select_graph_node(null)}
+        onClick={(e) => {
+          // Prevent "glitchy" deselection when clicking on a node / overlay.
+          const target = e.target as HTMLElement | null;
+          if (target?.closest?.("[data-no-pan]")) return;
+          select_graph_node(null);
+        }}
       >
         <canvas ref={edgeCanvasRef} className="absolute inset-0" />
 

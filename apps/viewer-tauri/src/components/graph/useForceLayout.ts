@@ -110,7 +110,26 @@ export function useForceLayout({
     const alpha = alphaRef.current;
     const isIdle = alpha <= AMBIENT_ALPHA + 0.0005 && !draggingNodeId.current;
 
-    const map = new Map(simNodes.map((n) => [n.id, n] as const));
+    // When the system is fully settled, skip the O(n^2) force computations.
+    // We still call `onFrame` so edges keep redrawing during viewport pan/zoom.
+    let maxSpeed = 0;
+    for (const n of simNodes) {
+      maxSpeed = Math.max(maxSpeed, Math.abs(n.vx) + Math.abs(n.vy));
+    }
+    const isHardIdle = isIdle && maxSpeed < 0.001;
+    if (isHardIdle) {
+      // Prevent floating-point drift from accumulating tiny velocities.
+      for (const n of simNodes) {
+        if (Math.abs(n.vx) + Math.abs(n.vy) < 1e-6) {
+          n.vx = 0;
+          n.vy = 0;
+        }
+      }
+      onFrame?.(simNodes, edgesRef.current);
+      return;
+    }
+
+    const map = isIdle ? null : new Map(simNodes.map((n) => [n.id, n] as const));
 
     for (let i = 0; i < simNodes.length; i++) {
       const node = simNodes[i];
@@ -155,7 +174,7 @@ export function useForceLayout({
         const connected = adjacency.get(node.id) || [];
         for (const e of connected) {
           const otherId = e.from === node.id ? e.to : e.from;
-          const other = map.get(otherId);
+          const other = map?.get(otherId);
           if (!other) continue;
           const dx = node._x - other._x;
           const dy = node._y - other._y;
@@ -192,4 +211,3 @@ export function useForceLayout({
     bumpAlpha,
   };
 }
-

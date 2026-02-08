@@ -17,6 +17,14 @@ export type CenterView = "graph" | "plan" | "notes" | "trace" | "knowledge";
 
 type LoadStatus = "idle" | "loading" | "ready" | "error";
 
+function graphSliceSignature(slice: GraphSliceDto | null): string {
+  if (!slice) return "0:0:0:0";
+  let maxSeq = 0;
+  for (const n of slice.nodes) maxSeq = Math.max(maxSeq, n.last_seq);
+  for (const e of slice.edges) maxSeq = Math.max(maxSeq, e.last_seq);
+  return `${maxSeq}:${slice.nodes.length}:${slice.edges.length}:${slice.has_more ? 1 : 0}`;
+}
+
 const LS = {
   active_view: "bm.viewer.active_view",
   storage_dir: "bm.viewer.storage_dir",
@@ -444,7 +452,16 @@ export const useStore = create<ViewerState>((set, get) => ({
         doc: reasoning_ref.graph_doc,
         input: { limit: 200, include_edges: true, edges_limit: 700 },
       });
-      set({ graph_slice: slice, graph_status: "ready" });
+      set((prev) => {
+        // Avoid "glitchy" graph resets: polling can return identical graph slices but with new object
+        // identities. We only update state when the slice meaningfully changes.
+        const prevSig = graphSliceSignature(prev.graph_slice);
+        const nextSig = graphSliceSignature(slice);
+        if (prev.graph_slice && prevSig === nextSig) {
+          return { graph_status: "ready" };
+        }
+        return { graph_slice: slice, graph_status: "ready" };
+      });
     } catch (err) {
       if (!quiet) set({ graph_status: "error", graph_error: String(err) });
     }
