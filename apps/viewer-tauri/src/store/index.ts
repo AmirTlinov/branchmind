@@ -30,6 +30,66 @@ function graphSliceSignature(slice: GraphSliceDto | null): string {
   return `${maxSeq}:${slice.nodes.length}:${slice.edges.length}:${slice.has_more ? 1 : 0}`;
 }
 
+function hash32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+function architectureLensSignature(lens: ArchitectureLensDto | null): string {
+  if (!lens) return "0";
+  let nodeHash = 0;
+  let edgeHash = 0;
+  let riskHash = 0;
+  let hotHash = 0;
+  for (const n of lens.nodes) {
+    nodeHash = Math.imul(
+      nodeHash ^ hash32(`${n.id}|${n.status ?? ""}|${n.risk_score.toFixed(3)}|${n.evidence_score.toFixed(3)}`),
+      16777619,
+    );
+  }
+  for (const e of lens.edges) {
+    edgeHash = Math.imul(edgeHash ^ hash32(`${e.from}|${e.rel}|${e.to}|${e.weight}|${e.risk ? 1 : 0}`), 16777619);
+  }
+  for (const r of lens.risks) {
+    riskHash = Math.imul(riskHash ^ hash32(`${r.id}|${r.severity}|${r.node_id ?? ""}`), 16777619);
+  }
+  for (const h of lens.hotspots) {
+    hotHash = Math.imul(
+      hotHash ^ hash32(`${h.id}|${h.degree}|${h.risk_score.toFixed(3)}|${h.evidence_score.toFixed(3)}`),
+      16777619,
+    );
+  }
+  const nextActionsSig = lens.next_actions.map((a) => a.trim()).join("|");
+  return [
+    lens.scope.kind,
+    lens.scope.id ?? "",
+    lens.mode,
+    lens.time_window,
+    String(lens.include_draft ? 1 : 0),
+    String(lens.nodes.length),
+    String(lens.edges.length),
+    String(lens.risks.length),
+    String(lens.hotspots.length),
+    String(lens.summary.anchors_total),
+    String(lens.summary.tasks_total),
+    String(lens.summary.knowledge_total),
+    String(lens.summary.reasoning_nodes_total),
+    String(lens.summary.blocked_total),
+    String(lens.summary.evidence_total),
+    String(lens.summary.hypothesis_total),
+    lens.summary.proven_ratio.toFixed(4),
+    String(nodeHash),
+    String(edgeHash),
+    String(riskHash),
+    String(hotHash),
+    nextActionsSig,
+  ].join(":");
+}
+
 const LS = {
   active_view: "bm.viewer.active_view",
   graph_mode: "bm.viewer.graph_mode",
@@ -669,22 +729,51 @@ export const useStore = create<ViewerState>((set, get) => ({
           limit: 220,
         },
       });
-      const hasSelected = !!graph_selected_id && lens.nodes.some((n) => n.id === graph_selected_id);
-      const selected = hasSelected ? graph_selected_id : null;
-      const prevProvenance = get().architecture_provenance;
-      const keepProvenance =
-        selected && prevProvenance?.node_id === selected ? prevProvenance : null;
-      set({
-        architecture_lens: lens,
-        architecture_status: "ready",
-        architecture_error: null,
-        graph_selected_id: selected,
-        architecture_provenance: keepProvenance,
-        architecture_provenance_error: null,
-        architecture_provenance_status: keepProvenance ? "ready" : "idle",
+      const nextSig = architectureLensSignature(lens);
+      let fetchProvenanceForNode: string | null = null;
+      set((prev) => {
+        const prevSig = architectureLensSignature(prev.architecture_lens);
+        const lensChanged = !prev.architecture_lens || prevSig !== nextSig;
+        const hasSelected = !!graph_selected_id && lens.nodes.some((n) => n.id === graph_selected_id);
+        const selected = hasSelected ? graph_selected_id : null;
+        const canReuseProvenance =
+          !lensChanged &&
+          selected &&
+          prev.architecture_provenance?.node_id === selected &&
+          prev.architecture_provenance_status === "ready";
+        const keepProvenance = canReuseProvenance ? prev.architecture_provenance : null;
+        if (selected && !keepProvenance && prev.graph_mode === "architecture") {
+          fetchProvenanceForNode = selected;
+        }
+        if (!lensChanged) {
+          if (
+            prev.graph_selected_id === selected &&
+            ((keepProvenance && prev.architecture_provenance_status === "ready") ||
+              (!keepProvenance && prev.architecture_provenance_status === "idle"))
+          ) {
+            return { architecture_status: "ready", architecture_error: null };
+          }
+          return {
+            architecture_status: "ready",
+            architecture_error: null,
+            graph_selected_id: selected,
+            architecture_provenance: keepProvenance,
+            architecture_provenance_error: null,
+            architecture_provenance_status: keepProvenance ? "ready" : "idle",
+          };
+        }
+        return {
+          architecture_lens: lens,
+          architecture_status: "ready",
+          architecture_error: null,
+          graph_selected_id: selected,
+          architecture_provenance: keepProvenance,
+          architecture_provenance_error: null,
+          architecture_provenance_status: keepProvenance ? "ready" : "idle",
+        };
       });
-      if (selected && get().graph_mode === "architecture" && !keepProvenance) {
-        void get().load_architecture_provenance(selected);
+      if (fetchProvenanceForNode) {
+        void get().load_architecture_provenance(fetchProvenanceForNode);
       }
     } catch (err) {
       if (!quiet) set({ architecture_status: "error", architecture_error: String(err) });
@@ -722,6 +811,7 @@ export const useStore = create<ViewerState>((set, get) => ({
       set({
         architecture_provenance: data,
         architecture_provenance_status: "ready",
+        architecture_provenance_error: null,
       });
     } catch (err) {
       set({

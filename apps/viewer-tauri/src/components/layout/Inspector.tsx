@@ -285,6 +285,35 @@ export function Inspector() {
                   </ul>
                 </div>
               )}
+              {architecture_lens.hotspots.length > 0 && (
+                <div className="mt-2 bg-amber-50/70 ring-1 ring-amber-200/50 rounded-xl p-3">
+                  <div className="text-[10px] text-amber-700 font-medium uppercase tracking-widest mb-1">
+                    Hotspots
+                  </div>
+                  <ul className="space-y-1 text-[11px] text-amber-900">
+                    {architecture_lens.hotspots.slice(0, 5).map((h) => (
+                      <li key={h.id} className="flex items-center justify-between gap-2">
+                        <span className="truncate">{h.label}</span>
+                        <span className="font-mono text-[10px] text-amber-700 shrink-0">
+                          d{h.degree} r{h.risk_score.toFixed(2)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {architecture_lens.next_actions.length > 0 && (
+                <div className="mt-2 bg-sky-50/70 ring-1 ring-sky-200/50 rounded-xl p-3">
+                  <div className="text-[10px] text-sky-700 font-medium uppercase tracking-widest mb-1">
+                    Next actions
+                  </div>
+                  <ul className="space-y-1 text-[11px] text-sky-900">
+                    {architecture_lens.next_actions.slice(0, 4).map((a, idx) => (
+                      <li key={`${a}:${idx}`}>• {a}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         )}

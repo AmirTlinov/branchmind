@@ -557,6 +557,30 @@ export function GraphCanvas() {
                   blocked <b>{architecture_lens.summary.blocked_total}</b>
                 </span>
               </div>
+              {(architecture_lens.hotspots.length > 0 || architecture_lens.next_actions.length > 0) && (
+                <div className="bg-white/60 ring-1 ring-black/[0.04] rounded-xl px-3 py-2 text-[11px] text-gray-700 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-widest text-gray-500 mb-1">hotspots</div>
+                    <ul className="space-y-0.5">
+                      {architecture_lens.hotspots.slice(0, 3).map((h) => (
+                        <li key={h.id} className="truncate">
+                          {h.label} <span className="text-gray-400 font-mono">d{h.degree}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-widest text-gray-500 mb-1">next</div>
+                    <ul className="space-y-0.5">
+                      {architecture_lens.next_actions.slice(0, 3).map((a, idx) => (
+                        <li key={`${a}:${idx}`} className="truncate">
+                          {a}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
