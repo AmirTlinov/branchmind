@@ -103,6 +103,7 @@ export function Sidebar() {
   const tasks_error = useStore((s) => s.tasks_error);
   const tasks = useStore((s) => s.tasks);
   const selected_task_id = useStore((s) => s.selected_task_id);
+  const selected_task = useStore((s) => s.selected_task);
   const select_task = useStore((s) => s.select_task);
 
   const set_palette_open = useStore((s) => s.set_command_palette_open);
@@ -122,6 +123,26 @@ export function Sidebar() {
     >
       {/* Search Header */}
       <div className="p-4 pb-2">
+        {selected_task ? (
+          <div className="mb-2 min-w-0">
+            <div className="flex items-center justify-between gap-2 min-w-0">
+              <div
+                className="text-[12px] font-semibold text-gray-800 truncate"
+                title={selected_task.title}
+              >
+                {selected_task.title}
+              </div>
+              <div
+                className="text-[10px] text-gray-300 font-mono shrink-0"
+                title={selected_task.id}
+              >
+                {selected_task.id}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mb-2 text-[11px] text-gray-400">Select a task</div>
+        )}
         <div className="relative group">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-3.5 h-3.5 group-focus-within:text-gray-600 transition-colors" />
           <input
@@ -301,4 +322,3 @@ export function Sidebar() {
     </GlassPanel>
   );
 }
-

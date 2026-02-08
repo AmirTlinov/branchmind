@@ -29,7 +29,6 @@ const TAB_INDEX = Object.fromEntries(TABS.map((t, i) => [t.id, i])) as Record<Ce
 function ViewTabBar() {
   const active_view = useStore((s) => s.active_view);
   const set_active_view = useStore((s) => s.set_active_view);
-  const selected_task = useStore((s) => s.selected_task);
   const steps_summary = useStore((s) => s.steps_summary);
 
   const handleKeyboard = useCallback(
@@ -59,18 +58,10 @@ function ViewTabBar() {
   }, [steps_summary]);
 
   return (
-    <div className="h-10 px-3 flex items-center bg-[#EBECF0]/60 border-b border-gray-200/50 shrink-0">
-      {/* Brand */}
-      <div className="flex items-center gap-2 mr-4 pr-4 border-r border-gray-300/30 min-w-0 basis-[clamp(200px,28vw,420px)]">
-        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-gray-800 to-black flex items-center justify-center shrink-0">
+    <div className="h-10 px-3 flex items-center bg-[#EBECF0]/60 border-b border-gray-200/50 shrink-0 overflow-hidden">
+      <div className="flex items-center mr-3 shrink-0">
+        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-gray-800 to-black flex items-center justify-center">
           <Layout size={10} className="text-white opacity-90" />
-        </div>
-        <div className="min-w-0">
-          <div className="text-[11px] font-bold tracking-tight text-gray-700 truncate">
-            <span title={selected_task ? selected_task.title : "BranchMind"}>
-              {selected_task ? selected_task.title : "BranchMind"}
-            </span>
-          </div>
         </div>
       </div>
 
@@ -84,7 +75,7 @@ function ViewTabBar() {
               key={tab.id}
               onClick={() => set_active_view(tab.id)}
               className={`
-                relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium
+                relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium min-w-0
                 transition-all duration-150 select-none
                 ${isActive ? "text-gray-900" : "text-gray-500 hover:text-gray-700 hover:bg-white/40"}
               `}
