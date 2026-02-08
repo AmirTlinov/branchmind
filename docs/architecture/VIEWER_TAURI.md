@@ -40,3 +40,13 @@ Sidebar (projects/workspaces/tasks)
 make viewer-install
 make run-viewer
 ```
+
+Linux notes:
+
+- `make run-viewer` applies `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default.
+- If Wayland compositor disconnects, the launcher retries automatically with X11.
+- You can force X11 manually:
+
+```bash
+make run-viewer-x11
+```

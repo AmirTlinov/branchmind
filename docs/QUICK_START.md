@@ -83,6 +83,14 @@ make run-viewer
 Notes:
 
 - The viewer is **read-only** and opens stores via `SqliteStore::open_read_only`.
+- On Linux/Wayland, `make run-viewer` automatically applies a safe WebKit setting
+  (`WEBKIT_DISABLE_DMABUF_RENDERER=1`) and retries with X11 if Wayland disconnects.
+- You can force X11 directly:
+
+```bash
+make run-viewer-x11
+```
+
 - Store discovery scans common roots; override with:
 
 ```bash
