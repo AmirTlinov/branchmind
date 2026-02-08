@@ -36,6 +36,15 @@ pub use types::*;
 
 use support::*;
 
+fn is_missing_column(err: &rusqlite::Error, column: &str) -> bool {
+    match err {
+        rusqlite::Error::SqliteFailure(_, Some(msg)) => {
+            msg.contains("no such column") && msg.contains(column)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug)]
 enum OpsHistoryTarget {
     Task { title: Option<String> },
@@ -125,12 +134,23 @@ impl SqliteStore {
     ) -> Result<Vec<WorkspaceRow>, StoreError> {
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
         let offset_i64 = i64::try_from(offset).unwrap_or(0);
-        let mut stmt = self.conn.prepare(
+        let mut stmt = match self.conn.prepare(
             "SELECT workspace, created_at_ms, project_guard \
              FROM workspaces \
              ORDER BY created_at_ms DESC, workspace ASC \
              LIMIT ?1 OFFSET ?2",
-        )?;
+        ) {
+            Ok(stmt) => stmt,
+            Err(err) if is_missing_column(&err, "project_guard") => {
+                // Backwards compatibility:
+                // - older stores (pre-migration) don't have `workspaces.project_guard`.
+                // - read-only consumers (like the desktop viewer) do not run migrations.
+                //
+                // We fall back to the legacy projection and treat `project_guard` as None.
+                return self.list_workspaces_legacy(limit_i64, offset_i64);
+            }
+            Err(err) => return Err(err.into()),
+        };
         let mut rows = stmt.query(params![limit_i64, offset_i64])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
@@ -143,19 +163,43 @@ impl SqliteStore {
         Ok(out)
     }
 
+    fn list_workspaces_legacy(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<WorkspaceRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace, created_at_ms \
+             FROM workspaces \
+             ORDER BY created_at_ms DESC, workspace ASC \
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = stmt.query(params![limit, offset])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(WorkspaceRow {
+                workspace: row.get(0)?,
+                created_at_ms: row.get(1)?,
+                project_guard: None,
+            });
+        }
+        Ok(out)
+    }
+
     pub fn workspace_project_guard_get(
         &self,
         workspace: &WorkspaceId,
     ) -> Result<Option<String>, StoreError> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT project_guard FROM workspaces WHERE workspace=?1",
-                params![workspace.as_str()],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten())
+        match self.conn.query_row(
+            "SELECT project_guard FROM workspaces WHERE workspace=?1",
+            params![workspace.as_str()],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            Ok(v) => Ok(Some(v).flatten()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) if is_missing_column(&err, "project_guard") => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn workspace_project_guard_ensure(
