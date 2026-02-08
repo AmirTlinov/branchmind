@@ -199,7 +199,7 @@ export function useForceLayout({
       node.y.set(node._y);
     }
 
-    onFrame?.(simNodes, edgesRef.current);
+    onFrameRef.current?.(simNodes, edgesRef.current);
   });
 
   const bumpAlpha = useCallback((value = 0.1) => {

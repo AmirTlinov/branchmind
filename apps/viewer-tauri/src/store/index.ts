@@ -41,29 +41,33 @@ function hash32(s: string): number {
 
 function architectureLensSignature(lens: ArchitectureLensDto | null): string {
   if (!lens) return "0";
-  let nodeHash = 0;
-  let edgeHash = 0;
-  let riskHash = 0;
-  let hotHash = 0;
-  for (const n of lens.nodes) {
-    nodeHash = Math.imul(
-      nodeHash ^ hash32(`${n.id}|${n.status ?? ""}|${n.risk_score.toFixed(3)}|${n.evidence_score.toFixed(3)}`),
-      16777619,
-    );
-  }
-  for (const e of lens.edges) {
-    edgeHash = Math.imul(edgeHash ^ hash32(`${e.from}|${e.rel}|${e.to}|${e.weight}|${e.risk ? 1 : 0}`), 16777619);
-  }
-  for (const r of lens.risks) {
-    riskHash = Math.imul(riskHash ^ hash32(`${r.id}|${r.severity}|${r.node_id ?? ""}`), 16777619);
-  }
-  for (const h of lens.hotspots) {
-    hotHash = Math.imul(
-      hotHash ^ hash32(`${h.id}|${h.degree}|${h.risk_score.toFixed(3)}|${h.evidence_score.toFixed(3)}`),
-      16777619,
-    );
-  }
-  const nextActionsSig = lens.next_actions.map((a) => a.trim()).join("|");
+  // Order-insensitive signature: backend row order may differ across polls even when
+  // graph semantics are unchanged. Stable sorting prevents unnecessary UI resets/jitter.
+  const nodeHash = hash32(
+    lens.nodes
+      .map((n) => `${n.id}|${n.node_type}|${n.status ?? ""}|${n.risk_score.toFixed(3)}|${n.evidence_score.toFixed(3)}`)
+      .sort()
+      .join("||"),
+  );
+  const edgeHash = hash32(
+    lens.edges
+      .map((e) => `${e.from}|${e.rel}|${e.to}|${e.weight}|${e.risk ? 1 : 0}`)
+      .sort()
+      .join("||"),
+  );
+  const riskHash = hash32(
+    lens.risks
+      .map((r) => `${r.id}|${r.severity}|${r.title}|${r.node_id ?? ""}`)
+      .sort()
+      .join("||"),
+  );
+  const hotHash = hash32(
+    lens.hotspots
+      .map((h) => `${h.id}|${h.degree}|${h.risk_score.toFixed(3)}|${h.evidence_score.toFixed(3)}`)
+      .sort()
+      .join("||"),
+  );
+  const nextActionsSig = [...lens.next_actions].map((a) => a.trim()).sort().join("|");
   return [
     lens.scope.kind,
     lens.scope.id ?? "",

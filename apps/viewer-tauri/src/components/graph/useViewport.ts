@@ -135,6 +135,21 @@ export function useViewport(): ViewportResult {
     }
   }, [setGlobalNoSelect]);
 
+  useEffect(() => {
+    const stopPanning = () => {
+      isPanningRef.current = false;
+      setGlobalNoSelect(false);
+    };
+    window.addEventListener("blur", stopPanning);
+    window.addEventListener("pointerup", stopPanning);
+    window.addEventListener("pointercancel", stopPanning);
+    return () => {
+      window.removeEventListener("blur", stopPanning);
+      window.removeEventListener("pointerup", stopPanning);
+      window.removeEventListener("pointercancel", stopPanning);
+    };
+  }, [setGlobalNoSelect]);
+
   useEffect(() => () => setGlobalNoSelect(false), [setGlobalNoSelect]);
 
   // ── Navigation (all ref-driven) ──

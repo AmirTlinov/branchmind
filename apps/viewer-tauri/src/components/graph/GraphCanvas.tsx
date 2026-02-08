@@ -44,7 +44,7 @@ function edgeColor(rel: string, highlighted: boolean, risk: boolean): string {
 
 interface DrawArgs {
   canvas: HTMLCanvasElement;
-  nodes: Map<string, { x: number; y: number }>;
+  nodes: Map<string, { _x: number; _y: number }>;
   edges: GraphEdgeDto[];
   focusId: string | null;
   viewX: number;
@@ -74,8 +74,8 @@ function drawEdges(args: DrawArgs) {
     const to = nodes.get(edge.to);
     if (!from || !to) continue;
 
-    const [sx1, sy1] = toScreen(from.x, from.y);
-    const [sx2, sy2] = toScreen(to.x, to.y);
+    const [sx1, sy1] = toScreen(from._x, from._y);
+    const [sx2, sy2] = toScreen(to._x, to._y);
 
     if (
       (sx1 < -120 && sx2 < -120) ||
@@ -258,7 +258,9 @@ export function GraphCanvas() {
   const nodes: GraphNodeDto[] = useMemo(() => {
     if (graph_mode === "architecture") {
       if (!architecture_lens) return [];
-      return architecture_lens.nodes.map((n, idx) => architectureNodeToGraphNode(n, idx));
+      return [...architecture_lens.nodes]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((n, idx) => architectureNodeToGraphNode(n, idx));
     }
     if (!graph_slice) return [];
     return graph_slice.nodes.filter((n) => !n.deleted);
@@ -267,9 +269,12 @@ export function GraphCanvas() {
   const edges: GraphEdgeDto[] = useMemo(() => {
     if (graph_mode === "architecture") {
       if (!architecture_lens) return [];
-      return architecture_lens.edges.map((e, idx) =>
-        architectureEdgeToGraphEdge(e, idx, architecture_lens.generated_at_ms),
-      );
+      return [...architecture_lens.edges]
+        .sort(
+          (a, b) =>
+            a.from.localeCompare(b.from) || a.rel.localeCompare(b.rel) || a.to.localeCompare(b.to),
+        )
+        .map((e, idx) => architectureEdgeToGraphEdge(e, idx, architecture_lens.generated_at_ms));
     }
     if (!graph_slice) return [];
     return graph_slice.edges.filter((e) => !e.deleted);
@@ -285,18 +290,17 @@ export function GraphCanvas() {
   }, [edges]);
 
   const edgeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawNodeLookupRef = useRef<Map<string, { _x: number; _y: number }>>(new Map());
 
   const viewport = useViewport();
 
   const onFrame = useCallback(
-    (simNodes: { id: string; _x: number; _y: number }[], frameEdges: GraphEdgeDto[]) => {
+    (_simNodes: { id: string; _x: number; _y: number }[], frameEdges: GraphEdgeDto[]) => {
       const canvas = edgeCanvasRef.current;
       if (!canvas) return;
-      const map = new Map<string, { x: number; y: number }>();
-      for (const n of simNodes) map.set(n.id, { x: n._x, y: n._y });
       drawEdges({
         canvas,
-        nodes: map,
+        nodes: drawNodeLookupRef.current,
         edges: frameEdges,
         focusId: selectedIdRef.current,
         viewX: viewport.viewXRef.current,
@@ -314,6 +318,12 @@ export function GraphCanvas() {
     edges,
     onFrame,
   });
+
+  useEffect(() => {
+    const next = new Map<string, { _x: number; _y: number }>();
+    for (const n of simNodes) next.set(n.id, n);
+    drawNodeLookupRef.current = next;
+  }, [simNodes, nodeVersion]);
 
   const handleNodeSelect = useCallback(
     (id: string) => {
@@ -445,7 +455,7 @@ export function GraphCanvas() {
           className="absolute inset-0"
           style={{ transformOrigin: "0 0" }}
         >
-          <div key={nodeVersion}>
+          <div>
             {simNodes.map((n) => {
               const dimmed = !!selectedId && n.id !== selectedId && !neighborSet.has(n.id);
               return (

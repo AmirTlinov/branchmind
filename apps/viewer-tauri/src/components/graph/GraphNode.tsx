@@ -137,12 +137,34 @@ export const GraphNode = React.memo(function GraphNode({
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // ignore capture errors (can happen on fast pointer cancel / window leave)
+      }
       onDragEnd();
       setGlobalNoSelect(false);
       if (!dragRef.current) onSelect(node.id);
     },
     [node.id, onDragEnd, onSelect, setGlobalNoSelect],
+  );
+
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent) => {
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // ignore
+      }
+      dragRef.current = true;
+      onDragEnd();
+      setGlobalNoSelect(false);
+    },
+    [onDragEnd, setGlobalNoSelect],
   );
 
   return (
@@ -159,7 +181,7 @@ export const GraphNode = React.memo(function GraphNode({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       data-no-pan
     >
       <div
