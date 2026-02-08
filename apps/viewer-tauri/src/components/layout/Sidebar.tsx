@@ -119,6 +119,8 @@ export function Sidebar() {
   const set_palette_open = useStore((s) => s.set_command_palette_open);
 
   const [taskFilter, setTaskFilter] = useState("");
+  const [projectsOpen, setProjectsOpen] = useState<Record<string, boolean>>({});
+  const [projectGroupsOpen, setProjectGroupsOpen] = useState<Record<string, boolean>>({});
 
   const groupedProjects = useMemo(() => {
     const map = new Map<string, typeof projects>();
@@ -227,8 +229,19 @@ export function Sidebar() {
               if (g.items.length === 1) {
                 const p = g.items[0];
                 const isActiveProject = selected_storage_dir === p.storage_dir;
+                const isOpen = projectsOpen[p.project_id] ?? isActiveProject;
                 return (
-                  <details key={p.project_id} className="group" open={isActiveProject}>
+                  <details
+                    key={p.project_id}
+                    className="group"
+                    open={isOpen}
+                    onToggle={(e) =>
+                      setProjectsOpen((prev) => ({
+                        ...prev,
+                        [p.project_id]: (e.currentTarget as HTMLDetailsElement).open,
+                      }))
+                    }
+                  >
                     <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary">
                       <div className="flex items-center gap-2.5 overflow-hidden">
                         <Folder
@@ -282,8 +295,19 @@ export function Sidebar() {
               }
 
               const isGroupOpen = g.items.some((p) => p.storage_dir === selected_storage_dir);
+              const isGroupDetailsOpen = projectGroupsOpen[g.name] ?? isGroupOpen;
               return (
-                <details key={`group:${g.name}`} className="group" open={isGroupOpen}>
+                <details
+                  key={`group:${g.name}`}
+                  className="group"
+                  open={isGroupDetailsOpen}
+                  onToggle={(e) =>
+                    setProjectGroupsOpen((prev) => ({
+                      ...prev,
+                      [g.name]: (e.currentTarget as HTMLDetailsElement).open,
+                    }))
+                  }
+                >
                   <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary">
                     <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
                       <Folder
@@ -301,8 +325,19 @@ export function Sidebar() {
                     {g.items.map((p) => {
                       const isActiveProject = selected_storage_dir === p.storage_dir;
                       const label = storageDirLabel(p.storage_dir, p.repo_root);
+                      const isStoreOpen = projectsOpen[p.project_id] ?? isActiveProject;
                       return (
-                        <details key={p.project_id} className="group" open={isActiveProject}>
+                        <details
+                          key={p.project_id}
+                          className="group"
+                          open={isStoreOpen}
+                          onToggle={(e) =>
+                            setProjectsOpen((prev) => ({
+                              ...prev,
+                              [p.project_id]: (e.currentTarget as HTMLDetailsElement).open,
+                            }))
+                          }
+                        >
                           <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5">
                             <div className="flex items-center gap-2 overflow-hidden min-w-0">
                               <Folder size={13} className="text-gray-300 shrink-0" />
