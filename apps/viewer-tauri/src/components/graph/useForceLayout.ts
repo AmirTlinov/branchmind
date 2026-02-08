@@ -7,6 +7,9 @@ const SETTLE_DAMPING = 0.86;
 const AMBIENT_ALPHA = 0.02;
 const MIN_NODE_SPACING = 160;
 const IDEAL_EDGE_DIST = 280;
+const ACTIVE_TARGET_FRAME_MS = 16;
+const IDLE_TARGET_FRAME_MS = 28;
+const MAX_REPULSION_NEIGHBORS = 180;
 
 export interface SimNode extends GraphNodeDto {
   label: string;
@@ -54,6 +57,7 @@ export function useForceLayout({
   const simNodesRef = useRef<SimNode[]>([]);
   const alphaRef = useRef(0.5);
   const draggingNodeId = useRef<string | null>(null);
+  const lastTickTsRef = useRef(0);
   const [nodeVersion, setNodeVersion] = useState(0);
 
   const edgesRef = useRef(edges);
@@ -102,8 +106,16 @@ export function useForceLayout({
     setNodeVersion((v) => v + 1);
   }, [nodes]);
 
-  useAnimationFrame((_t, delta) => {
-    const dt = Math.min(delta, 40) / 16;
+  useAnimationFrame((t) => {
+    const dragging = !!draggingNodeId.current;
+    const targetFrameMs = dragging ? ACTIVE_TARGET_FRAME_MS : IDLE_TARGET_FRAME_MS;
+    if (lastTickTsRef.current !== 0 && t - lastTickTsRef.current < targetFrameMs) {
+      return;
+    }
+    const stepMs =
+      lastTickTsRef.current === 0 ? targetFrameMs : Math.min(t - lastTickTsRef.current, 48);
+    lastTickTsRef.current = t;
+    const dt = stepMs / 16;
     const simNodes = simNodesRef.current;
     if (simNodes.length === 0) return;
 
@@ -134,7 +146,13 @@ export function useForceLayout({
 
     const map = isIdle ? null : new Map(simNodes.map((n) => [n.id, n] as const));
 
-    for (let i = 0; i < simNodes.length; i++) {
+    const nodeCount = simNodes.length;
+    const repulsionStep =
+      nodeCount > MAX_REPULSION_NEIGHBORS
+        ? Math.ceil(nodeCount / MAX_REPULSION_NEIGHBORS)
+        : 1;
+
+    for (let i = 0; i < nodeCount; i++) {
       const node = simNodes[i];
 
       if (draggingNodeId.current === node.id) {
@@ -147,8 +165,8 @@ export function useForceLayout({
       let fy = 0;
 
       // Repulsion
-      for (let j = 0; j < simNodes.length; j++) {
-        if (i === j) continue;
+      for (let offset = 1; offset < nodeCount; offset += repulsionStep) {
+        const j = (i + offset) % nodeCount;
         const other = simNodes[j];
         const dx = node._x - other._x;
         const dy = node._y - other._y;

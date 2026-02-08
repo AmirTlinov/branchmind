@@ -79,6 +79,7 @@ function statusColor(status?: string | null) {
 
 export const GraphNode = React.memo(function GraphNode({
   node,
+  dense = false,
   selected,
   dimmed,
   edgeCount,
@@ -88,6 +89,7 @@ export const GraphNode = React.memo(function GraphNode({
   scaleRef,
 }: {
   node: SimNode;
+  dense?: boolean;
   selected: boolean;
   dimmed: boolean;
   edgeCount: number;
@@ -193,6 +195,7 @@ export const GraphNode = React.memo(function GraphNode({
           selected
             ? "ring-2 ring-gray-900/20 shadow-lg shadow-gray-900/10 border-gray-400/60"
             : "shadow-sm shadow-gray-900/5 hover:ring-2 hover:ring-gray-900/10 hover:shadow-md",
+          dense && "backdrop-blur-[2px] shadow-none hover:ring-0 hover:shadow-none transition-none",
           dimmed && "opacity-20",
         )}
         title={`${node.id}\n${node.node_type}${node.status ? ` • ${node.status}` : ""}`}
@@ -217,7 +220,7 @@ export const GraphNode = React.memo(function GraphNode({
           <div className="text-[10px] text-gray-400 font-mono truncate mt-0.5">
             {node.node_type} • {node.id}
           </div>
-          {node.tags && node.tags.length > 0 && (
+          {!dense && node.tags && node.tags.length > 0 && (
             <div className="flex items-center gap-1 mt-0.5">
               {node.tags.slice(0, 2).map((t) => (
                 <span key={t} className="text-[8px] px-1 py-0.5 rounded bg-gray-100/80 text-gray-500 font-mono truncate max-w-[80px]">

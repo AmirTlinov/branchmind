@@ -3,6 +3,9 @@ import type { SimNode } from "./useForceLayout";
 
 const MINI_W = 180;
 const MINI_H = 120;
+const MINI_DPR_MAX = 1.5;
+const MINI_FAST_FRAME_MS = 80;
+const MINI_SLOW_FRAME_MS = 140;
 
 function roundRectPath(
   ctx: CanvasRenderingContext2D,
@@ -67,7 +70,7 @@ export function Minimap({
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, MINI_DPR_MAX);
     if (canvas.width !== MINI_W * dpr || canvas.height !== MINI_H * dpr) {
       canvas.width = MINI_W * dpr;
       canvas.height = MINI_H * dpr;
@@ -133,8 +136,9 @@ export function Minimap({
   useEffect(() => {
     let raf = 0;
     let last = 0;
+    const targetMs = simNodes.length > 180 ? MINI_SLOW_FRAME_MS : MINI_FAST_FRAME_MS;
     const loop = (t: number) => {
-      if (t - last > 80) {
+      if (t - last > targetMs) {
         last = t;
         draw();
       }
@@ -142,7 +146,7 @@ export function Minimap({
     };
     raf = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(raf);
-  }, [draw]);
+  }, [draw, simNodes.length]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {

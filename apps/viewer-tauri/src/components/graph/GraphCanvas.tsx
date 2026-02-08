@@ -10,6 +10,10 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { Activity, AlertTriangle, Minus, Plus, Scan } from "lucide-react";
 import type { GraphEdgeDto, GraphNodeDto } from "@/api/types";
 
+const MAX_CANVAS_DPR = 1.5;
+const EDGE_LOW_DETAIL_THRESHOLD = 700;
+const EDGE_VERY_LOW_DETAIL_THRESHOLD = 1400;
+
 function parseEdgeMeta(edge: GraphEdgeDto): { risk: boolean; weight: number } {
   if (!edge.meta_json) return { risk: false, weight: 1 };
   try {
@@ -56,7 +60,7 @@ interface DrawArgs {
 
 function drawEdges(args: DrawArgs) {
   const { canvas, nodes, edges, focusId, viewX, viewY, scale, cw, ch } = args;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
   if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
     canvas.width = cw * dpr;
     canvas.height = ch * dpr;
@@ -68,8 +72,11 @@ function drawEdges(args: DrawArgs) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cw, ch);
   const toScreen = (wx: number, wy: number): [number, number] => [wx * scale + viewX, wy * scale + viewY];
+  const lowDetail = edges.length >= EDGE_LOW_DETAIL_THRESHOLD || scale < 0.42;
+  const veryLowDetail = edges.length >= EDGE_VERY_LOW_DETAIL_THRESHOLD && !focusId;
 
-  for (const edge of edges) {
+  for (let edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
+    const edge = edges[edgeIndex];
     const from = nodes.get(edge.from);
     const to = nodes.get(edge.to);
     if (!from || !to) continue;
@@ -87,11 +94,24 @@ function drawEdges(args: DrawArgs) {
     }
 
     const highlighted = !!focusId && (edge.from === focusId || edge.to === focusId);
+    if (veryLowDetail && !highlighted && edgeIndex % 2 === 1) continue;
     const dimmed = !!focusId && !highlighted;
     const { risk, weight } = parseEdgeMeta(edge);
     const dx = sx2 - sx1;
     const dy = sy2 - sy1;
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    if (lowDetail) {
+      ctx.beginPath();
+      ctx.moveTo(sx1, sy1);
+      ctx.lineTo(sx2, sy2);
+      ctx.strokeStyle = edgeColor(edge.rel, highlighted, risk);
+      ctx.lineWidth = highlighted ? 1.7 : 0.95;
+      ctx.globalAlpha = dimmed ? 0.08 : 0.72;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      continue;
+    }
+
     const curvature = Math.min(dist * 0.18, 56);
     const mx = (sx1 + sx2) / 2;
     const my = (sy1 + sy2) / 2;
@@ -462,6 +482,7 @@ export function GraphCanvas() {
                 <GraphNode
                   key={n.id}
                   node={n}
+                  dense={simNodes.length > 160}
                   selected={n.id === selectedId}
                   dimmed={dimmed}
                   edgeCount={edgeCounts.get(n.id) || 0}
