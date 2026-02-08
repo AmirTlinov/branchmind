@@ -201,7 +201,10 @@ pub fn guess_repo_root(storage_dir: &Path) -> Option<PathBuf> {
         if git.is_dir() || git.is_file() {
             return Some(cur.to_path_buf());
         }
-        cur = cur.parent()?;
+        let Some(parent) = cur.parent() else {
+            break;
+        };
+        cur = parent;
     }
 
     // 2) Store patterns: infer root even without `.git`.

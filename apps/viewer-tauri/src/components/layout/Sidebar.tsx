@@ -12,6 +12,16 @@ import {
   Workflow,
 } from "lucide-react";
 
+function storageDirLabel(storage_dir: string, repo_root?: string | null): string {
+  if (repo_root && storage_dir.startsWith(repo_root)) {
+    let rel = storage_dir.slice(repo_root.length);
+    if (rel.startsWith("/")) rel = rel.slice(1);
+    return rel || "(store root)";
+  }
+  const parts = storage_dir.split("/").filter(Boolean);
+  return parts.slice(Math.max(parts.length - 3, 0)).join("/");
+}
+
 function SectionHeader({
   title,
   right,
@@ -110,6 +120,22 @@ export function Sidebar() {
 
   const [taskFilter, setTaskFilter] = useState("");
 
+  const groupedProjects = useMemo(() => {
+    const map = new Map<string, typeof projects>();
+    for (const p of projects) {
+      const name = p.display_name || "Unknown";
+      const arr = map.get(name);
+      if (arr) arr.push(p);
+      else map.set(name, [p]);
+    }
+    return Array.from(map.entries())
+      .map(([name, items]) => ({
+        name,
+        items: [...items].sort((a, b) => a.storage_dir.localeCompare(b.storage_dir)),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [projects]);
+
   const filteredTasks = useMemo(() => {
     const q = taskFilter.trim().toLowerCase();
     if (!q) return tasks;
@@ -197,53 +223,132 @@ export function Sidebar() {
           )}
 
           <div className="space-y-1">
-            {projects.map((p) => {
-              const isActiveProject = selected_storage_dir === p.storage_dir;
+            {groupedProjects.map((g) => {
+              if (g.items.length === 1) {
+                const p = g.items[0];
+                const isActiveProject = selected_storage_dir === p.storage_dir;
+                return (
+                  <details key={p.project_id} className="group" open={isActiveProject}>
+                    <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary">
+                      <div className="flex items-center gap-2.5 overflow-hidden">
+                        <Folder
+                          size={14}
+                          className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0"
+                        />
+                        <span className="text-[13px] font-medium text-gray-700 group-hover/summary:text-gray-900 transition-colors truncate">
+                          {p.display_name}
+                        </span>
+                      </div>
+                    </summary>
+
+                    <div className="space-y-[1px] pl-0 relative">
+                      {/* Guide Line */}
+                      <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
+
+                      {p.workspaces.map((w) => {
+                        const active = isActiveProject && selected_workspace === w.workspace;
+                        return (
+                          <button
+                            key={w.workspace}
+                            onClick={() => void select_workspace(p.storage_dir, w.workspace)}
+                            className={cn(
+                              "w-full flex items-center justify-between py-1.5 px-2 pl-9 rounded-lg hover:bg-black/5 cursor-pointer relative text-left",
+                              active && "bg-gray-50/70 ring-1 ring-black/[0.03]",
+                            )}
+                            title={w.project_guard ? `guard: ${w.project_guard}` : w.workspace}
+                          >
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <Workflow size={13} className="text-gray-400 shrink-0" />
+                              <span
+                                className={cn(
+                                  "text-[12px] truncate",
+                                  active ? "text-gray-900 font-medium" : "text-gray-700",
+                                )}
+                              >
+                                {w.workspace}
+                              </span>
+                            </div>
+                            {w.project_guard && (
+                              <span className="text-[10px] text-gray-400 font-mono shrink-0">
+                                guard
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </details>
+                );
+              }
+
+              const isGroupOpen = g.items.some((p) => p.storage_dir === selected_storage_dir);
               return (
-                <details key={p.project_id} className="group" open={isActiveProject}>
+                <details key={`group:${g.name}`} className="group" open={isGroupOpen}>
                   <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5 group/summary">
-                    <div className="flex items-center gap-2.5 overflow-hidden">
+                    <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
                       <Folder
                         size={14}
                         className="text-gray-400 group-hover/summary:text-gray-500 transition-colors shrink-0"
                       />
                       <span className="text-[13px] font-medium text-gray-700 group-hover/summary:text-gray-900 transition-colors truncate">
-                        {p.display_name}
+                        {g.name}
                       </span>
                     </div>
+                    <span className="text-[10px] text-gray-300 font-mono shrink-0">{g.items.length}</span>
                   </summary>
 
-                  <div className="space-y-[1px] pl-0 relative">
-                    {/* Guide Line */}
-                    <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
-
-                    {p.workspaces.map((w) => {
-                      const active = isActiveProject && selected_workspace === w.workspace;
+                  <div className="space-y-1 pl-3">
+                    {g.items.map((p) => {
+                      const isActiveProject = selected_storage_dir === p.storage_dir;
+                      const label = storageDirLabel(p.storage_dir, p.repo_root);
                       return (
-                        <button
-                          key={w.workspace}
-                          onClick={() => void select_workspace(p.storage_dir, w.workspace)}
-                          className={cn(
-                            "w-full flex items-center justify-between py-1.5 px-2 pl-9 rounded-lg hover:bg-black/5 cursor-pointer relative text-left",
-                            active && "bg-gray-50/70 ring-1 ring-black/[0.03]",
-                          )}
-                          title={w.project_guard ? `guard: ${w.project_guard}` : w.workspace}
-                        >
-                          <div className="flex items-center gap-2 overflow-hidden">
-                            <Workflow size={13} className="text-gray-400 shrink-0" />
-                            <span
-                              className={cn(
-                                "text-[12px] truncate",
-                                active ? "text-gray-900 font-medium" : "text-gray-700",
-                              )}
-                            >
-                              {w.workspace}
-                            </span>
+                        <details key={p.project_id} className="group" open={isActiveProject}>
+                          <summary className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 transition-colors list-none outline-none select-none mb-0.5">
+                            <div className="flex items-center gap-2 overflow-hidden min-w-0">
+                              <Folder size={13} className="text-gray-300 shrink-0" />
+                              <span className="text-[12px] text-gray-600 truncate" title={p.storage_dir}>
+                                {label}
+                              </span>
+                            </div>
+                          </summary>
+
+                          <div className="space-y-[1px] pl-0 relative">
+                            {/* Guide Line */}
+                            <div className="absolute left-[15px] top-0 bottom-2 w-[1px] bg-gray-200/50" />
+
+                            {p.workspaces.map((w) => {
+                              const active = isActiveProject && selected_workspace === w.workspace;
+                              return (
+                                <button
+                                  key={w.workspace}
+                                  onClick={() => void select_workspace(p.storage_dir, w.workspace)}
+                                  className={cn(
+                                    "w-full flex items-center justify-between py-1.5 px-2 pl-9 rounded-lg hover:bg-black/5 cursor-pointer relative text-left",
+                                    active && "bg-gray-50/70 ring-1 ring-black/[0.03]",
+                                  )}
+                                  title={w.project_guard ? `guard: ${w.project_guard}` : w.workspace}
+                                >
+                                  <div className="flex items-center gap-2 overflow-hidden">
+                                    <Workflow size={13} className="text-gray-400 shrink-0" />
+                                    <span
+                                      className={cn(
+                                        "text-[12px] truncate",
+                                        active ? "text-gray-900 font-medium" : "text-gray-700",
+                                      )}
+                                    >
+                                      {w.workspace}
+                                    </span>
+                                  </div>
+                                  {w.project_guard && (
+                                    <span className="text-[10px] text-gray-400 font-mono shrink-0">
+                                      guard
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
                           </div>
-                          {w.project_guard && (
-                            <span className="text-[10px] text-gray-400 font-mono shrink-0">guard</span>
-                          )}
-                        </button>
+                        </details>
                       );
                     })}
                   </div>
