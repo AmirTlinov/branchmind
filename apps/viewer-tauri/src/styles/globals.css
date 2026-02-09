@@ -38,6 +38,14 @@ body.bm-no-select * {
   user-select: none !important;
 }
 
+/* Graph interaction performance mode: disable expensive compositing while panning/dragging. */
+.bm-graph-interacting .bm-graph-node {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
 /* ── Elegant Scrollbar — Liquid Glass ── */
 .custom-scrollbar {
   scrollbar-width: thin;

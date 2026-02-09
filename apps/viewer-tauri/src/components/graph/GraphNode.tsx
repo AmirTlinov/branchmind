@@ -182,7 +182,7 @@ export const GraphNode = React.memo(function GraphNode({
         marginLeft: -NODE_W / 2,
         marginTop: -NODE_H / 2,
       }}
-      className="absolute top-0 left-0 will-change-transform"
+      className="absolute top-0 left-0 will-change-transform bm-graph-node"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

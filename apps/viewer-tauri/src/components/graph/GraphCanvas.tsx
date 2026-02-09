@@ -454,6 +454,12 @@ export function GraphCanvas() {
           !!draggingNodeId.current ||
           isPanningRef.current ||
           performance.now() < interactionUntilRef.current;
+        // Toggle a CSS class on the container to enable "performance mode"
+        // (disables expensive blur/shadows) while interacting.
+        const containerEl = viewport.containerRef.current;
+        if (containerEl) {
+          containerEl.classList.toggle("bm-graph-interacting", interacting);
+        }
 
         if (
           viewX !== last.viewX ||
