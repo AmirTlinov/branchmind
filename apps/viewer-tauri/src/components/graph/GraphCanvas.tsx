@@ -317,24 +317,21 @@ export function GraphCanvas() {
 
   const edgeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawNodeLookupRef = useRef<Map<string, { _x: number; _y: number }>>(new Map());
+  const edgesRef = useRef<GraphEdgeDto[]>([]);
+  edgesRef.current = edges;
+  const edgeDirtyRef = useRef(true);
 
   const viewport = useViewport();
+  const { viewXRef, viewYRef, scaleRef, containerSizeRef } = viewport;
+
+  const markEdgeDirty = useCallback(() => {
+    edgeDirtyRef.current = true;
+  }, []);
 
   const onFrame = useCallback(
-    (_simNodes: { id: string; _x: number; _y: number }[], frameEdges: GraphEdgeDto[]) => {
-      const canvas = edgeCanvasRef.current;
-      if (!canvas) return;
-      drawEdges({
-        canvas,
-        nodes: drawNodeLookupRef.current,
-        edges: frameEdges,
-        focusId: selectedIdRef.current,
-        viewX: viewport.viewXRef.current,
-        viewY: viewport.viewYRef.current,
-        scale: viewport.scaleRef.current,
-        cw: viewport.containerSizeRef.current.w,
-        ch: viewport.containerSizeRef.current.h,
-      });
+    () => {
+      // Mark edges dirty; a dedicated rAF loop redraws at most once per frame.
+      edgeDirtyRef.current = true;
     },
     [],
   );
@@ -349,28 +346,97 @@ export function GraphCanvas() {
     const next = new Map<string, { _x: number; _y: number }>();
     for (const n of simNodes) next.set(n.id, n);
     drawNodeLookupRef.current = next;
+    edgeDirtyRef.current = true;
   }, [simNodes, nodeVersion]);
+
+  // Dedicated edge redraw loop:
+  // - decouples canvas edges from force-layout step frequency
+  // - keeps edges in sync with viewport pan/zoom even when simulation is idle/throttled
+  useEffect(() => {
+    let raf = 0;
+    const last = {
+      viewX: NaN,
+      viewY: NaN,
+      scale: NaN,
+      cw: 0,
+      ch: 0,
+      focusId: null as string | null,
+      edgesLen: -1,
+    };
+    const loop = () => {
+      const canvas = edgeCanvasRef.current;
+      if (canvas) {
+        const viewX = viewXRef.current;
+        const viewY = viewYRef.current;
+        const scale = scaleRef.current;
+        const cw = containerSizeRef.current.w;
+        const ch = containerSizeRef.current.h;
+        const focusId = selectedIdRef.current;
+        const edgesNow = edgesRef.current;
+
+        if (
+          viewX !== last.viewX ||
+          viewY !== last.viewY ||
+          scale !== last.scale ||
+          cw !== last.cw ||
+          ch !== last.ch ||
+          focusId !== last.focusId ||
+          edgesNow.length !== last.edgesLen
+        ) {
+          edgeDirtyRef.current = true;
+        }
+
+        if (edgeDirtyRef.current) {
+          edgeDirtyRef.current = false;
+          last.viewX = viewX;
+          last.viewY = viewY;
+          last.scale = scale;
+          last.cw = cw;
+          last.ch = ch;
+          last.focusId = focusId;
+          last.edgesLen = edgesNow.length;
+          drawEdges({
+            canvas,
+            nodes: drawNodeLookupRef.current,
+            edges: edgesNow,
+            focusId,
+            viewX,
+            viewY,
+            scale,
+            cw,
+            ch,
+          });
+        }
+      }
+      raf = window.requestAnimationFrame(loop);
+    };
+    raf = window.requestAnimationFrame(loop);
+    return () => window.cancelAnimationFrame(raf);
+  }, [containerSizeRef, scaleRef, viewXRef, viewYRef]);
 
   const handleNodeSelect = useCallback(
     (id: string) => {
       select_graph_node(id);
       bumpAlpha(0.12);
+      markEdgeDirty();
     },
-    [select_graph_node, bumpAlpha],
+    [select_graph_node, bumpAlpha, markEdgeDirty],
   );
 
   const handleDragStart = useCallback(
     (id: string) => {
       draggingNodeId.current = id;
       bumpAlpha(0.18);
+      markEdgeDirty();
     },
-    [draggingNodeId, bumpAlpha],
+    [draggingNodeId, bumpAlpha, markEdgeDirty],
   );
 
   const handleDragEnd = useCallback(() => {
     draggingNodeId.current = null;
     bumpAlpha(0.12);
-  }, [draggingNodeId, bumpAlpha]);
+    markEdgeDirty();
+  }, [draggingNodeId, bumpAlpha, markEdgeDirty]);
 
   const handleContainerClick = useCallback(
     (e: React.MouseEvent) => {
@@ -496,6 +562,7 @@ export function GraphCanvas() {
                   onSelect={handleNodeSelect}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
+                  onMove={markEdgeDirty}
                 />
               );
             })}

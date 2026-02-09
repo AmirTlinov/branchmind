@@ -86,6 +86,7 @@ export const GraphNode = React.memo(function GraphNode({
   onSelect,
   onDragStart,
   onDragEnd,
+  onMove,
   scaleRef,
 }: {
   node: SimNode;
@@ -96,6 +97,7 @@ export const GraphNode = React.memo(function GraphNode({
   onSelect: (id: string) => void;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
+  onMove?: () => void;
   scaleRef: React.RefObject<number>;
 }) {
   const dragRef = useRef(false);
@@ -133,8 +135,9 @@ export const GraphNode = React.memo(function GraphNode({
       node._y = startRef.current.ny + dy;
       node.x.set(node._x);
       node.y.set(node._y);
+      onMove?.();
     },
-    [node, scaleRef],
+    [node, scaleRef, onMove],
   );
 
   const handlePointerUp = useCallback(
