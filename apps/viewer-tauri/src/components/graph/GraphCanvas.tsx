@@ -14,6 +14,15 @@ const MAX_CANVAS_DPR = 1.5;
 const EDGE_LOW_DETAIL_THRESHOLD = 700;
 const EDGE_VERY_LOW_DETAIL_THRESHOLD = 1400;
 
+type EdgeDraw = {
+  from: string;
+  to: string;
+  rel: string;
+  relLower: string;
+  risk: boolean;
+  weight: number;
+};
+
 function parseEdgeMeta(edge: GraphEdgeDto): { risk: boolean; weight: number } {
   if (!edge.meta_json) return { risk: false, weight: 1 };
   try {
@@ -27,9 +36,9 @@ function parseEdgeMeta(edge: GraphEdgeDto): { risk: boolean; weight: number } {
   }
 }
 
-function edgeColor(rel: string, highlighted: boolean, risk: boolean): string {
+function edgeColor(relLower: string, highlighted: boolean, risk: boolean): string {
   if (risk) return highlighted ? "rgba(244,63,94,0.88)" : "rgba(244,63,94,0.26)";
-  const r = rel.toLowerCase();
+  const r = relLower;
   if (r === "blocks") return highlighted ? "rgba(244,63,94,0.85)" : "rgba(244,63,94,0.22)";
   if (r === "supports" || r === "knows")
     return highlighted ? "rgba(34,197,94,0.85)" : "rgba(34,197,94,0.22)";
@@ -49,7 +58,7 @@ function edgeColor(rel: string, highlighted: boolean, risk: boolean): string {
 interface DrawArgs {
   canvas: HTMLCanvasElement;
   nodes: Map<string, { _x: number; _y: number }>;
-  edges: GraphEdgeDto[];
+  edges: EdgeDraw[];
   focusId: string | null;
   viewX: number;
   viewY: number;
@@ -102,7 +111,7 @@ function drawEdges(args: DrawArgs) {
     const highlighted = !!focusId && (edge.from === focusId || edge.to === focusId);
     if (veryLowDetail && !highlighted && edgeIndex % 2 === 1) continue;
     const dimmed = !!focusId && !highlighted;
-    const { risk, weight } = parseEdgeMeta(edge);
+    const { risk, weight } = edge;
     const dx = sx2 - sx1;
     const dy = sy2 - sy1;
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -110,7 +119,7 @@ function drawEdges(args: DrawArgs) {
       ctx.beginPath();
       ctx.moveTo(sx1, sy1);
       ctx.lineTo(sx2, sy2);
-      ctx.strokeStyle = edgeColor(edge.rel, highlighted, risk);
+      ctx.strokeStyle = edgeColor(edge.relLower, highlighted, risk);
       ctx.lineWidth = highlighted ? 1.7 : 0.95;
       ctx.globalAlpha = dimmed ? 0.08 : 0.72;
       ctx.stroke();
@@ -129,11 +138,11 @@ function drawEdges(args: DrawArgs) {
     ctx.beginPath();
     ctx.moveTo(sx1, sy1);
     ctx.quadraticCurveTo(cpx, cpy, sx2, sy2);
-    ctx.strokeStyle = edgeColor(edge.rel, highlighted, risk);
+    ctx.strokeStyle = edgeColor(edge.relLower, highlighted, risk);
     const base = highlighted ? 1.8 : 1.0;
     ctx.lineWidth = base + Math.min(weight, 6) * 0.22;
     ctx.globalAlpha = dimmed ? 0.08 : 1;
-    ctx.setLineDash(edge.rel === "contains" ? [] : [5, 4]);
+    ctx.setLineDash(edge.relLower === "contains" ? [] : [5, 4]);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -149,7 +158,7 @@ function drawEdges(args: DrawArgs) {
     ctx.lineTo(sx2 - ux * arrowLen + uy * arrowW, sy2 - uy * arrowLen - ux * arrowW);
     ctx.lineTo(sx2 - ux * arrowLen - uy * arrowW, sy2 - uy * arrowLen + ux * arrowW);
     ctx.closePath();
-    ctx.fillStyle = edgeColor(edge.rel, highlighted, risk);
+    ctx.fillStyle = edgeColor(edge.relLower, highlighted, risk);
     ctx.globalAlpha = dimmed ? 0.08 : 0.6;
     ctx.fill();
     ctx.globalAlpha = 1;
@@ -157,7 +166,7 @@ function drawEdges(args: DrawArgs) {
     if (highlighted) {
       ctx.font = "9px ui-monospace, monospace";
       ctx.textAlign = "center";
-      ctx.fillStyle = edgeColor(edge.rel, true, risk);
+      ctx.fillStyle = edgeColor(edge.relLower, true, risk);
       ctx.globalAlpha = 0.9;
       const label = weight > 1 ? `${edge.rel} ×${weight}` : edge.rel;
       ctx.fillText(label, cpx, cpy - 6);
@@ -306,6 +315,14 @@ export function GraphCanvas() {
     return graph_slice.edges.filter((e) => !e.deleted);
   }, [graph_mode, architecture_lens, graph_slice]);
 
+  const edgeDraw: EdgeDraw[] = useMemo(() => {
+    return edges.map((e) => {
+      const { risk, weight } = parseEdgeMeta(e);
+      const relLower = e.rel.toLowerCase();
+      return { from: e.from, to: e.to, rel: e.rel, relLower, risk, weight };
+    });
+  }, [edges]);
+
   const edgeCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const e of edges) {
@@ -317,8 +334,8 @@ export function GraphCanvas() {
 
   const edgeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawNodeLookupRef = useRef<Map<string, { _x: number; _y: number }>>(new Map());
-  const edgesRef = useRef<GraphEdgeDto[]>([]);
-  edgesRef.current = edges;
+  const edgesRef = useRef<EdgeDraw[]>([]);
+  edgesRef.current = edgeDraw;
   const edgeDirtyRef = useRef(true);
 
   const viewport = useViewport();
