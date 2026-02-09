@@ -126,7 +126,9 @@ export function useForceLayout({
     const isIdle = alpha <= AMBIENT_ALPHA + 0.0005 && !draggingNodeId.current;
 
     // When the system is fully settled, skip the O(n^2) force computations.
-    // We still call `onFrame` so edges keep redrawing during viewport pan/zoom.
+    // NOTE: GraphCanvas now has its own rAF loop that redraws edges on viewport
+    // pan/zoom (and on simulation movement), so `onFrame` is no longer needed
+    // in the hard-idle path.
     let maxSpeed = 0;
     for (const n of simNodes) {
       maxSpeed = Math.max(maxSpeed, Math.abs(n.vx) + Math.abs(n.vy));
@@ -140,7 +142,6 @@ export function useForceLayout({
           n.vy = 0;
         }
       }
-      onFrameRef.current?.(simNodes, edgesRef.current);
       return;
     }
 
