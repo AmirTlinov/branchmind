@@ -11,6 +11,12 @@ import { Activity, AlertTriangle, Minus, Plus, Scan } from "lucide-react";
 import type { GraphEdgeDto, GraphNodeDto } from "@/api/types";
 
 const MAX_CANVAS_DPR = 1.5;
+const MAX_CANVAS_DPR_INTERACT = 1.0;
+const MIN_CANVAS_DPR = 0.7;
+// Cap canvas backing-store pixels to keep 4K fullscreen smooth.
+// (Clearing a 13M+ px 2D canvas every frame is a common source of jank.)
+const MAX_CANVAS_PIXELS_IDLE = 10_000_000;
+const MAX_CANVAS_PIXELS_INTERACT = 4_000_000;
 const EDGE_LOW_DETAIL_THRESHOLD = 700;
 const EDGE_VERY_LOW_DETAIL_THRESHOLD = 1400;
 
@@ -60,6 +66,7 @@ interface DrawArgs {
   nodes: Map<string, { _x: number; _y: number }>;
   edges: EdgeDraw[];
   focusId: string | null;
+  interacting: boolean;
   viewX: number;
   viewY: number;
   scale: number;
@@ -68,9 +75,14 @@ interface DrawArgs {
 }
 
 function drawEdges(args: DrawArgs) {
-  const { canvas, nodes, edges, focusId, viewX, viewY, scale, cw, ch } = args;
+  const { canvas, nodes, edges, focusId, interacting, viewX, viewY, scale, cw, ch } = args;
   if (cw < 2 || ch < 2) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
+  const baseDpr = window.devicePixelRatio || 1;
+  const maxDpr = interacting ? MAX_CANVAS_DPR_INTERACT : MAX_CANVAS_DPR;
+  const areaCap = interacting ? MAX_CANVAS_PIXELS_INTERACT : MAX_CANVAS_PIXELS_IDLE;
+  const area = Math.max(1, cw * ch);
+  const areaDpr = Math.sqrt(areaCap / area);
+  const dpr = Math.max(MIN_CANVAS_DPR, Math.min(baseDpr, maxDpr, areaDpr));
   const pxW = Math.max(1, Math.round(cw * dpr));
   const pxH = Math.max(1, Math.round(ch * dpr));
   if (canvas.width !== pxW || canvas.height !== pxH) {
@@ -87,8 +99,9 @@ function drawEdges(args: DrawArgs) {
   ctx.setTransform(sx, 0, 0, sy, 0, 0);
   ctx.clearRect(0, 0, cw, ch);
   const toScreen = (wx: number, wy: number): [number, number] => [wx * scale + viewX, wy * scale + viewY];
-  const lowDetail = edges.length >= EDGE_LOW_DETAIL_THRESHOLD || scale < 0.42;
-  const veryLowDetail = edges.length >= EDGE_VERY_LOW_DETAIL_THRESHOLD && !focusId;
+  const lowDetail = interacting || edges.length >= EDGE_LOW_DETAIL_THRESHOLD || scale < 0.42;
+  const veryLowDetail =
+    (!focusId && interacting) || (edges.length >= EDGE_VERY_LOW_DETAIL_THRESHOLD && !focusId);
 
   for (let edgeIndex = 0; edgeIndex < edges.length; edgeIndex++) {
     const edge = edges[edgeIndex];
@@ -337,13 +350,59 @@ export function GraphCanvas() {
   const edgesRef = useRef<EdgeDraw[]>([]);
   edgesRef.current = edgeDraw;
   const edgeDirtyRef = useRef(true);
+  const interactionUntilRef = useRef(0);
 
   const viewport = useViewport();
-  const { viewXRef, viewYRef, scaleRef, containerSizeRef } = viewport;
+  const { viewXRef, viewYRef, scaleRef, containerSizeRef, isPanningRef } = viewport;
 
   const markEdgeDirty = useCallback(() => {
     edgeDirtyRef.current = true;
   }, []);
+
+  const touchInteraction = useCallback(
+    (ttlMs = 180) => {
+      interactionUntilRef.current = Math.max(
+        interactionUntilRef.current,
+        performance.now() + ttlMs,
+      );
+      edgeDirtyRef.current = true;
+    },
+    [],
+  );
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      touchInteraction(220);
+      viewport.handleWheel(e);
+    },
+    [touchInteraction, viewport],
+  );
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      viewport.handlePointerDown(e);
+      if (isPanningRef.current) touchInteraction(260);
+    },
+    [touchInteraction, viewport, isPanningRef],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      // While panning, keep interaction "hot" so the edges canvas can use
+      // a cheaper DPR and avoid jank on 4K.
+      if (isPanningRef.current) touchInteraction(200);
+      viewport.handlePointerMove(e);
+    },
+    [touchInteraction, viewport, isPanningRef],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      viewport.handlePointerUp(e);
+      touchInteraction(260);
+    },
+    [touchInteraction, viewport],
+  );
 
   const onFrame = useCallback(
     () => {
@@ -379,6 +438,7 @@ export function GraphCanvas() {
       ch: 0,
       focusId: null as string | null,
       edgesLen: -1,
+      interacting: false,
     };
     const loop = () => {
       const canvas = edgeCanvasRef.current;
@@ -390,6 +450,10 @@ export function GraphCanvas() {
         const ch = containerSizeRef.current.h;
         const focusId = selectedIdRef.current;
         const edgesNow = edgesRef.current;
+        const interacting =
+          !!draggingNodeId.current ||
+          isPanningRef.current ||
+          performance.now() < interactionUntilRef.current;
 
         if (
           viewX !== last.viewX ||
@@ -398,7 +462,8 @@ export function GraphCanvas() {
           cw !== last.cw ||
           ch !== last.ch ||
           focusId !== last.focusId ||
-          edgesNow.length !== last.edgesLen
+          edgesNow.length !== last.edgesLen ||
+          interacting !== last.interacting
         ) {
           edgeDirtyRef.current = true;
         }
@@ -412,11 +477,13 @@ export function GraphCanvas() {
           last.ch = ch;
           last.focusId = focusId;
           last.edgesLen = edgesNow.length;
+          last.interacting = interacting;
           drawEdges({
             canvas,
             nodes: drawNodeLookupRef.current,
             edges: edgesNow,
             focusId,
+            interacting,
             viewX,
             viewY,
             scale,
@@ -429,7 +496,7 @@ export function GraphCanvas() {
     };
     raf = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(raf);
-  }, [containerSizeRef, scaleRef, viewXRef, viewYRef]);
+  }, [containerSizeRef, scaleRef, viewXRef, viewYRef, isPanningRef, draggingNodeId]);
 
   const handleNodeSelect = useCallback(
     (id: string) => {
@@ -550,11 +617,11 @@ export function GraphCanvas() {
         ref={viewport.containerRef}
         className="absolute inset-0 overflow-hidden select-none"
         style={{ touchAction: "none" }}
-        onWheel={viewport.handleWheel}
-        onPointerDown={viewport.handlePointerDown}
-        onPointerMove={viewport.handlePointerMove}
-        onPointerUp={viewport.handlePointerUp}
-        onPointerCancel={viewport.handlePointerUp}
+        onWheel={handleWheel}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
         onClick={handleContainerClick}
       >
         <canvas ref={edgeCanvasRef} className="absolute inset-0" />
@@ -579,7 +646,7 @@ export function GraphCanvas() {
                   onSelect={handleNodeSelect}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
-                  onMove={markEdgeDirty}
+                  onMove={() => touchInteraction(200)}
                 />
               );
             })}

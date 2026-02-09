@@ -9,6 +9,9 @@ export interface ViewportResult {
   /** Attach to the node-layer div — transform is written directly via DOM. */
   transformRef: React.RefObject<HTMLDivElement | null>;
 
+  /** Read-only: true while the user is actively panning the graph. */
+  isPanningRef: React.RefObject<boolean>;
+
   viewXRef: React.RefObject<number>;
   viewYRef: React.RefObject<number>;
   scaleRef: React.RefObject<number>;
@@ -65,10 +68,18 @@ export function useViewport(): ViewportResult {
     if (!el) return;
     const obs = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      containerSizeRef.current = { w: width, h: height };
-      if (!hasCenteredRef.current && width > 10 && height > 10) {
-        viewXRef.current = width / 2;
-        viewYRef.current = height / 2;
+      // Round to whole CSS pixels to avoid fractional-size thrash (common with
+      // compositor scaling / 4K + fractional DPR). A stable container size is
+      // critical: GraphCanvas uses it to size a large edges-canvas buffer.
+      const w = Math.max(0, Math.round(width));
+      const h = Math.max(0, Math.round(height));
+      if (containerSizeRef.current.w === w && containerSizeRef.current.h === h) {
+        return;
+      }
+      containerSizeRef.current = { w, h };
+      if (!hasCenteredRef.current && w > 10 && h > 10) {
+        viewXRef.current = w / 2;
+        viewYRef.current = h / 2;
         hasCenteredRef.current = true;
         syncTransform();
       }
@@ -191,6 +202,7 @@ export function useViewport(): ViewportResult {
   return {
     containerRef,
     transformRef,
+    isPanningRef,
     viewXRef,
     viewYRef,
     scaleRef,
