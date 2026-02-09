@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
 import { useViewport } from "./useViewport";
@@ -351,6 +351,16 @@ export function GraphCanvas() {
   edgesRef.current = edgeDraw;
   const edgeDirtyRef = useRef(true);
   const interactionUntilRef = useRef(0);
+  const [hudEnabled, setHudEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem("bm_graph_hud") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const hudEnabledRef = useRef(hudEnabled);
+  hudEnabledRef.current = hudEnabled;
+  const hudRef = useRef<HTMLDivElement | null>(null);
 
   const viewport = useViewport();
   const { viewXRef, viewYRef, scaleRef, containerSizeRef, isPanningRef } = viewport;
@@ -369,6 +379,26 @@ export function GraphCanvas() {
     },
     [],
   );
+
+  // Debug HUD toggle: Ctrl+Shift+D
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey) return;
+      if (e.code !== "KeyD") return;
+      e.preventDefault();
+      setHudEnabled((prev) => {
+        const next = !prev;
+        try {
+          window.localStorage.setItem("bm_graph_hud", next ? "1" : "0");
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -440,6 +470,10 @@ export function GraphCanvas() {
       edgesLen: -1,
       interacting: false,
     };
+    const hud = {
+      lastUpdateMs: 0,
+      frameCount: 0,
+    };
     const loop = () => {
       const canvas = edgeCanvasRef.current;
       if (canvas) {
@@ -459,6 +493,26 @@ export function GraphCanvas() {
         const containerEl = viewport.containerRef.current;
         if (containerEl) {
           containerEl.classList.toggle("bm-graph-interacting", interacting);
+        }
+
+        // Lightweight perf HUD — updated at most twice per second.
+        hud.frameCount++;
+        const now = performance.now();
+        if (hudEnabledRef.current && hudRef.current && now - hud.lastUpdateMs > 500) {
+          const dt = now - hud.lastUpdateMs || 1;
+          const fps = hud.lastUpdateMs === 0 ? 0 : Math.round((hud.frameCount * 1000) / dt);
+          hud.lastUpdateMs = now;
+          hud.frameCount = 0;
+          const pxW = canvas.width;
+          const pxH = canvas.height;
+          const dpr = cw > 0 ? (pxW / cw).toFixed(2) : "?";
+          const nodesCount = drawNodeLookupRef.current.size;
+          hudRef.current.textContent =
+            `FPS ${fps}\n` +
+            `canvas ${cw}×${ch} css → ${pxW}×${pxH} px (dpr ${dpr})\n` +
+            `nodes ${nodesCount} edges ${edgesNow.length}\n` +
+            `interacting ${interacting} pan ${isPanningRef.current} drag ${!!draggingNodeId.current}\n` +
+            `scale ${scale.toFixed(3)} view ${Math.round(viewX)},${Math.round(viewY)}`;
         }
 
         if (
@@ -631,6 +685,12 @@ export function GraphCanvas() {
         onClick={handleContainerClick}
       >
         <canvas ref={edgeCanvasRef} className="absolute inset-0" />
+        {hudEnabled && (
+          <div
+            ref={hudRef}
+            className="absolute bottom-2 right-2 z-50 pointer-events-none whitespace-pre rounded-lg bg-black/70 text-white text-[10px] font-mono px-2 py-1.5 leading-snug"
+          />
+        )}
 
         <div
           ref={viewport.transformRef}
