@@ -7,6 +7,7 @@ mod bootstrap;
 mod create;
 mod history;
 mod jobs;
+mod slices;
 mod steps_control;
 mod steps_leases;
 mod steps_lifecycle;
@@ -26,6 +27,7 @@ pub(crate) fn task_tool_definitions() -> Vec<Value> {
     out.extend(history::history_definitions());
     out.extend(jobs::jobs_definitions());
     out.extend(batch::batch_definitions());
+    out.extend(slices::slices_definitions());
     out.extend(views::views_definitions());
     out
 }

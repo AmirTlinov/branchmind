@@ -453,8 +453,12 @@ pub(crate) fn parse_hot_reload_enabled() -> bool {
             raw.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         ),
-        // Stability default: hot reload is opt-in to avoid transport drops in long-lived sessions.
-        Err(_) => false,
+        // DX default:
+        // - In `--shared` proxy mode, hot reload is enabled by default to prevent “stale daemon”
+        //   footguns after local rebuilds (the proxy upgrades itself via exec, then restarts the daemon
+        //   if the build fingerprint changed).
+        // - In `--daemon` mode, keep it opt-in: exec can be disruptive for long-lived socket listeners.
+        Err(_) => parse_shared_mode(),
     }
 }
 
@@ -522,6 +526,14 @@ pub(crate) struct SocketTagConfig<'a> {
     pub(crate) ux_proof_v2_enabled: bool,
     pub(crate) knowledge_autolint_enabled: bool,
     pub(crate) note_promote_enabled: bool,
+    pub(crate) jobs_unknown_args_fail_closed_enabled: bool,
+    pub(crate) jobs_strict_progress_schema_enabled: bool,
+    pub(crate) jobs_high_done_proof_gate_enabled: bool,
+    pub(crate) jobs_wait_stream_v2_enabled: bool,
+    pub(crate) jobs_mesh_v1_enabled: bool,
+    pub(crate) slice_plans_v1_enabled: bool,
+    pub(crate) jobs_slice_first_fail_closed_enabled: bool,
+    pub(crate) slice_budgets_enforced_enabled: bool,
     pub(crate) default_workspace: Option<&'a str>,
     pub(crate) workspace_explicit: bool,
     pub(crate) workspace_lock: bool,
@@ -560,6 +572,70 @@ pub(crate) fn socket_tag_for_config(cfg: SocketTagConfig<'_>) -> String {
         hash,
         "note_promote",
         if cfg.note_promote_enabled { "1" } else { "0" },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "jobs_unknown_args_fail_closed",
+        if cfg.jobs_unknown_args_fail_closed_enabled {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "jobs_strict_progress_schema",
+        if cfg.jobs_strict_progress_schema_enabled {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "jobs_high_done_proof_gate",
+        if cfg.jobs_high_done_proof_gate_enabled {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "jobs_wait_stream_v2",
+        if cfg.jobs_wait_stream_v2_enabled {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "jobs_mesh_v1",
+        if cfg.jobs_mesh_v1_enabled { "1" } else { "0" },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "slice_plans_v1",
+        if cfg.slice_plans_v1_enabled { "1" } else { "0" },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "jobs_slice_first_fail_closed",
+        if cfg.jobs_slice_first_fail_closed_enabled {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    hash = fnv1a_kv(
+        hash,
+        "slice_budgets_enforced",
+        if cfg.slice_budgets_enforced_enabled {
+            "1"
+        } else {
+            "0"
+        },
     );
     hash = fnv1a_kv(hash, "workspace", cfg.default_workspace.unwrap_or(""));
     hash = fnv1a_kv(
@@ -683,6 +759,78 @@ pub(crate) fn parse_note_promote_enabled() -> bool {
     )
 }
 
+pub(crate) fn parse_jobs_unknown_args_fail_closed_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_JOBS_UNKNOWN_ARGS_FAIL_CLOSED",
+        "--jobs-unknown-args-fail-closed",
+        "--no-jobs-unknown-args-fail-closed",
+    )
+}
+
+pub(crate) fn parse_jobs_strict_progress_schema_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_JOBS_STRICT_PROGRESS_SCHEMA",
+        "--jobs-strict-progress-schema",
+        "--no-jobs-strict-progress-schema",
+    )
+}
+
+pub(crate) fn parse_jobs_high_done_proof_gate_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_JOBS_HIGH_DONE_PROOF_GATE",
+        "--jobs-high-done-proof-gate",
+        "--no-jobs-high-done-proof-gate",
+    )
+}
+
+pub(crate) fn parse_jobs_wait_stream_v2_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_JOBS_WAIT_STREAM_V2",
+        "--jobs-wait-stream-v2",
+        "--no-jobs-wait-stream-v2",
+    )
+}
+
+pub(crate) fn parse_jobs_mesh_v1_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_JOBS_MESH_V1",
+        "--jobs-mesh-v1",
+        "--no-jobs-mesh-v1",
+    )
+}
+
+pub(crate) fn parse_slice_plans_v1_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_SLICE_PLANS_V1",
+        "--slice-plans-v1",
+        "--no-slice-plans-v1",
+    )
+}
+
+pub(crate) fn parse_jobs_slice_first_fail_closed_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_JOBS_SLICE_FIRST_FAIL_CLOSED",
+        "--jobs-slice-first-fail-closed",
+        "--no-jobs-slice-first-fail-closed",
+    )
+}
+
+pub(crate) fn parse_slice_budgets_enforced_enabled() -> bool {
+    parse_feature_enabled_with_default(
+        true,
+        "BRANCHMIND_SLICE_BUDGETS_ENFORCED",
+        "--slice-budgets-enforced",
+        "--no-slice-budgets-enforced",
+    )
+}
+
 fn parse_feature_enabled_with_default(
     default_enabled: bool,
     env_key: &str,
@@ -796,6 +944,14 @@ mod tests {
             ux_proof_v2_enabled: true,
             knowledge_autolint_enabled: true,
             note_promote_enabled: true,
+            jobs_unknown_args_fail_closed_enabled: true,
+            jobs_strict_progress_schema_enabled: true,
+            jobs_high_done_proof_gate_enabled: true,
+            jobs_wait_stream_v2_enabled: true,
+            jobs_mesh_v1_enabled: true,
+            slice_plans_v1_enabled: true,
+            jobs_slice_first_fail_closed_enabled: true,
+            slice_budgets_enforced_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,
@@ -811,6 +967,14 @@ mod tests {
             ux_proof_v2_enabled: true,
             knowledge_autolint_enabled: true,
             note_promote_enabled: true,
+            jobs_unknown_args_fail_closed_enabled: true,
+            jobs_strict_progress_schema_enabled: true,
+            jobs_high_done_proof_gate_enabled: true,
+            jobs_wait_stream_v2_enabled: true,
+            jobs_mesh_v1_enabled: true,
+            slice_plans_v1_enabled: true,
+            jobs_slice_first_fail_closed_enabled: true,
+            slice_budgets_enforced_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,
@@ -832,6 +996,14 @@ mod tests {
             ux_proof_v2_enabled: true,
             knowledge_autolint_enabled: true,
             note_promote_enabled: true,
+            jobs_unknown_args_fail_closed_enabled: true,
+            jobs_strict_progress_schema_enabled: true,
+            jobs_high_done_proof_gate_enabled: true,
+            jobs_wait_stream_v2_enabled: true,
+            jobs_mesh_v1_enabled: true,
+            slice_plans_v1_enabled: true,
+            jobs_slice_first_fail_closed_enabled: true,
+            slice_budgets_enforced_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,
@@ -847,6 +1019,14 @@ mod tests {
             ux_proof_v2_enabled: true,
             knowledge_autolint_enabled: true,
             note_promote_enabled: true,
+            jobs_unknown_args_fail_closed_enabled: true,
+            jobs_strict_progress_schema_enabled: true,
+            jobs_high_done_proof_gate_enabled: true,
+            jobs_wait_stream_v2_enabled: true,
+            jobs_mesh_v1_enabled: true,
+            slice_plans_v1_enabled: true,
+            jobs_slice_first_fail_closed_enabled: true,
+            slice_budgets_enforced_enabled: true,
             default_workspace: Some("demo"),
             workspace_explicit: false,
             workspace_lock: true,

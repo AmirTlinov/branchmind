@@ -110,7 +110,7 @@ fn handle_note_promote(server: &mut crate::McpServer, env: &Envelope) -> OpRespo
             );
         }
     };
-    let Some((doc, seq)) = super::parse_doc_entry_ref(&note_ref) else {
+    let Some((doc, seq)) = super::handlers::parse_doc_entry_ref(&note_ref) else {
         return OpResponse::error(
             env.cmd.clone(),
             OpError {
@@ -256,7 +256,7 @@ fn handle_note_promote(server: &mut crate::McpServer, env: &Envelope) -> OpRespo
         cmd: env.cmd.clone(),
         args: Value::Object(forwarded),
     };
-    let mut resp = super::handle_knowledge_upsert(server, &sub_env);
+    let mut resp = super::handlers::handle_knowledge_upsert(server, &sub_env);
     if resp.error.is_none()
         && let Some(obj) = resp.result.as_object_mut()
     {

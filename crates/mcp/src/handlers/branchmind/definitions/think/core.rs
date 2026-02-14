@@ -54,6 +54,28 @@ pub(super) fn definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "think_macro_counter_hypothesis_stub",
+            "description": "One-shot macro: create a counter-hypothesis (tagged `counter`) that blocks `against`, plus a test stub that supports it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "target": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "trace_doc": { "type": "string" },
+                    "graph_doc": { "type": "string" },
+                    "step": { "type": "string" },
+                    "agent_id": { "type": "string" },
+                    "against": { "type": "string", "description": "Card id being countered (will be added to blocks[] of the counter-hypothesis)." },
+                    "label": { "type": "string", "description": "Optional human label used for default titles when counter/test cards are omitted." },
+                    "counter": { "anyOf": [ { "type": "object" }, { "type": "string" } ] },
+                    "test": { "anyOf": [ { "type": "object" }, { "type": "string" } ] },
+                    "verbosity": { "type": "string", "enum": ["full", "compact"] }
+                },
+                "required": ["workspace", "against"]
+            }
+        }),
+        json!({
             "name": "think_pipeline",
             "description": "Canonical pipeline: frame → hypothesis → test → evidence → decision (auto-link + optional decision note).",
             "inputSchema": {

@@ -63,3 +63,9 @@ pub struct RunnerStatusSnapshot {
     pub active_job_id: Option<String>,
     pub lease_expires_at_ms: Option<i64>,
 }
+
+#[derive(Clone, Debug)]
+pub struct RunnerLeaseSelfHealResult {
+    pub inspected: usize,
+    pub cleared: usize,
+}

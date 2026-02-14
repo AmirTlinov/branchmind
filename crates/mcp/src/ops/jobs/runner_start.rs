@@ -30,7 +30,63 @@ pub(super) fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope)
         }
     };
 
+    if server.jobs_unknown_args_fail_closed_enabled {
+        let Some(args_obj) = env.args.as_object() else {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "args must be an object".to_string(),
+                    recovery: Some(
+                        "Call jobs.runner.start with args={} (or omit args).".to_string(),
+                    ),
+                },
+            );
+        };
+        // NOTE: parse_envelope injects `workspace` into env.args for storage-layer convenience.
+        // Treat it as an implicit envelope key for strict unknown-args guards.
+        const IMPLICIT_ENVELOPE_KEYS: &[&str] =
+            &["workspace", "context_budget", "limit", "max_chars"];
+        let mut unknown = args_obj
+            .keys()
+            .filter(|k| !IMPLICIT_ENVELOPE_KEYS.iter().any(|ik| ik == &k.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        unknown.sort();
+        unknown.dedup();
+        if !unknown.is_empty() {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: format!("unknown args: {}", unknown.join(", ")),
+                    recovery: Some(
+                        "Remove unknown args or inspect schema via system op=schema.get (cmd=jobs.runner.start)."
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+    }
+
     let now_ms = crate::support::now_ms_i64();
+    // Self-heal runner leases before any UX decisions: clear dangling/terminal active_job_id links.
+    // This is best-effort (fail-open) to avoid blocking runner bootstrap on diagnostics.
+    let mut self_heal_warning: Option<serde_json::Value> = None;
+    let self_heal = match server
+        .store
+        .runner_leases_self_heal_active_job_links(&workspace, now_ms)
+    {
+        Ok(v) => Some(v),
+        Err(err) => {
+            self_heal_warning = Some(crate::warning(
+                "RUNNER_LEASE_SELF_HEAL_FAILED",
+                &format!("runner lease self-heal failed: {err}"),
+                "Proceeding without self-heal; run jobs.radar for diagnostics.",
+            ));
+            None
+        }
+    };
     let runner_status_before = match server.store.runner_status_snapshot(&workspace, now_ms) {
         Ok(v) => v,
         Err(crate::StoreError::InvalidInput(msg)) => {
@@ -61,7 +117,7 @@ pub(super) fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope)
     let running = counts.as_ref().map(|c| c.running).unwrap_or(0);
 
     if !runner_is_offline {
-        return OpResponse::success(
+        let mut resp = OpResponse::success(
             env.cmd.clone(),
             json!({
                 "workspace": workspace.as_str(),
@@ -79,6 +135,18 @@ pub(super) fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope)
                 }
             }),
         );
+        if let Some(sh) = self_heal
+            && let Some(obj) = resp.result.as_object_mut()
+        {
+            obj.insert(
+                "self_heal".to_string(),
+                json!({ "inspected": sh.inspected, "cleared": sh.cleared }),
+            );
+        }
+        if let Some(w) = self_heal_warning {
+            resp.warnings.push(w);
+        }
+        return resp;
     }
 
     let mut resp = OpResponse::success(
@@ -100,6 +168,17 @@ pub(super) fn handle_runner_start(server: &mut crate::McpServer, env: &Envelope)
             "runner_bootstrap": server.runner_bootstrap_json(&workspace)
         }),
     );
+    if let Some(sh) = self_heal
+        && let Some(obj) = resp.result.as_object_mut()
+    {
+        obj.insert(
+            "self_heal".to_string(),
+            json!({ "inspected": sh.inspected, "cleared": sh.cleared }),
+        );
+    }
+    if let Some(w) = self_heal_warning {
+        resp.warnings.push(w);
+    }
 
     match server.start_runner_on_demand(&workspace, now_ms) {
         Ok(true) => {

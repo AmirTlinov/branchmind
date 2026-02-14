@@ -234,6 +234,10 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
         msg.contains("BM10_NO_COUNTER_EDGES"),
         "expected strict gate to require a counter-position after supporting evidence exists"
     );
+    assert!(
+        msg.contains("tag `counter`"),
+        "expected strict gate recovery hint to mention tagging counter-hypotheses with `counter` to avoid counter→counter regress"
+    );
 
     // Add a counter-hypothesis (explicitly tagged counter, step-scoped) and its test stub.
     let _h2 = server.request(json!({
@@ -319,5 +323,225 @@ fn strict_reasoning_override_allows_closing_with_reason_and_risk() {
     assert!(
         closed_text.contains("WARNING: STRICT_OVERRIDE_APPLIED"),
         "expected macro to surface explicit strict override warning"
+    );
+}
+
+#[test]
+fn think_card_auto_tags_counter_for_counter_hypothesis_title_prefix() {
+    let mut server = Server::start_initialized("think_auto_counter_tag");
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
+                "workspace": "ws_auto_counter_tag",
+                "plan_title": "Plan Auto Counter Tag",
+                "task_title": "Task Auto Counter Tag",
+                "reasoning_mode": "strict",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
+                ]
+            } } }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let step_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("step_id"))
+        .and_then(|v| v.as_str())
+        .expect("step id")
+        .to_string();
+
+    // H1 + its supporting test.
+    let _h1 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
+                "workspace": "ws_auto_counter_tag",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "card": { "id": "H1", "type": "hypothesis", "title": "H1", "text": "Main hypothesis" }
+            } } }
+    }));
+    let _t1 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
+                "workspace": "ws_auto_counter_tag",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "card": { "id": "T1", "type": "test", "title": "T1", "text": "Minimal test stub" },
+                "supports": ["H1"]
+            } } }
+    }));
+
+    // Counter-hypothesis with conventional title prefix but without explicit tags.
+    let h2 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
+                "workspace": "ws_auto_counter_tag",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "card": { "id": "H2", "type": "hypothesis", "title": "Counter-hypothesis: H1", "text": "Counter" },
+                "blocks": ["H1"]
+            } } }
+    }));
+    let h2_text = extract_tool_text(&h2);
+    let warnings = h2_text
+        .get("warnings")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        warnings.iter().any(|w| {
+            w.get("code")
+                .and_then(|v| v.as_str())
+                .is_some_and(|code| code == "COUNTER_TAG_AUTO_ADDED")
+        }),
+        "expected think.card to auto-add counter tag for Counter-hypothesis title prefix"
+    );
+
+    let _t2 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
+                "workspace": "ws_auto_counter_tag",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "card": { "id": "T2", "type": "test", "title": "T2", "text": "Counter test stub" },
+                "supports": ["H2"]
+            } } }
+    }));
+
+    let closed = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_auto_counter_tag", "task": task_id } } }
+    }));
+    let closed_text = extract_tool_text_str(&closed);
+    assert!(
+        !closed_text.starts_with("ERROR:"),
+        "expected strict gate to allow closing after auto-tagged counter-hypothesis + test are present"
+    );
+}
+
+#[test]
+fn think_macro_counter_hypothesis_stub_creates_counter_and_test() {
+    let mut server = Server::start_initialized("think_macro_counter_stub");
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
+                "workspace": "ws_counter_stub",
+                "plan_title": "Plan Counter Stub",
+                "task_title": "Task Counter Stub",
+                "reasoning_mode": "strict",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
+                ]
+            } } }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let step_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("step_id"))
+        .and_then(|v| v.as_str())
+        .expect("step id")
+        .to_string();
+
+    // H1 + its supporting test.
+    let _h1 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
+                "workspace": "ws_counter_stub",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "card": { "id": "H1", "type": "hypothesis", "title": "H1", "text": "Main hypothesis" }
+            } } }
+    }));
+    let _t1 = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.card", "args": {
+                "workspace": "ws_counter_stub",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "card": { "id": "T1", "type": "test", "title": "T1", "text": "Minimal test stub" },
+                "supports": ["H1"]
+            } } }
+    }));
+
+    let counter_stub = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.macro.counter.hypothesis.stub", "args": {
+                "workspace": "ws_counter_stub",
+                "target": task_id.clone(),
+                "step": step_id.clone(),
+                "against": "H1",
+                "label": "H1",
+                "verbosity": "compact"
+            } } }
+    }));
+    let counter_stub_text = extract_tool_text(&counter_stub);
+    let counter_id = counter_stub_text
+        .get("result")
+        .and_then(|v| v.get("counter"))
+        .and_then(|v| v.get("card_id"))
+        .and_then(|v| v.as_str())
+        .expect("counter card id");
+    let test_id = counter_stub_text
+        .get("result")
+        .and_then(|v| v.get("test"))
+        .and_then(|v| v.get("card_id"))
+        .and_then(|v| v.as_str())
+        .expect("test card id");
+    assert!(
+        !counter_id.trim().is_empty() && !test_id.trim().is_empty(),
+        "expected macro to return both card ids"
+    );
+
+    let closed = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": { "workspace": "ws_counter_stub", "task": task_id } } }
+    }));
+    let closed_text = extract_tool_text_str(&closed);
+    assert!(
+        !closed_text.starts_with("ERROR:"),
+        "expected strict gate to allow closing after counter stub macro was applied"
     );
 }

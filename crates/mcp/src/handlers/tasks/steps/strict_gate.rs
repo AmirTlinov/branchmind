@@ -371,8 +371,8 @@ pub(crate) fn enforce_strict_reasoning_gate(mut ctx: StrictGateContext<'_>) -> R
                 }
                 if code == "BM10_NO_COUNTER_EDGES" && suggestions.len() < 3 {
                     suggestions.push(suggest_call(
-                        "think_card",
-                        "Steelman a counter-hypothesis (step-scoped).",
+                        "think_macro_counter_hypothesis_stub",
+                        "Create a counter-hypothesis + test stub (step-scoped; prevents counter→counter regress).",
                         "high",
                         json!({
                             "workspace": ctx.workspace.as_str(),
@@ -381,14 +381,8 @@ pub(crate) fn enforce_strict_reasoning_gate(mut ctx: StrictGateContext<'_>) -> R
                             "trace_doc": reasoning_ref.trace_doc.clone(),
                             "graph_doc": reasoning_ref.graph_doc.clone(),
                             "step": step_ref.step_id.clone(),
-                            "card": {
-                                "type": "hypothesis",
-                                "title": format!("Counter-hypothesis: {label}"),
-                                "text": "Steelman the opposite case; include 1 disconfirming test idea.",
-                                "status": "open",
-                                "tags": ["bm7", "counter"]
-                            },
-                            "blocks": [target_id]
+                            "against": target_id,
+                            "label": label
                         }),
                     ));
                 }
@@ -404,6 +398,17 @@ pub(crate) fn enforce_strict_reasoning_gate(mut ctx: StrictGateContext<'_>) -> R
                 {
                     apply_strict_override_from_ctx(&mut ctx, override_input, missing)?;
                 } else {
+                    let base_recovery = "Fix the missing reasoning artifacts (tests + counter-position) for this step, then retry.";
+                    let recovery = if missing
+                        .iter()
+                        .any(|code| code.trim() == "BM10_NO_COUNTER_EDGES")
+                    {
+                        format!(
+                            "{base_recovery} Note: if you add a counter-hypothesis manually, include tag `counter` (otherwise BM10 may ask for a counter-position for the counter-hypothesis too)."
+                        )
+                    } else {
+                        base_recovery.to_string()
+                    };
                     suggestions.push(build_override_suggestion(
                         ctx.args_obj,
                         ctx.workspace.as_str(),
@@ -415,9 +420,7 @@ pub(crate) fn enforce_strict_reasoning_gate(mut ctx: StrictGateContext<'_>) -> R
                     return Err(ai_error_with(
                         "REASONING_REQUIRED",
                         &message,
-                        Some(
-                            "Fix the missing reasoning artifacts (tests + counter-position) for this step, then retry.",
-                        ),
+                        Some(recovery.as_str()),
                         suggestions,
                     ));
                 }

@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _iter_plan_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    lines: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def main() -> int:
+    root = _repo_root()
+    plan = _iter_plan_lines(root / "tools" / "doctor.plan")
+
+    print("== doctor ==")
+    print(f"repo: {root}")
+
+    failures = 0
+    for cmd in plan:
+        print(f"\n$ {cmd}")
+        rc = subprocess.call(cmd, shell=True, cwd=root)
+        if rc != 0:
+            failures += 1
+            print(f"doctor: command failed (rc={rc})", file=sys.stderr)
+
+    if failures:
+        print(f"\nFAIL: doctor had {failures} failing command(s).", file=sys.stderr)
+        return 1
+
+    print("\nOK: doctor")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

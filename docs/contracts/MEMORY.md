@@ -233,15 +233,21 @@ Supported `id` forms (v1):
 - `a:<slug>` — a meaning-map anchor id (e.g. `a:core`, `a:storage`).
 - `runner:<id>` — a runner diagnostic ref (opens the current lease + runner-provided meta; read-only).
 - `STEP-...` — a stable step id (deep-links to the owning task + focused step; read-only).
+- `SLC-...` — a stable Slice‑Plans v1 slice id (opens slice binding + plan/spec + ready-to-run orchestration actions; read-only).
 - `TASK-...` / `PLAN-...` — a stable task/plan id (opens a minimal “navigation lens” derived from `tasks_resume_super`, read-only).
 - `TASK-...@s:n[.s:m...]` — deep-link to a step path inside a task (e.g. `TASK-001@s:0`; read-only).
 - `JOB-...` — a delegation job id (opens job status + bounded event tail; prompt is opt-in via `include_drafts=true`).
+- `artifact://jobs/JOB-.../<artifact_key>` — a stored job artifact ref (opens a bounded preview + `actions[]` for paging via `jobs.artifact.get`; read-only).
 - `JOB-...@<seq>` — a job event ref (opens the exact event + bounded context).
+- `artifact://jobs/JOB-.../<artifact_key>` — a stored job artifact ref (bounded preview; use `jobs.artifact.get` for paging).
 
 Optional:
 
 - `verbosity`: `full|compact` (default: `full`).
   - `compact` returns a minimal navigation payload (refs/focus/next_action when available).
+- `max_chars` (number, optional): enforce a strict response-size budget.
+  - When exceeded, `open` degrades by dropping payload-heavy fields first.
+  - For `SLC-*` in `verbosity=compact`, `open` keeps binding (id/kind/workspace + slice binding) and may trim/drop `slice.objective` / `slice.title` (and other non-essential slice fields) as a last resort to stay within budget.
 - `include_content` (bool, default `false`):
   - For `CARD-*`, adds `{ content:{ title, text } }` for “instant read” UX.
   - For `TASK-*` / `PLAN-*` / step deep-links, includes a bounded `content` block (`radar/steps/signals/memory/timeline/graph_diff`) so agents don’t need to bounce between `open` and `tasks.snapshot`.
@@ -253,10 +259,12 @@ Output (union):
 
 - Anchor: `{ kind:"anchor", id:"a:...", anchor:{ id, title, kind, status, description?, refs:[...], parent_id?, depends_on:[...], created_at_ms, updated_at_ms, registered }, stats:{ links_count, links_has_more }, cards:[...], count, truncated }`
 - Runner: `{ kind:"runner", id:"runner:<id>", status:"offline"|"idle"|"live", lease:{ runner_id, status:"idle"|"live", active_job_id?, lease_expires_at_ms, created_at_ms, updated_at_ms, lease_active, expires_in_ms }, meta?, truncated }`
+- Slice: `{ kind:"slice", id:"SLC-...", slice:{ plan_id, slice_id?, slice_task_id, title?, objective?, status?, budgets_json?, created_at_ms?, updated_at_ms? }, slice_plan_spec?, slice_task?, steps?, actions?, truncated }`
 - Task/plan: `{ kind:"task"|"plan", id:"TASK-..."|"PLAN-...", target:{...}, reasoning_ref:{...}, capsule, step_focus?, degradation, truncated }`
 - Step: `{ kind:"step", id:"STEP-..."|"TASK-...@s:n[.s:m...]", task_id:"TASK-...", step?:{ step_id, path }, path?:"s:n[.s:m...]", target:{...}, reasoning_ref:{...}, capsule, step_focus?, degradation, content?, truncated }`
 - Job: `{ kind:"job", id:"JOB-...", job:{ id, revision, status, title, kind, priority, task_id?, anchor_id?, runner?, summary?, created_at_ms, updated_at_ms, completed_at_ms? }, prompt?, events:[...], has_more_events, truncated }`
 - Job event: `{ kind:"job_event", ref:"JOB-...@<seq>", job:{...}, event:{...}, context:{ events:[...], has_more_events }, truncated }`
+- Job artifact: `{ kind:"job_artifact", id:"artifact://jobs/JOB-.../<artifact_key>", artifact:{ job_id, artifact_key, content_len, created_at_ms, source:"store"|"summary_fallback" }, content_text, actions?, truncated }`
 
 Semantics:
 
@@ -266,6 +274,7 @@ Semantics:
 - `runner:<id>` returns a runner lease snapshot. `status=offline` is derived only from lease expiry (`lease_expires_at_ms <= now_ms`), never from job-event heuristics.
 - `TASK-...` / `PLAN-...` is read-only: it never changes workspace focus. The output is intentionally small and navigation-oriented (capsule + reasoning refs + optional step focus).
 - `JOB-...` is read-only and bounded: it never changes focus, and it never dumps unbounded logs. Use the dedicated job tools (`tasks_jobs_open`) to tune event/prompt inclusion.
+- `artifact://jobs/...` is read-only and bounded: it returns a preview (default ~4k chars) for navigation. Use `jobs.artifact.get` for paging (`offset`).
 - Anchor snapshots are canonical-first by default (`include_drafts=false`): pinned cards, `v:canon`, and `decision/evidence/test` are preferred. Anchor registry notes should be tagged `v:canon` if they must appear in the default lens.
 - When opening a task/plan:
   - `include_drafts=false` uses `view="focus_only"` internally (low-noise default).
@@ -733,6 +742,8 @@ Where:
   - `card.id` (aka `card_id`) is optional; when omitted the server auto-generates `CARD-<seq>`.
   - `card.type` defaults to `"note"` when omitted.
   - At least one of `card.title` or `card.text` must be non-empty.
+- Heuristics (deterministic DX):
+  - If the card looks like a counter-position (title prefix `Counter-hypothesis:` or `blocks[]` + tag `bm7`), the server auto-adds tag `counter` when missing and emits `WARNING: COUNTER_TAG_AUTO_ADDED`. This prevents strict BM10 from requiring a counter-position for the counter-hypothesis (avoids counter→counter regress).
 - Optional:
   - `card.status` (default: `"open"`),
   - `card.tags` (default: `[]`),

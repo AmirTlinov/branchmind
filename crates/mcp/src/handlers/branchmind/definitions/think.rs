@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod add;
+mod atlas;
 mod core;
 mod graph_ops;
 mod lint;
@@ -15,6 +16,7 @@ pub(crate) fn think_definitions() -> Vec<Value> {
     let mut out = Vec::new();
 
     out.extend(core::definitions());
+    out.extend(atlas::definitions());
     out.extend(add::definitions());
     out.extend(query::definitions());
     out.extend(graph_ops::definitions());

@@ -12,6 +12,8 @@ const MAX_ANCHOR_REFS: usize = 32;
 const MAX_ANCHOR_ALIASES: usize = 32;
 const MAX_ANCHOR_DEPENDS: usize = 32;
 const MAX_LIST_LIMIT: usize = 200;
+const ANCHOR_BINDING_KIND_PATH: &str = "path";
+const PATH_REF_PREFIX: &str = "path:";
 
 pub(super) fn normalize_anchor_id(raw: &str) -> Result<String, StoreError> {
     let raw = raw.trim();
@@ -214,6 +216,44 @@ pub(in crate::store) fn decode_json_string_list(
     }
     serde_json::from_str::<Vec<String>>(trimmed)
         .map_err(|_| StoreError::InvalidInput("stored anchor list is invalid json"))
+}
+
+pub(in crate::store) fn repo_rel_from_path_ref(raw: &str) -> Result<Option<String>, StoreError> {
+    let trimmed = raw.trim();
+    let Some(prefix) = trimmed.get(0..PATH_REF_PREFIX.len()) else {
+        return Ok(None);
+    };
+    if !prefix.eq_ignore_ascii_case(PATH_REF_PREFIX) {
+        return Ok(None);
+    }
+    let remainder = trimmed[PATH_REF_PREFIX.len()..].trim();
+    if remainder.is_empty() {
+        return Err(StoreError::InvalidInput("path ref is empty"));
+    }
+    if remainder.starts_with('/') || remainder.starts_with('\\') {
+        return Err(StoreError::InvalidInput("path ref must be repo-relative"));
+    }
+    // Windows drive (C:\ / C:/).
+    if remainder.len() >= 2 && remainder.as_bytes().get(1) == Some(&b':') {
+        return Err(StoreError::InvalidInput("path ref must be repo-relative"));
+    }
+
+    let normalized = remainder.replace('\\', "/");
+    let mut out = Vec::<String>::new();
+    for part in normalized.split('/') {
+        let part = part.trim();
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return Err(StoreError::InvalidInput("path ref must not contain '..'"));
+        }
+        out.push(part.to_string());
+    }
+    if out.is_empty() {
+        return Ok(Some(".".to_string()));
+    }
+    Ok(Some(out.join("/")))
 }
 
 impl SqliteStore {
@@ -601,6 +641,16 @@ impl SqliteStore {
             params![workspace.as_str(), from_id.as_str(), to_id.as_str()],
         )?;
 
+        // Move anchor path bindings (path→anchor map).
+        match tx.execute(
+            "UPDATE anchor_bindings SET anchor_id=?3, updated_at_ms=?4 WHERE workspace=?1 AND anchor_id=?2",
+            params![workspace.as_str(), from_id.as_str(), to_id.as_str(), now_ms],
+        ) {
+            Ok(_) => {}
+            Err(err) if is_missing_table(&err, "anchor_bindings") => {}
+            Err(err) => return Err(err.into()),
+        }
+
         // Remove old anchor record.
         tx.execute(
             "DELETE FROM anchors WHERE workspace=?1 AND id=?2",
@@ -823,6 +873,41 @@ fn anchor_upsert_tx(
             "INSERT INTO anchor_aliases(workspace, alias_id, anchor_id) VALUES (?1, ?2, ?3)",
             params![workspace.as_str(), alias.as_str(), id.as_str()],
         )?;
+    }
+
+    // Replace anchor path bindings atomically with the anchor upsert.
+    // Bindings are derived from `refs[]` entries prefixed with `path:` (repo-relative, normalized).
+    let mut path_bindings = Vec::<String>::new();
+    for r in &refs {
+        if let Some(repo_rel) = repo_rel_from_path_ref(r)? {
+            path_bindings.push(repo_rel);
+        }
+    }
+    path_bindings.sort();
+    path_bindings.dedup();
+
+    // Best-effort compatibility for older/read-only stores: ignore missing-table drift.
+    let bindings_table_available = match tx.execute(
+        "DELETE FROM anchor_bindings WHERE workspace=?1 AND anchor_id=?2 AND kind=?3",
+        params![workspace.as_str(), id.as_str(), ANCHOR_BINDING_KIND_PATH],
+    ) {
+        Ok(_) => true,
+        Err(err) if is_missing_table(&err, "anchor_bindings") => false,
+        Err(err) => return Err(err.into()),
+    };
+    if bindings_table_available {
+        for repo_rel in &path_bindings {
+            tx.execute(
+                "INSERT INTO anchor_bindings(workspace, anchor_id, kind, repo_rel, created_at_ms, updated_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                params![
+                    workspace.as_str(),
+                    id.as_str(),
+                    ANCHOR_BINDING_KIND_PATH,
+                    repo_rel.as_str(),
+                    now_ms
+                ],
+            )?;
+        }
     }
 
     Ok(AnchorUpsertResult {

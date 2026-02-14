@@ -9,7 +9,8 @@ const MAX_QUERY_CHARS: usize = 200;
 
 fn kind_bias(kind: &str) -> i64 {
     match kind {
-        "plan" => -1,
+        "plan" => -2,
+        "slice" => -1,
         _ => 0,
     }
 }
@@ -77,6 +78,21 @@ impl McpServer {
             Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
+        let slices = if self.slice_plans_v1_enabled {
+            match self.store.search_plan_slices(
+                &workspace,
+                bm_storage::PlanSlicesSearchRequest {
+                    text: text.clone(),
+                    limit,
+                },
+            ) {
+                Ok(v) => Some(v),
+                Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        } else {
+            None
+        };
 
         let mut hits = Vec::<Value>::new();
         for plan in plans.plans.into_iter() {
@@ -95,6 +111,20 @@ impl McpServer {
                 "plan_id": task.plan_id,
                 "updated_at_ms": task.updated_at_ms,
             }));
+        }
+        if let Some(slices) = slices.as_ref() {
+            for slice in slices.slices.iter() {
+                hits.push(json!({
+                    "kind": "slice",
+                    "id": slice.slice_id,
+                    "title": slice.title,
+                    "plan_id": slice.plan_id,
+                    "slice_task_id": slice.slice_task_id,
+                    "status": slice.status,
+                    "objective": slice.objective,
+                    "updated_at_ms": slice.updated_at_ms,
+                }));
+            }
         }
 
         hits.sort_by(|a, b| {
@@ -116,6 +146,9 @@ impl McpServer {
         });
 
         let mut has_more = plans.has_more || tasks.has_more;
+        if let Some(slices) = slices.as_ref() {
+            has_more = has_more || slices.has_more;
+        }
         if hits.len() > limit {
             hits.truncate(limit);
             has_more = true;

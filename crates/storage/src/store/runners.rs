@@ -243,6 +243,77 @@ impl SqliteStore {
         })
     }
 
+    /// Best-effort self-heal for runner lease rows that reference a job that is terminal/unknown
+    /// or claimed by a different runner. This keeps daily supervisor UX (radar/control.center)
+    /// deterministic and avoids "runner stuck on DONE job" noise.
+    pub fn runner_leases_self_heal_active_job_links(
+        &mut self,
+        workspace: &WorkspaceId,
+        now_ms: i64,
+    ) -> Result<RunnerLeaseSelfHealResult, StoreError> {
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, workspace, now_ms)?;
+
+        let mut inspected = 0usize;
+        let mut cleared = 0usize;
+
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                SELECT runner_id, active_job_id
+                FROM runner_leases
+                WHERE workspace=?1
+                  AND lease_expires_at_ms > ?2
+                  AND active_job_id IS NOT NULL
+                ORDER BY runner_id ASC
+                "#,
+            )?;
+            let mut rows = stmt.query(params![workspace.as_str(), now_ms])?;
+            while let Some(row) = rows.next()? {
+                let runner_id: String = row.get(0)?;
+                let active_job_id: String = row.get(1)?;
+                inspected = inspected.saturating_add(1);
+
+                let job: Option<(String, Option<String>)> = tx
+                    .query_row(
+                        "SELECT status, runner FROM jobs WHERE workspace=?1 AND id=?2",
+                        params![workspace.as_str(), active_job_id.as_str()],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+
+                let should_clear = match job {
+                    None => true,
+                    Some((status, job_runner)) => {
+                        status != "RUNNING" || job_runner.as_deref() != Some(runner_id.as_str())
+                    }
+                };
+
+                if should_clear {
+                    let changed = tx.execute(
+                        r#"
+                        UPDATE runner_leases
+                        SET active_job_id=NULL, updated_at_ms=?3
+                        WHERE workspace=?1 AND runner_id=?2 AND active_job_id=?4
+                        "#,
+                        params![
+                            workspace.as_str(),
+                            runner_id.as_str(),
+                            now_ms,
+                            active_job_id.as_str()
+                        ],
+                    )?;
+                    if changed > 0 {
+                        cleared = cleared.saturating_add(1);
+                    }
+                }
+            }
+        }
+
+        tx.commit()?;
+        Ok(RunnerLeaseSelfHealResult { inspected, cleared })
+    }
+
     pub fn runner_leases_list_active(
         &self,
         workspace: &WorkspaceId,

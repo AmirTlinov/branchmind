@@ -16,6 +16,10 @@ pub(super) fn render_branchmind_status_lines(
         .get("workspace")
         .and_then(|v| v.as_str())
         .and_then(|s| opt_str(Some(s)));
+    let bound_path = result
+        .get("workspace_bound_path")
+        .and_then(|v| v.as_str())
+        .and_then(|s| opt_str(Some(s)));
     let checkout = result
         .get("checkout")
         .and_then(|v| v.as_str())
@@ -64,6 +68,26 @@ pub(super) fn render_branchmind_status_lines(
     if let Some(workspace) = workspace {
         state.push_str(" workspace=");
         state.push_str(workspace);
+    }
+    if let Some(bound_path) = bound_path {
+        let parts = bound_path
+            .split(['/', '\\'])
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        let mut short = match parts.len() {
+            0 => bound_path.to_string(),
+            1 => parts[0].to_string(),
+            _ => format!("…/{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]),
+        };
+        short = short
+            .chars()
+            .map(|ch| if ch.is_whitespace() { '_' } else { ch })
+            .collect::<String>();
+        let short = truncate_line(&short, 40);
+        if !short.is_empty() {
+            state.push_str(" path=");
+            state.push_str(&short);
+        }
     }
     if let Some(mode) = workspace_mode {
         state.push_str(" mode=");

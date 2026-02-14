@@ -46,4 +46,25 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         handler_name: Some("workspace_reset".to_string()),
         handler: None,
     });
+
+    specs.push(CommandSpec {
+        cmd: "workspace.list".to_string(),
+        domain_tool: ToolName::WorkspaceOps,
+        tier: Tier::Gold,
+        stability: Stability::Stable,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#workspace.list".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: crate::ops::ConfirmLevel::None,
+            idempotent: true,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Handler,
+        op_aliases: vec!["list".to_string()],
+        handler_name: Some("workspace_list".to_string()),
+        handler: None,
+    });
 }

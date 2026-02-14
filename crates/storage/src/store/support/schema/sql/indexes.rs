@@ -19,6 +19,9 @@ pub(super) const SQL: &str = r#"
         CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_child_unique ON steps(workspace, task_id, parent_step_id, ordinal) WHERE parent_step_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_steps_lookup ON steps(workspace, task_id, parent_step_id, ordinal);
         CREATE INDEX IF NOT EXISTS idx_steps_task_completed ON steps(workspace, task_id, completed, created_at_ms);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_slices_workspace_slice ON plan_slices(workspace, slice_id);
+        CREATE INDEX IF NOT EXISTS idx_plan_slices_plan_updated ON plan_slices(workspace, plan_id, updated_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_plan_slices_task ON plan_slices(workspace, slice_task_id);
         CREATE INDEX IF NOT EXISTS idx_step_notes_step_seq ON step_notes(workspace, task_id, step_id, seq);
         CREATE INDEX IF NOT EXISTS idx_task_items_entity ON task_items(workspace, entity_kind, entity_id, field);
         CREATE INDEX IF NOT EXISTS idx_task_nodes_parent ON task_nodes(workspace, task_id, parent_step_id, ordinal);
@@ -28,6 +31,7 @@ pub(super) const SQL: &str = r#"
         CREATE INDEX IF NOT EXISTS idx_anchor_aliases_anchor ON anchor_aliases(workspace, anchor_id, alias_id);
         CREATE INDEX IF NOT EXISTS idx_anchor_links_lookup ON anchor_links(workspace, anchor_id, last_ts_ms);
         CREATE INDEX IF NOT EXISTS idx_anchor_links_card ON anchor_links(workspace, branch, graph_doc, card_id);
+        CREATE INDEX IF NOT EXISTS idx_anchor_bindings_repo_rel ON anchor_bindings(workspace, repo_rel, anchor_id);
         CREATE INDEX IF NOT EXISTS idx_knowledge_keys_anchor_updated
           ON knowledge_keys(workspace, anchor_id, updated_at_ms DESC);
         CREATE INDEX IF NOT EXISTS idx_knowledge_keys_workspace_updated
@@ -39,4 +43,9 @@ pub(super) const SQL: &str = r#"
         CREATE INDEX IF NOT EXISTS idx_jobs_task_updated ON jobs(workspace, task_id, updated_at_ms);
         CREATE INDEX IF NOT EXISTS idx_jobs_anchor_updated ON jobs(workspace, anchor_id, updated_at_ms);
         CREATE INDEX IF NOT EXISTS idx_job_events_job_seq ON job_events(workspace, job_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_job_artifacts_job ON job_artifacts(workspace, job_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_job_bus_messages_idem ON job_bus_messages(workspace, idempotency_key);
+        CREATE INDEX IF NOT EXISTS idx_job_bus_messages_thread_seq ON job_bus_messages(workspace, thread_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_job_bus_offsets_lookup ON job_bus_offsets(workspace, consumer_id, thread_id);
+        CREATE INDEX IF NOT EXISTS idx_workspace_paths_workspace ON workspace_paths(workspace);
         "#;

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod cancel;
+mod exec_summary;
 mod json;
 mod runner_start;
 mod wait;
@@ -12,6 +13,44 @@ use crate::ops::{
 use serde_json::json;
 
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
+    // v1: jobs.exec.summary (one-command teamlead pulse, minimal/noise-first)
+    specs.push(CommandSpec {
+        cmd: "jobs.exec.summary".to_string(),
+        domain_tool: ToolName::JobsOps,
+        tier: Tier::Gold,
+        stability: Stability::Stable,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#jobs.exec.summary".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: true,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Custom {
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "view": { "type": "string", "enum": ["smart", "audit"] },
+                    "limit": { "type": "integer" },
+                    "task": { "type": "string" },
+                    "anchor": { "type": "string" },
+                    "stall_after_s": { "type": "integer" },
+                    "max_regressions": { "type": "integer" },
+                    "include_details": { "type": "boolean" }
+                },
+                "required": [],
+                "additionalProperties": false
+            }),
+            example_minimal_args: json!({}),
+        },
+        op_aliases: vec!["exec.summary".to_string()],
+        handler_name: None,
+        handler: Some(exec_summary::handle_jobs_exec_summary),
+    });
+
     // v1: jobs.runner.start (custom, explicit runner bootstrap)
     specs.push(CommandSpec {
         cmd: "jobs.runner.start".to_string(),
@@ -64,7 +103,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                     "job": { "type": "string" },
                     "reason": { "type": "string" },
                     "refs": { "type": "array", "items": { "type": "string" } },
-                    "meta": { "type": "object" }
+                    "meta": { "type": "object" },
+                    "force_running": { "type": "boolean" },
+                    "expected_revision": { "type": "integer" }
                 },
                 "required": ["job"]
             }),
@@ -97,7 +138,11 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 "properties": {
                     "job": { "type": "string" },
                     "timeout_ms": { "type": "integer" },
-                    "poll_ms": { "type": "integer" }
+                    "poll_ms": { "type": "integer" },
+                    "mode": { "type": "string", "enum": ["stream", "poll"] },
+                    "after_seq": { "type": "integer" },
+                    "max_events": { "type": "integer" },
+                    "limit": { "type": "integer", "description": "deprecated alias for max_events" }
                 },
                 "required": ["job"]
             }),
@@ -130,7 +175,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 },
                 budget: BudgetPolicy::standard(),
                 schema: SchemaSource::Handler,
-                op_aliases: Vec::new(),
+                op_aliases: vec!["runner.heartbeat".to_string()],
                 handler_name: Some(name.to_string()),
                 handler: None,
             });
@@ -143,12 +188,31 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         let suffix = &name["tasks_jobs_".len()..];
         let cmd = format!("jobs.{}", name_to_cmd_segments(suffix));
 
-        let mut op_aliases = Vec::<String>::new();
-        if matches!(suffix, "create" | "list" | "radar" | "open") {
-            op_aliases.push(suffix.to_string());
-        }
+        // Jobs UX: expose every first-class jobs.* command as a direct op alias so
+        // copy/paste never requires switching to op=call + cmd for common flows.
+        let op_aliases = vec![name_to_cmd_segments(suffix)];
 
-        let doc_ref_anchor = if matches!(suffix, "create" | "list" | "radar" | "open") {
+        let doc_ref_anchor = if matches!(
+            suffix,
+            "create"
+                | "list"
+                | "radar"
+                | "open"
+                | "artifact_put"
+                | "artifact_get"
+                | "complete"
+                | "control_center"
+                | "macro_dispatch_scout"
+                | "macro_dispatch_builder"
+                | "macro_dispatch_validator"
+                | "pipeline_gate"
+                | "pipeline_apply"
+                | "pipeline_context_review"
+                | "mesh_publish"
+                | "mesh_pull"
+                | "mesh_ack"
+                | "mesh_link"
+        ) {
             format!("#{cmd}")
         } else {
             "#cmd-index".to_string()
@@ -163,8 +227,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 anchor: doc_ref_anchor,
             },
             safety: Safety {
-                destructive: matches!(suffix, "complete" | "requeue"),
-                confirm_level: if matches!(suffix, "complete" | "requeue") {
+                destructive: matches!(suffix, "complete" | "requeue" | "macro_rotate_stalled"),
+                confirm_level: if matches!(suffix, "complete" | "requeue" | "macro_rotate_stalled")
+                {
                     ConfirmLevel::Soft
                 } else {
                     ConfirmLevel::None

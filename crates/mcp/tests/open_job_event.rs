@@ -71,7 +71,8 @@ fn open_job_event_ref_is_supported_and_is_read_only() {
                 "claim_revision": claim_revision,
                 "kind": "checkpoint",
                 "message": "checkpoint 1",
-                "refs": ["JOB-REF"]
+                "refs": ["JOB-REF"],
+                "meta": { "step": { "command": "test.checkpoint", "result": "checkpoint 1" } }
             } } }
     }));
     let reported_out = extract_tool_text(&reported);

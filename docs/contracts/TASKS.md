@@ -774,7 +774,7 @@ Semantics:
 
 List **active** jobs with a low-noise “attention” hint and the latest meaningful update.
 
-Input: `{ workspace, status?, task?, anchor?, limit?, runners_limit?, runners_status?, offline_limit?, stale_after_s?, reply_job?, reply_message?, reply_refs?, max_chars?, fmt? }`
+Input: `{ workspace, status?, task?, anchor?, limit?, runners_limit?, runners_status?, include_offline?, offline_limit?, stale_after_s?, reply_job?, reply_message?, reply_refs?, max_chars?, fmt? }`
 
 Output: `{ runner_status, runner_leases, runner_leases_offline?, runner_diagnostics?, jobs, count, has_more, truncated }`
 
@@ -944,6 +944,8 @@ Semantics:
 - `kind` allows runners to separate `heartbeat` vs `progress` vs `checkpoint` in a low-noise way (bounded event log).
 - `kind=proof_gate` is reserved for runner quality gates (e.g. “DONE requires proof refs”). It is **attention-worthy** but does not imply `needs_manager`.
 - `kind=heartbeat` is *coalesced* by default (long-running runners should not create unbounded heartbeat spam).
+- **Strict progress schema (v2 guardrail):** for `kind=progress` and `kind=checkpoint`, the server requires `meta.step.command` and one of `meta.step.result` or `meta.step.error`.
+  Calls missing this shape are rejected with `INVALID_INPUT` (fail-closed).
 - The server rejects reports when `(runner_id, claim_revision)` does not match the current job row (prevents “zombie runner” writes after reclaim).
 - Each report renews the claim lease: `job.claim_expires_at_ms = now_ms + lease_ttl_ms`.
 
@@ -962,6 +964,10 @@ Semantics:
 - DX salvage: if `refs` is empty and `status=DONE`, the server may **conservatively salvage** stable proof-like references from `summary`
   (e.g. `CMD:` / `LINK:` lines or strong command-looking bullets) to reduce accidental proof-gate loops. This does not override explicit `refs`.
 - Navigation: the server ensures the job id (`JOB-*`) is present in the completion event refs when possible (bounded).
+- **HIGH priority DONE proof gate (v2 guardrail):** when job `priority=HIGH` and `status=DONE`, completion is blocked unless:
+  - the job has at least one prior `checkpoint` event, and
+  - `refs` includes at least one proof receipt: `LINK:` / `CMD:` / `FILE:`.
+  On failure the server returns `PRECONDITION_FAILED` with recovery actions (open + report a checkpoint).
 - The server rejects completion when `(runner_id, claim_revision)` does not match the current job row (prevents double-completion after reclaim).
 
 ### `tasks_jobs_requeue`

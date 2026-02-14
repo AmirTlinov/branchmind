@@ -13,12 +13,14 @@ pub(crate) fn spawn_exec(
     out_path: &Path,
     stderr_path: &Path,
     prompt: &str,
+    executor_profile: &str,
+    model: Option<&str>,
 ) -> Result<Child, String> {
     let stderr_file = File::create(stderr_path)
         .map_err(|e| format!("create codex stderr capture failed: {e}"))?;
 
-    let mut child = Command::new(&cfg.codex_bin)
-        .arg("exec")
+    let mut cmd = Command::new(&cfg.codex_bin);
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
         .arg("approval_policy=\"never\"")
@@ -27,7 +29,16 @@ pub(crate) fn spawn_exec(
         .arg("--output-schema")
         .arg(schema_path)
         .arg("--output-last-message")
-        .arg(out_path)
+        .arg(out_path);
+    if let Some(model) = model {
+        cmd.arg("--model").arg(model);
+    }
+    if executor_profile.eq_ignore_ascii_case("xhigh") {
+        // Best-effort codex effort hint: high reasoning effort for flagship quality slices.
+        cmd.arg("-c").arg("model_reasoning_effort=\"high\"");
+    }
+
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::from(stderr_file))

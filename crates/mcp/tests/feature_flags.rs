@@ -112,3 +112,70 @@ fn knowledge_autolint_flag_downgrades_auto_lint_to_warning() {
         "expected FEATURE_DISABLED warning when auto lint is requested but disabled: {warnings:?}"
     );
 }
+
+#[test]
+fn slice_plans_v1_flag_can_disable_slice_tools() {
+    let mut server = Server::start_initialized_with_args(
+        "slice_plans_v1_flag_can_disable_slice_tools",
+        &[
+            "--toolset",
+            "daily",
+            "--workspace",
+            "ws_flags_slices",
+            "--no-slice-plans-v1",
+        ],
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.slices.apply", "args": {} } }
+    }));
+    let out = extract_tool_text(&resp);
+    assert!(
+        !out.get("success").and_then(|v| v.as_bool()).unwrap_or(true),
+        "expected failure: {out}"
+    );
+    assert_eq!(
+        out.get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        "FEATURE_DISABLED",
+        "expected FEATURE_DISABLED: {out}"
+    );
+}
+
+#[test]
+fn jobs_slice_first_fail_closed_flag_can_allow_legacy_scout_dispatch() {
+    let mut server = Server::start_initialized_with_args(
+        "jobs_slice_first_fail_closed_flag_can_allow_legacy_scout_dispatch",
+        &[
+            "--toolset",
+            "daily",
+            "--workspace",
+            "ws_flags_jobs_legacy",
+            "--no-jobs-slice-first-fail-closed",
+        ],
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.macro.dispatch.scout", "args": {
+            "task": "PLAN-LEGACY",
+            "slice_id": "SLC-LEGACY-001",
+            "objective": "Legacy scout objective",
+            "dry_run": true
+        } } }
+    }));
+    let out = extract_tool_text(&resp);
+    assert!(
+        out.get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "expected success: {out}"
+    );
+}

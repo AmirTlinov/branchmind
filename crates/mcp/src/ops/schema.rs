@@ -49,7 +49,10 @@ pub(crate) fn schema_bundle_for_cmd(
         return Err(OpError {
             code: "UNKNOWN_CMD".to_string(),
             message: format!("Unknown cmd: {cmd}"),
-            recovery: Some("Use system schema.get to discover cmds.".to_string()),
+            recovery: Some(
+                "Use system op=cmd.list to discover cmds (and system op=schema.get for exact schemas)."
+                    .to_string(),
+            ),
         });
     };
 
@@ -211,6 +214,12 @@ fn generate_example_from_schema(schema: &Value, key_hint: Option<&str>) -> Value
             })
             .unwrap_or_default();
         return generate_object_example(schema, &extra_required);
+    }
+
+    // For object schemas with additional guards (allOf/anyOf), keep base examples actionable.
+    // Otherwise falling through to allOf first-subschema can degrade examples to "<value>".
+    if is_objectish(schema) && schema.get("properties").is_some() {
+        return generate_object_example(schema, &[]);
     }
 
     if let Some(arr) = schema.get("oneOf").and_then(|v| v.as_array())

@@ -5,11 +5,35 @@ tasks/steps/notes/cards/evidence/tests to **concrete parts of a system**.
 
 Anchors are **not** file paths. They are semantic identifiers meant to survive refactors.
 
+However, anchors may include optional **bindings** to repo-relative paths to enable fast navigation
+from “where in the code?” to “what is this area *meaning*?” without turning anchors into paths.
+
+Bindings are *hints* (not identity): refactors may update bindings, while the anchor id stays stable.
+
 Related types:
 
 - `AnchorId` — see `TYPES.md`
 - visibility tags: `v:canon` / `v:draft` — see `TYPES.md`
  - legacy lane tag: `lane:agent:*` — treated as draft unless promoted (see `TYPES.md`)
+
+## Bindings (path → anchor)
+
+Bindings are stored as:
+
+- `anchor.refs[]` entries prefixed with `path:` (repo-relative, normalized), and
+- `anchor.bindings[]` structured rows (so clients don’t have to parse `refs`).
+
+Binding semantics:
+
+- `path:<repo_rel>` must be repo-relative (no leading `/`, no `..` segments).
+- A binding at `repo_rel` matches that path and all its descendants by prefix (via segment prefixes).
+- `open(id=\"<path>\")` may auto-jump to the best matching anchor (and returns a `jump` block explaining why).
+
+Atlas helpers (directory seeding / transparency):
+
+- `think.atlas.suggest` — scan the bound repo root and propose a directory-based atlas (10–30 anchors).
+- `think.macro.atlas.apply` — apply a proposal (upsert anchors + bind_paths).
+- `think.atlas.bindings.list` — list the bindings index (path → anchor) to keep the “magic” transparent.
 
 ## `anchors_list`
 
@@ -37,6 +61,7 @@ Semantics:
 - Ordering is deterministic: `anchors` are sorted by `id` ascending.
 - `text` matches against `id` and `title` (case-insensitive, best-effort).
 - `limit` is clamped to a safe maximum (server-defined).
+- Each anchor may include `bindings[]` (structured view of `path:` refs).
 
 ## `anchor_snapshot`
 
@@ -65,6 +90,7 @@ Semantics:
   - includes pinned cards, cards tagged `v:canon`, and canonical card types (`decision|evidence|test`),
   - excludes explicit drafts (`v:draft`) and legacy lane drafts (`lane:agent:*`) unless promoted.
 - If the anchor record defines `aliases[]`, the snapshot includes artifacts tagged with any alias ids as well.
+- `anchor.bindings[]` provides the structured view of `path:` refs (kind/repo_rel/timestamps).
 - If `include_drafts=true`, draft filtering is disabled.
 - Task lens:
   - `tasks[]` is a bounded, deterministic list of **recent tasks touching this anchor** (derived from `anchor_links`).
@@ -225,6 +251,29 @@ Semantics:
   - common signals include orphan anchors (no linked artifacts), unknown `parent_id`/`depends_on`,
     and alias drift in relations.
 
+## `anchor_resolve`
+
+Resolve a code path to the best matching anchor binding (atlas jump).
+
+Input:
+
+```json
+{
+  "workspace": "acme/repo",
+  "path": "crates/mcp/src",
+  "limit": 20
+}
+```
+
+Output (selected):
+
+- `{ workspace, path:{input, repo_rel, bound_root}, best, candidates }`
+
+Semantics:
+
+- Deterministic: prefers the deepest matching `repo_rel`, then most-recent binding, then `anchor_id`.
+- When no binding exists, the response includes an action to create an anchor + bind it (`macro_anchor_note bind_paths=[...]`).
+
 ## `macro_anchor_note`
 
 One-call “bind knowledge to meaning”.
@@ -242,6 +291,8 @@ Input:
   "anchor": "a:storage",
   "title": "Storage adapter",
   "kind": "component",
+  "bind_paths": ["crates/storage/src/store"],
+  "bind_kind": "path",
   "aliases": ["a:store"],
   "content": "Decision: keep store single-writer + atomic tx for task mutation + emitted reasoning event.",
   "card_type": "decision",
@@ -263,3 +314,5 @@ Semantics:
 - If `target`/`step` is provided (and resolves), the card is committed into that entity's reasoning scope
   (so it remains discoverable from task/step views). Otherwise, it is committed into the workspace-level
   anchor registry scope.
+- If `bind_paths[]` is provided, each path is normalized to `repo_rel` and stored as a `path:<repo_rel>` ref
+  (and surfaced in `anchor.bindings[]`). Absolute paths require the workspace to have a bound repo root.

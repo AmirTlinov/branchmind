@@ -32,6 +32,7 @@ pub(crate) fn handler_to_op_response(
                 workspace,
                 suggestions,
                 None,
+                cmd,
             ));
         }
         return OpResponse {
@@ -75,6 +76,7 @@ pub(crate) fn handler_to_op_response(
             workspace,
             suggestions,
             Some(mapped_code.as_str()),
+            cmd,
         ));
     }
 
@@ -97,6 +99,7 @@ fn handler_suggestions_to_actions(
     workspace: Option<&str>,
     suggestions: &[Value],
     error_code: Option<&str>,
+    current_cmd: &str,
 ) -> Vec<Action> {
     let mut out = Vec::<Action>::new();
     for (idx, suggestion) in suggestions.iter().enumerate() {
@@ -192,8 +195,36 @@ fn handler_suggestions_to_actions(
             continue;
         }
 
+        if target == "workspace_use" {
+            let Some(params_obj) = params.as_object() else {
+                continue;
+            };
+            let Some(ws) = params_obj.get("workspace").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let ws = ws.trim();
+            if ws.is_empty() {
+                continue;
+            }
+
+            out.push(Action {
+                action_id: format!("recover.handler.workspace.use::{idx}"),
+                priority,
+                tool: ToolName::WorkspaceOps.as_str().to_string(),
+                args: json!({
+                    "op": "use",
+                    "args": { "workspace": ws },
+                    "budget_profile": BudgetProfile::Portal.as_str(),
+                    "portal_view": "compact"
+                }),
+                why,
+                risk: "Низкий".to_string(),
+            });
+            continue;
+        }
+
         // Most handler suggestions reference handler names; map them via registry.
-        if let Some(spec) = registry.find_by_handler_name(target) {
+        if let Some(spec) = preferred_handler_spec_for_scope(registry, target, current_cmd) {
             let mut env = serde_json::Map::new();
             if let Some(ws) = workspace {
                 env.insert("workspace".to_string(), Value::String(ws.to_string()));
@@ -213,7 +244,7 @@ fn handler_suggestions_to_actions(
             out.push(Action {
                 action_id: format!(
                     "recover.handler.call.{}::{idx}",
-                    sanitize_action_id_segment(target)
+                    sanitize_action_id_segment(&spec.cmd)
                 ),
                 priority,
                 tool: spec.domain_tool.as_str().to_string(),
@@ -242,6 +273,37 @@ fn handler_suggestions_to_actions(
         });
     }
     out
+}
+
+fn preferred_handler_spec_for_scope<'a>(
+    registry: &'a CommandRegistry,
+    handler_name: &str,
+    current_cmd: &str,
+) -> Option<&'a crate::ops::CommandSpec> {
+    let mut matches = registry
+        .specs()
+        .iter()
+        .filter(|spec| spec.handler_name.as_deref() == Some(handler_name))
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return None;
+    }
+
+    let preferred_tool = if current_cmd.starts_with("jobs.") {
+        Some(ToolName::JobsOps)
+    } else if current_cmd.starts_with("tasks.") {
+        Some(ToolName::TasksOps)
+    } else {
+        None
+    };
+
+    if let Some(tool) = preferred_tool
+        && let Some(idx) = matches.iter().position(|spec| spec.domain_tool == tool)
+    {
+        return Some(matches.swap_remove(idx));
+    }
+
+    Some(matches.swap_remove(0))
 }
 
 fn parse_suggestion_priority(raw: &str) -> ActionPriority {

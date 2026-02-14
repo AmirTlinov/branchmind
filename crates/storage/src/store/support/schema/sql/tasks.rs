@@ -68,4 +68,19 @@ pub(super) const SQL: &str = r#"
           type TEXT NOT NULL,
           payload_json TEXT NOT NULL
         );
+
+        -- Slice-plan bindings: canonical mapping plan_id + slice_id -> internal slice task container.
+        CREATE TABLE IF NOT EXISTS plan_slices (
+          workspace TEXT NOT NULL,
+          plan_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          slice_task_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          objective TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'planned',
+          budgets_json TEXT,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (workspace, plan_id, slice_id)
+        );
 "#;

@@ -156,6 +156,29 @@ impl SqliteStore {
                 )?;
             }
 
+            // Move anchor path bindings (path→anchor map). Dedupe on collisions.
+            match tx.execute(
+                r#"
+                INSERT OR IGNORE INTO anchor_bindings(workspace, anchor_id, kind, repo_rel, created_at_ms, updated_at_ms)
+                SELECT workspace, ?3, kind, repo_rel, created_at_ms, ?4
+                FROM anchor_bindings
+                WHERE workspace=?1 AND anchor_id=?2
+                "#,
+                params![workspace.as_str(), id.as_str(), into_id.as_str(), now_ms],
+            ) {
+                Ok(_) => {}
+                Err(err) if is_missing_table(&err, "anchor_bindings") => {}
+                Err(err) => return Err(err.into()),
+            }
+            match tx.execute(
+                "DELETE FROM anchor_bindings WHERE workspace=?1 AND anchor_id=?2",
+                params![workspace.as_str(), id.as_str()],
+            ) {
+                Ok(_) => {}
+                Err(err) if is_missing_table(&err, "anchor_bindings") => {}
+                Err(err) => return Err(err.into()),
+            }
+
             // Remove merged anchor record.
             tx.execute(
                 "DELETE FROM anchors WHERE workspace=?1 AND id=?2",

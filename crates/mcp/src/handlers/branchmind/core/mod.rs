@@ -6,5 +6,6 @@ mod init;
 mod open;
 mod skill;
 mod status;
+mod workspace_list;
 mod workspace_reset;
 mod workspace_use;

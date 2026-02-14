@@ -22,6 +22,14 @@ pub(crate) struct DaemonConfig {
     pub(crate) ux_proof_v2_enabled: bool,
     pub(crate) knowledge_autolint_enabled: bool,
     pub(crate) note_promote_enabled: bool,
+    pub(crate) jobs_unknown_args_fail_closed_enabled: bool,
+    pub(crate) jobs_strict_progress_schema_enabled: bool,
+    pub(crate) jobs_high_done_proof_gate_enabled: bool,
+    pub(crate) jobs_wait_stream_v2_enabled: bool,
+    pub(crate) jobs_mesh_v1_enabled: bool,
+    pub(crate) slice_plans_v1_enabled: bool,
+    pub(crate) jobs_slice_first_fail_closed_enabled: bool,
+    pub(crate) slice_budgets_enforced_enabled: bool,
     pub(crate) default_workspace: Option<String>,
     pub(crate) workspace_explicit: bool,
     pub(crate) workspace_allowlist: Option<Vec<String>>,
@@ -178,12 +186,22 @@ fn handle_connection(
                         .unwrap_or_else(|_| config.storage_dir.clone())
                         .to_string_lossy()
                         .to_string();
+                    let argv0 = std::env::args_os()
+                        .next()
+                        .map(|v| v.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let exe_path = std::env::current_exe()
+                        .ok()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
                     Some(crate::json_rpc_response(
                         request.id,
                         json!({
                                         "compat_fingerprint": crate::build_compat_fingerprint(),
                                         "fingerprint": crate::build_fingerprint(),
                                         "build_time_ms": crate::binary_build_time_ms().unwrap_or(0),
+                                        "argv0": argv0,
+                                        "exe_path": exe_path,
                                         "storage_dir": storage_dir,
                         "toolset": config.toolset.as_str(),
                         "response_verbosity": config.response_verbosity.as_str(),
@@ -227,6 +245,14 @@ fn build_server(config: &DaemonConfig) -> Result<McpServer, Box<dyn std::error::
             ux_proof_v2_enabled: config.ux_proof_v2_enabled,
             knowledge_autolint_enabled: config.knowledge_autolint_enabled,
             note_promote_enabled: config.note_promote_enabled,
+            jobs_unknown_args_fail_closed_enabled: config.jobs_unknown_args_fail_closed_enabled,
+            jobs_strict_progress_schema_enabled: config.jobs_strict_progress_schema_enabled,
+            jobs_high_done_proof_gate_enabled: config.jobs_high_done_proof_gate_enabled,
+            jobs_wait_stream_v2_enabled: config.jobs_wait_stream_v2_enabled,
+            jobs_mesh_v1_enabled: config.jobs_mesh_v1_enabled,
+            slice_plans_v1_enabled: config.slice_plans_v1_enabled,
+            jobs_slice_first_fail_closed_enabled: config.jobs_slice_first_fail_closed_enabled,
+            slice_budgets_enforced_enabled: config.slice_budgets_enforced_enabled,
             default_workspace: config.default_workspace.clone(),
             workspace_explicit: config.workspace_explicit,
             workspace_allowlist: config.workspace_allowlist.clone(),

@@ -2,10 +2,25 @@
 
 use crate::McpServer;
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 impl McpServer {
     pub(super) fn preprocess_args(&mut self, name: &str, args: &mut Value) -> Option<Value> {
         let args_obj = args.as_object_mut()?;
+
+        // DX: allow configuring the default workspace via filesystem path (CLI/env).
+        // We normalize once per session on first use so workspace_lock/allowlist comparisons
+        // operate on the final WorkspaceId (not the raw path string).
+        if let Some(raw) = self.default_workspace.clone()
+            && crate::WorkspaceId::try_new(raw.clone()).is_err()
+            && looks_like_workspace_path(&raw)
+        {
+            match self.workspace_id_from_path(&raw) {
+                Ok(resolved) => self.default_workspace = Some(resolved),
+                Err(resp) => return Some(resp),
+            }
+        }
+
         let effective_default = self
             .workspace_override
             .as_deref()
@@ -33,6 +48,27 @@ impl McpServer {
                 && let Some(fmt) = inner_fmt
             {
                 args_obj.insert("fmt".to_string(), fmt);
+            }
+
+            // DX shorthand: accept `system(op=schema.get, cmd=\"tasks.snapshot\")` by lifting the
+            // top-level cmd into args.cmd when args.cmd is missing.
+            if name == "system" && args_obj.get("op").and_then(|v| v.as_str()) == Some("schema.get")
+            {
+                let top_level_cmd = args_obj
+                    .get("cmd")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                if let Some(cmd) = top_level_cmd {
+                    let args_entry = args_obj
+                        .entry("args".to_string())
+                        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                    if let Some(args_inner) = args_entry.as_object_mut()
+                        && !args_inner.contains_key("cmd")
+                    {
+                        args_inner.insert("cmd".to_string(), Value::String(cmd));
+                    }
+                }
             }
         }
 
@@ -77,6 +113,23 @@ impl McpServer {
                 "workspace".to_string(),
                 Value::String(default_workspace.to_string()),
             );
+        }
+
+        // DX: accept workspace as a filesystem path (e.g. "/home/me/repo") and resolve it to a
+        // stable WorkspaceId *before* allowlist/lock checks run.
+        if let Some(raw) = args_obj.get("workspace").and_then(|v| v.as_str()) {
+            let raw = raw.trim().to_string();
+            if !raw.is_empty()
+                && crate::WorkspaceId::try_new(raw.clone()).is_err()
+                && looks_like_workspace_path(&raw)
+            {
+                match self.workspace_id_from_path(&raw) {
+                    Ok(resolved) => {
+                        args_obj.insert("workspace".to_string(), Value::String(resolved));
+                    }
+                    Err(resp) => return Some(resp),
+                }
+            }
         }
 
         // Multi-agent / concurrency DX:
@@ -425,15 +478,30 @@ impl McpServer {
 
     pub(super) fn auto_init_workspace(
         &mut self,
-        args: &serde_json::Map<String, Value>,
+        args: &mut serde_json::Map<String, Value>,
     ) -> Option<Value> {
         let workspace_raw = args.get("workspace").and_then(|v| v.as_str())?;
-        let workspace = match crate::WorkspaceId::try_new(workspace_raw.to_string()) {
+        let workspace_raw = workspace_raw.to_string();
+        let workspace = match crate::WorkspaceId::try_new(workspace_raw.clone()) {
             Ok(v) => v,
             Err(_) => {
-                return Some(crate::ai_error(
+                // DX: avoid polluting follow-up actions with an invalid outer workspace field.
+                args.remove("workspace");
+
+                let suggested = Self::suggest_workspace_id(&workspace_raw);
+                let recovery = format!(
+                    "workspace must be a WorkspaceId (e.g. \"money1\"). You may also pass an absolute path (e.g. \"/home/me/repo\") and it will be mapped to an id. Fix: workspace=\"{suggested}\" (or call workspace op=use)."
+                );
+                return Some(crate::ai_error_with(
                     "INVALID_INPUT",
-                    "workspace: expected WorkspaceId; fix: workspace=\"my-workspace\"",
+                    "workspace: expected WorkspaceId",
+                    Some(recovery.as_str()),
+                    vec![crate::suggest_call(
+                        "workspace_use",
+                        "Switch the session workspace.",
+                        "high",
+                        serde_json::json!({ "workspace": suggested }),
+                    )],
                 ));
             }
         };
@@ -465,6 +533,46 @@ impl McpServer {
                 &crate::format_store_error(err),
             )),
         }
+    }
+
+    fn suggest_workspace_id(raw: &str) -> String {
+        let raw = raw.trim();
+        let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw).trim();
+        let mut out = String::new();
+        let mut prev_dash = false;
+        for ch in base.chars() {
+            let lc = ch.to_ascii_lowercase();
+            if lc.is_ascii_alphanumeric() {
+                out.push(lc);
+                prev_dash = false;
+                continue;
+            }
+            if matches!(lc, '-' | '_' | '.' | ' ') {
+                if !out.is_empty() && !prev_dash {
+                    out.push('-');
+                    prev_dash = true;
+                }
+                continue;
+            }
+            if !out.is_empty() && !prev_dash {
+                out.push('-');
+                prev_dash = true;
+            }
+        }
+        let trimmed = out.trim_matches('-');
+        let mut suggested = if trimmed.is_empty() {
+            "my-workspace".to_string()
+        } else {
+            trimmed.to_string()
+        };
+        if suggested.len() > 64 {
+            suggested.truncate(64);
+            suggested = suggested.trim_matches('-').to_string();
+            if suggested.is_empty() {
+                return "my-workspace".to_string();
+            }
+        }
+        suggested
     }
 
     pub(crate) fn enforce_project_guard(
@@ -508,4 +616,153 @@ impl McpServer {
             )),
         }
     }
+}
+
+fn looks_like_workspace_path(raw: &str) -> bool {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    if raw.starts_with('/') || raw.starts_with('\\') {
+        return true;
+    }
+    if raw == "." || raw == ".." || raw.starts_with("./") || raw.starts_with("../") {
+        return true;
+    }
+    if raw == "~" || raw.starts_with("~/") {
+        return true;
+    }
+    if raw.contains('\\') {
+        return true;
+    }
+    // Windows drive path: "C:\..." / "C:/..."
+    if raw.len() >= 2 && raw.as_bytes().get(1) == Some(&b':') {
+        return true;
+    }
+    false
+}
+
+impl McpServer {
+    pub(crate) fn workspace_id_resolve(&mut self, raw: &str) -> Result<String, crate::StoreError> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(crate::StoreError::InvalidInput(
+                "workspace must not be empty",
+            ));
+        }
+        if crate::WorkspaceId::try_new(raw.to_string()).is_ok() {
+            return Ok(raw.to_string());
+        }
+        if looks_like_workspace_path(raw) {
+            return self.workspace_id_from_path_store(raw);
+        }
+        Err(crate::StoreError::InvalidInput(
+            "workspace: expected WorkspaceId",
+        ))
+    }
+
+    pub(crate) fn workspace_id_from_path(&mut self, raw: &str) -> Result<String, Value> {
+        self.workspace_id_from_path_store(raw)
+            .map_err(|err| match err {
+                crate::StoreError::InvalidInput(msg) => crate::ai_error("INVALID_INPUT", msg),
+                other => crate::ai_error("STORE_ERROR", &crate::format_store_error(other)),
+            })
+    }
+
+    pub(crate) fn workspace_id_from_path_store(
+        &mut self,
+        raw: &str,
+    ) -> Result<String, crate::StoreError> {
+        let root = normalize_workspace_path(raw);
+        let root_str = root.to_string_lossy().to_string();
+
+        if let Some(existing) = self.store.workspace_path_resolve(&root_str)? {
+            return Ok(existing.as_str().to_string());
+        }
+
+        let base = Self::suggest_workspace_id(&root_str);
+        let mut workspace = crate::WorkspaceId::try_new(base.clone()).unwrap_or_else(|_| {
+            crate::WorkspaceId::try_new("workspace".to_string()).expect("fallback workspace")
+        });
+
+        match self.store.workspace_exists(&workspace)? {
+            false => {}
+            true => match self.store.workspace_path_primary_get(&workspace)? {
+                None => {}
+                Some(bound) if bound == root_str => {}
+                Some(_bound) => {
+                    let hash = short_path_hash(&root_str);
+                    let candidate = format!("{base}-{hash}");
+                    workspace = crate::WorkspaceId::try_new(candidate)
+                        .unwrap_or_else(|_| crate::WorkspaceId::try_new(base).expect("valid"));
+                }
+            },
+        }
+
+        self.store.workspace_path_bind(&workspace, &root_str)?;
+
+        Ok(workspace.as_str().to_string())
+    }
+}
+
+fn normalize_workspace_path(raw: &str) -> PathBuf {
+    let raw = raw.trim();
+    let expanded = if raw == "~" || raw.starts_with("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            if raw == "~" {
+                home
+            } else {
+                home.join(raw.trim_start_matches("~/"))
+            }
+        } else {
+            PathBuf::from(raw)
+        }
+    } else {
+        PathBuf::from(raw)
+    };
+
+    let mut absolute = if expanded.is_absolute() {
+        expanded
+    } else if let Ok(cwd) = std::env::current_dir() {
+        cwd.join(expanded)
+    } else {
+        expanded
+    };
+
+    if let Ok(canon) = std::fs::canonicalize(&absolute) {
+        absolute = canon;
+    }
+
+    if absolute.is_file()
+        && let Some(parent) = absolute.parent()
+    {
+        absolute = parent.to_path_buf();
+    }
+
+    find_git_root(&absolute).unwrap_or(absolute)
+}
+
+fn find_git_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn short_path_hash(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut hash: u64 = 14695981039346656037;
+    for b in bytes {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    let full = format!("{hash:016x}");
+    full.chars().take(8).collect::<String>()
 }

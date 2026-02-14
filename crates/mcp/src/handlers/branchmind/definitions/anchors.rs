@@ -44,6 +44,20 @@ pub(crate) fn anchors_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "anchor_resolve",
+            "description": "Resolve a repo path to the best matching anchor binding (path → anchor jump).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "path": { "type": "string" },
+                    "limit": { "type": "integer" },
+                    "max_chars": { "type": "integer" }
+                },
+                "required": ["workspace", "path"]
+            }
+        }),
+        json!({
             "name": "macro_anchor_note",
             "description": "One-command flow: upsert anchor metadata + write an anchor-tagged card (optionally step/target scoped).",
             "inputSchema": {
@@ -57,6 +71,8 @@ pub(crate) fn anchors_definitions() -> Vec<Value> {
                     "status": { "type": "string" },
                     "description": { "type": ["string", "null"] },
                     "refs": { "type": "array", "items": { "type": "string" } },
+                    "bind_paths": { "type": "array", "items": { "type": "string" } },
+                    "bind_kind": { "type": "string", "enum": ["path"] },
                     "aliases": { "type": "array", "items": { "type": "string" } },
                     "parent_id": { "type": ["string", "null"] },
                     "depends_on": { "type": "array", "items": { "type": "string" } },

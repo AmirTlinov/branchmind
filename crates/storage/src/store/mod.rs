@@ -2,6 +2,7 @@
 //! Storage implementation (split-friendly module root).
 
 mod anchor_aliases;
+mod anchor_bindings;
 mod anchor_links;
 mod anchors;
 mod anchors_lint;
@@ -11,12 +12,14 @@ mod docs;
 mod error;
 mod focus;
 mod graph;
+mod job_bus;
 mod jobs;
 mod knowledge_keys;
 mod ops_history;
 mod portal_cursors;
 mod reasoning_ref;
 mod runners;
+mod slices;
 mod steps;
 mod support;
 mod tasks;
@@ -40,6 +43,15 @@ fn is_missing_column(err: &rusqlite::Error, column: &str) -> bool {
     match err {
         rusqlite::Error::SqliteFailure(_, Some(msg)) => {
             msg.contains("no such column") && msg.contains(column)
+        }
+        _ => false,
+    }
+}
+
+fn is_missing_table(err: &rusqlite::Error, table: &str) -> bool {
+    match err {
+        rusqlite::Error::SqliteFailure(_, Some(msg)) => {
+            msg.contains("no such table") && msg.contains(table)
         }
         _ => false,
     }
@@ -161,6 +173,132 @@ impl SqliteStore {
             });
         }
         Ok(out)
+    }
+
+    /// Resolve a workspace id bound to a canonical filesystem path.
+    ///
+    /// Notes:
+    /// - Intended for DX: callers may pass a repo path instead of a workspace id.
+    /// - `path` should be canonical absolute path (caller can normalize; we treat it verbatim).
+    pub fn workspace_path_resolve(
+        &mut self,
+        path: &str,
+    ) -> Result<Option<WorkspaceId>, StoreError> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Ok(None);
+        }
+
+        let now_ms = now_ms();
+        let stored = match self.conn.query_row(
+            "SELECT workspace FROM workspace_paths WHERE path=?1",
+            params![path],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) if is_missing_table(&err, "workspace_paths") => None,
+            Err(err) => return Err(err.into()),
+        };
+
+        let Some(stored) = stored else {
+            return Ok(None);
+        };
+
+        // Best-effort refresh last_used_at_ms (ignore missing-table drift for read-only consumers).
+        let _ = self.conn.execute(
+            "UPDATE workspace_paths SET last_used_at_ms=?1 WHERE path=?2",
+            params![now_ms, path],
+        );
+
+        match WorkspaceId::try_new(stored) {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Bind a canonical filesystem path to a workspace id (idempotent).
+    pub fn workspace_path_bind(
+        &mut self,
+        workspace: &WorkspaceId,
+        path: &str,
+    ) -> Result<(), StoreError> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(StoreError::InvalidInput("workspace path must not be empty"));
+        }
+        let now_ms = now_ms();
+
+        let existing = match self.conn.query_row(
+            "SELECT workspace FROM workspace_paths WHERE path=?1",
+            params![path],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) if is_missing_table(&err, "workspace_paths") => None,
+            Err(err) => return Err(err.into()),
+        };
+
+        if let Some(existing) = existing {
+            if existing == workspace.as_str() {
+                let _ = self.conn.execute(
+                    "UPDATE workspace_paths SET last_used_at_ms=?1 WHERE path=?2",
+                    params![now_ms, path],
+                );
+                return Ok(());
+            }
+            // Safe-by-default: do not silently rebind an existing path.
+            return Err(StoreError::InvalidInput(
+                "workspace path is already bound to a different workspace",
+            ));
+        }
+
+        self.conn.execute(
+            "INSERT INTO workspace_paths(path, workspace, created_at_ms, last_used_at_ms) VALUES (?1, ?2, ?3, ?3)",
+            params![path, workspace.as_str(), now_ms],
+        )?;
+        Ok(())
+    }
+
+    /// Return the most-recently used bound path for a workspace (if any).
+    pub fn workspace_path_primary_get(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Option<String>, StoreError> {
+        match self.conn.query_row(
+            "SELECT path FROM workspace_paths WHERE workspace=?1 ORDER BY last_used_at_ms DESC, created_at_ms DESC LIMIT 1",
+            params![workspace.as_str()],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) if is_missing_table(&err, "workspace_paths") => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Return a summary of path bindings for the workspace.
+    ///
+    /// Shape: (primary_path, last_used_at_ms, count).
+    pub fn workspace_path_summary_get(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Option<(String, i64, i64)>, StoreError> {
+        match self.conn.query_row(
+            "SELECT path, last_used_at_ms, (SELECT COUNT(*) FROM workspace_paths WHERE workspace=?1) AS cnt \
+             FROM workspace_paths \
+             WHERE workspace=?1 \
+             ORDER BY last_used_at_ms DESC, created_at_ms DESC \
+             LIMIT 1",
+            params![workspace.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) if is_missing_table(&err, "workspace_paths") => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn list_workspaces_legacy(

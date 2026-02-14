@@ -91,6 +91,7 @@ pub struct JobRadarRow {
     pub last_error_seq: Option<i64>,
     pub last_proof_gate_seq: Option<i64>,
     pub last_checkpoint_seq: Option<i64>,
+    pub last_checkpoint_ts_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -173,6 +174,12 @@ pub struct JobCancelRequest {
     pub reason: Option<String>,
     pub refs: Vec<String>,
     pub meta_json: Option<String>,
+    /// Allow canceling a RUNNING job without runner_id/claim_revision (manager override).
+    /// When false (default), cancel is queued-only.
+    pub force_running: bool,
+    /// Optional CAS guard: when provided, cancellation fails with RevisionMismatch if the job
+    /// revision is not exactly this value.
+    pub expected_revision: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -217,6 +224,11 @@ pub struct JobEventsTailResult {
 }
 
 #[derive(Clone, Debug)]
+pub struct JobCheckpointExistsRequest {
+    pub id: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct JobRequeueRequest {
     pub id: String,
     pub reason: Option<String>,
@@ -228,4 +240,42 @@ pub struct JobRequeueRequest {
 pub struct JobRequeueResult {
     pub job: JobRow,
     pub event: JobEventRow,
+}
+
+// --- Job Artifacts ---
+
+#[derive(Clone, Debug)]
+pub struct JobArtifactRow {
+    pub job_id: String,
+    pub artifact_key: String,
+    pub content_text: String,
+    pub content_len: i64,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct JobArtifactCreateRequest {
+    pub job_id: String,
+    pub artifact_key: String,
+    pub content_text: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct JobArtifactGetRequest {
+    pub job_id: String,
+    pub artifact_key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct JobArtifactMetaRow {
+    pub job_id: String,
+    pub artifact_key: String,
+    pub content_len: i64,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct JobArtifactsListRequest {
+    pub job_id: String,
+    pub limit: usize,
 }

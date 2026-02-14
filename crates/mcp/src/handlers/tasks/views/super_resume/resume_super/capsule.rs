@@ -7,6 +7,7 @@ pub(super) struct HandoffCapsuleArgs<'a> {
     pub(super) toolset: Toolset,
     pub(super) workspace: &'a WorkspaceId,
     pub(super) omit_workspace: bool,
+    pub(super) slice_plans_v1_enabled: bool,
     pub(super) kind: TaskKind,
     pub(super) focus: Option<&'a str>,
     pub(super) agent_id: Option<&'a str>,
@@ -893,25 +894,46 @@ fn recommended_action(args: &HandoffCapsuleArgs<'_>) -> (Value, Option<Value>) {
             (Value::Null, None)
         }
         TaskKind::Plan => {
-            let tool = "tasks_plan";
+            let (tool, purpose, args_hint, escalation_reason) = if args.slice_plans_v1_enabled {
+                (
+                    "tasks_slices_propose_next",
+                    "propose next slice plan (one bounded, reviewable slice)",
+                    json!({
+                        "workspace": args.workspace.as_str(),
+                        "plan": args.target.get("id").cloned().unwrap_or(Value::Null),
+                        "objective": "...",
+                        "constraints": [],
+                        "policy": "fail_closed"
+                    }),
+                    "slice planning ops are not in the current toolset",
+                )
+            } else {
+                (
+                    "tasks_plan",
+                    "advance plan checklist",
+                    json!({
+                        "workspace": args.workspace.as_str(),
+                        "plan": args.target.get("id").cloned().unwrap_or(Value::Null),
+                        "advance": true
+                    }),
+                    "plan checklist ops are not in the current toolset",
+                )
+            };
+
             let escalation = if tool_available(args.toolset, tool) {
                 None
             } else {
                 Some(json!({
                     "required": true,
                     "toolset": "full",
-                    "reason": "plan checklist ops are not in the current toolset"
+                    "reason": escalation_reason
                 }))
             };
             let mut action = json!({
                 "tool": tool,
-                "purpose": "advance plan checklist",
+                "purpose": purpose,
                 "available": tool_available(args.toolset, tool),
-                "args_hint": {
-                    "workspace": args.workspace.as_str(),
-                    "plan": args.target.get("id").cloned().unwrap_or(Value::Null),
-                    "advance": true
-                }
+                "args_hint": args_hint
             });
             if args.omit_workspace
                 && let Some(obj) = action.get_mut("args_hint").and_then(|v| v.as_object_mut())

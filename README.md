@@ -22,7 +22,8 @@ lean enough for daily use.
 - **Versioned reasoning memory**: notes, diffs, merges, graphs, thinking traces.
 - **Proof‑first gates**: close steps with real receipts, not narrative.
 - **Low‑noise daily portal**: minimal tool surface, progressive disclosure.
-- **Delegation jobs** via `bm_runner` (out‑of‑process) for safe parallel work.
+- **Delegation jobs** via `bm_runner` (out‑of‑process) with a fail-closed pipeline:
+  scout → builder → validator → gate → apply.
 
 ## Concrete benefits (what users actually feel)
 
@@ -45,9 +46,11 @@ lean enough for daily use.
 
 1. `status` gives the **next action**.
 2. `tasks.snapshot` is your **compass**; `open <ref>` is your **zoom**.
-3. Close steps with `tasks.macro.close.step` + `proof_input`  
+3. For multi-agent slices, run scout → builder → validator, then gate before apply.
+4. Apply only from an approved gate decision (fail-closed by default).
+5. Close steps with `tasks.macro.close.step` + `proof_input`  
    (URL/CMD/path → LINK/CMD/FILE; NOTE doesn’t satisfy proof).
-4. Persist learning with `think.knowledge.upsert` and keep it clean via `think.knowledge.lint`.
+6. Persist learning with `think.knowledge.upsert` and keep it clean via `think.knowledge.lint`.
 
 ## Quick start (from source)
 
@@ -80,9 +83,9 @@ Notes:
 ## Runtime flags (selected)
 
 - `--storage-dir <path>` — embedded store directory.
-- `--workspace <id>` — default workspace (callers may omit `workspace`).
+- `--workspace <id|path>` — default workspace id (or an absolute path that will be mapped/bound to an id).
 - `--agent-id <id|auto>` — default actor id (stored once, reused across restarts).
-- `--toolset daily|full|core` — controls advertised tool surface.
+- `--toolset daily|full|core` — controls default UX/formatting (e.g. BM‑L1 line mode vs full JSON). The v1 tool surface (`tools/list`) remains the fixed 10 portals.
 - `--shared` / `--daemon` — shared local daemon modes.
 
 Full list: `bm_mcp --help`.

@@ -36,6 +36,41 @@ fn task_id_from_focus_line(text: &str) -> Option<String> {
     }
 }
 
+fn builder_diff_batch_summary_json() -> String {
+    let pack = json!({
+        "slice_id": "SLC-test",
+        "changes": [{
+            "path": "crates/mcp/src/main.rs",
+            "intent": "test materialization",
+            "diff_ref": "artifact://jobs/JOB-000000/unified_diff",
+            "estimated_risk": "low"
+        }],
+        "checks_to_run": ["cargo test -p bm_mcp"],
+        "rollback_plan": "git revert <sha>",
+        "proof_refs": ["CMD: echo ok"],
+        "execution_evidence": {
+            "revision": 1,
+            "diff_scope": ["crates/mcp/src/main.rs"],
+            "command_runs": [{
+                "cmd": "cargo test -p bm_mcp",
+                "exit_code": 0,
+                "stdout_ref": "FILE: stdout.txt",
+                "stderr_ref": "FILE: stderr.txt"
+            }],
+            "rollback_proof": {
+                "strategy": "git_revert",
+                "target_revision": 1,
+                "verification_cmd_ref": "CMD: cargo test -p bm_mcp"
+            },
+            "semantic_guards": {
+                "must_should_may_delta": "none",
+                "contract_term_consistency": "ok"
+            }
+        }
+    });
+    serde_json::to_string(&pack).expect("serialize builder_diff_batch")
+}
+
 #[test]
 fn tasks_macro_delegate_creates_job_and_snapshot_surfaces_it() {
     let mut server =
@@ -336,6 +371,366 @@ fn tasks_jobs_complete_salvages_refs_from_summary_text() {
     assert!(
         refs_str.contains(&job_id.as_str()),
         "expected job_id to be included in refs for navigability, got refs={refs_str:?}"
+    );
+}
+
+#[test]
+fn jobs_complete_fail_closed_when_expected_artifacts_but_summary_is_not_json() {
+    let mut server = Server::start_initialized(
+        "jobs_complete_fail_closed_when_expected_artifacts_but_summary_is_not_json",
+    );
+
+    let created = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
+                "workspace": "ws1",
+                "title": "Job: fail-closed expected artifacts",
+                "prompt": "Return builder_diff_batch JSON",
+                "expected_artifacts": ["builder_diff_batch"]
+            } } }
+    }));
+    let created_out = extract_tool_text(&created);
+    let job_id = created_out
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("job_id"))
+        .and_then(|v| v.as_str())
+        .expect("job_id")
+        .to_string();
+
+    let claim_revision = claim_job(&mut server, "ws1", &job_id, "r1", None, false);
+
+    let done = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": {
+                "workspace": "ws1",
+                "job": job_id,
+                "runner_id": "r1",
+                "claim_revision": claim_revision,
+                "status": "DONE",
+                "summary": "not json",
+                "refs": []
+            } } }
+    }));
+    let done_out = extract_tool_text(&done);
+    assert_eq!(
+        done_out.get("success").and_then(|v| v.as_bool()),
+        Some(false),
+        "jobs.complete must fail-closed when expected_artifacts is set but summary is not JSON; got: {done_out}"
+    );
+    assert_eq!(
+        done_out
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("PRECONDITION_FAILED"),
+        "error code must be PRECONDITION_FAILED; got: {done_out}"
+    );
+}
+
+#[test]
+fn jobs_complete_materializes_job_artifact_and_open_can_read_it() {
+    let mut server =
+        Server::start_initialized("jobs_complete_materializes_job_artifact_and_open_can_read_it");
+
+    let created = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
+                "workspace": "ws1",
+                "title": "Job: materialize builder_diff_batch",
+                "prompt": "Return builder_diff_batch JSON",
+                "expected_artifacts": ["builder_diff_batch"]
+            } } }
+    }));
+    let created_out = extract_tool_text(&created);
+    let job_id = created_out
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("job_id"))
+        .and_then(|v| v.as_str())
+        .expect("job_id")
+        .to_string();
+
+    let claim_revision = claim_job(&mut server, "ws1", &job_id, "r1", None, false);
+
+    let summary = builder_diff_batch_summary_json();
+    let done = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": {
+                "workspace": "ws1",
+                "job": job_id.clone(),
+                "runner_id": "r1",
+                "claim_revision": claim_revision,
+                "status": "DONE",
+                "summary": summary,
+                "refs": []
+            } } }
+    }));
+    let done_out = extract_tool_text(&done);
+    assert!(
+        done_out
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "jobs.complete must succeed: {done_out}"
+    );
+
+    let get = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.artifact.get", "args": {
+                "workspace": "ws1",
+                "job": job_id.clone(),
+                "artifact_key": "builder_diff_batch",
+                "offset": 0,
+                "max_chars": 2000
+            } } }
+    }));
+    let get_out = extract_tool_text(&get);
+    assert!(
+        get_out
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "jobs.artifact.get must succeed: {get_out}"
+    );
+    assert_eq!(
+        get_out
+            .get("result")
+            .and_then(|v| v.get("artifact"))
+            .and_then(|v| v.get("source"))
+            .and_then(|v| v.as_str()),
+        Some("store"),
+        "artifact.source must be store after materialization; got: {get_out}"
+    );
+
+    let artifact_ref = format!("artifact://jobs/{}/builder_diff_batch", job_id);
+    let opened = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": { "name": "open", "arguments": { "workspace": "ws1", "id": artifact_ref, "max_chars": 900 } }
+    }));
+    let opened_out = extract_tool_text(&opened);
+    assert!(
+        opened_out
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "open(job_artifact) must succeed: {opened_out}"
+    );
+    assert_eq!(
+        opened_out
+            .get("result")
+            .and_then(|v| v.get("kind"))
+            .and_then(|v| v.as_str()),
+        Some("job_artifact"),
+        "open(artifact://jobs/...) must return kind=job_artifact; got: {opened_out}"
+    );
+}
+
+#[test]
+fn jobs_artifact_get_falls_back_to_summary_when_not_materialized() {
+    let mut server =
+        Server::start_initialized("jobs_artifact_get_falls_back_to_summary_when_not_materialized");
+
+    let created = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
+                "workspace": "ws1",
+                "title": "Job: legacy summary fallback",
+                "prompt": "Return builder_diff_batch JSON"
+            } } }
+    }));
+    let created_out = extract_tool_text(&created);
+    let job_id = created_out
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("job_id"))
+        .and_then(|v| v.as_str())
+        .expect("job_id")
+        .to_string();
+
+    let claim_revision = claim_job(&mut server, "ws1", &job_id, "r1", None, false);
+
+    let summary = builder_diff_batch_summary_json();
+    let done = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.complete", "args": {
+                "workspace": "ws1",
+                "job": job_id.clone(),
+                "runner_id": "r1",
+                "claim_revision": claim_revision,
+                "status": "DONE",
+                "summary": summary,
+                "refs": []
+            } } }
+    }));
+    let done_out = extract_tool_text(&done);
+    assert!(
+        done_out
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "jobs.complete must succeed: {done_out}"
+    );
+
+    let get = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.artifact.get", "args": {
+                "workspace": "ws1",
+                "job": job_id.clone(),
+                "artifact_key": "builder_diff_batch",
+                "offset": 0,
+                "max_chars": 1000
+            } } }
+    }));
+    let get_out = extract_tool_text(&get);
+    assert!(
+        get_out
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        "jobs.artifact.get must succeed via summary fallback: {get_out}"
+    );
+    assert_eq!(
+        get_out
+            .get("result")
+            .and_then(|v| v.get("artifact"))
+            .and_then(|v| v.get("source"))
+            .and_then(|v| v.as_str()),
+        Some("summary_fallback"),
+        "artifact.source must be summary_fallback when not materialized; got: {get_out}"
+    );
+    let warnings = get_out
+        .get("warnings")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        warnings.iter().any(|w| {
+            w.get("code")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c == "ARTIFACT_FALLBACK_FROM_SUMMARY")
+        }),
+        "warnings must include ARTIFACT_FALLBACK_FROM_SUMMARY; got: {get_out}"
+    );
+}
+
+#[test]
+fn jobs_open_include_artifacts_shows_expected_missing_with_copy_actions() {
+    let mut server = Server::start_initialized(
+        "jobs_open_include_artifacts_shows_expected_missing_with_copy_actions",
+    );
+
+    let created = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.create", "args": {
+                "workspace": "ws1",
+                "title": "Job: expected artifact is reflected in open lens",
+                "prompt": "Will produce builder_diff_batch",
+                "expected_artifacts": ["builder_diff_batch"]
+            } } }
+    }));
+    let created_out = extract_tool_text(&created);
+    let job_id = created_out
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("job_id"))
+        .and_then(|v| v.as_str())
+        .expect("job_id")
+        .to_string();
+
+    let open = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.open", "args": {
+                "workspace": "ws1",
+                "job": job_id,
+                "include_artifacts": true,
+                "include_prompt": false,
+                "include_events": false,
+                "max_events": 0
+            } } }
+    }));
+    let open_out = extract_tool_text(&open);
+    assert_eq!(
+        open_out.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "jobs.open should succeed with include_artifacts: {open_out}"
+    );
+
+    let artifacts = open_out
+        .get("result")
+        .and_then(|v| v.get("artifacts"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(artifacts.len(), 1, "expected one expected artifact entry");
+    let entry = &artifacts[0];
+    let artifact_ref = entry
+        .get("artifact_ref")
+        .and_then(|v| v.as_str())
+        .expect("artifact_ref");
+    assert_eq!(
+        entry.get("artifact_key").and_then(|v| v.as_str()),
+        Some("builder_diff_batch"),
+        "artifact key should match expected artifact: {entry:?}"
+    );
+    assert_eq!(
+        entry.get("status").and_then(|v| v.as_str()),
+        Some("missing"),
+        "artifact should be missing before materialization: {entry:?}"
+    );
+
+    let actions = open_out
+        .get("result")
+        .and_then(|v| v.get("actions"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let has_open = actions.iter().any(|action| {
+        action.get("tool").and_then(|v| v.as_str()) == Some("open")
+            && action
+                .get("args")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                == Some(artifact_ref)
+    });
+    let has_get = actions.iter().any(|action| {
+        action.get("tool").and_then(|v| v.as_str()) == Some("jobs")
+            && action.get("cmd").and_then(|v| v.as_str()) == Some("jobs.artifact.get")
+            && action
+                .get("args")
+                .and_then(|v| v.get("artifact_key"))
+                .and_then(|v| v.as_str())
+                == Some("builder_diff_batch")
+    });
+    assert!(
+        has_open,
+        "include_artifacts actions must include open(artifact_ref) for {artifact_ref}; actions={actions:?}"
+    );
+    assert!(
+        has_get,
+        "include_artifacts actions must include jobs.artifact.get for builder_diff_batch; actions={actions:?}"
     );
 }
 
@@ -1193,7 +1588,7 @@ fn jobs_open_supports_before_seq_paging() {
             "jsonrpc": "2.0",
             "id": 10 + idx as i64,
             "method": "tools/call",
-            "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": msg } } }
+            "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": msg, "meta": { "step": { "command": "test.checkpoint", "result": msg } } } } }
         }));
     }
 
@@ -1428,13 +1823,13 @@ fn jobs_tail_increments_after_seq_and_is_ascending() {
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p1" } } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p1", "meta": { "step": { "command": "test.progress", "result": "p1" } } } } }
     }));
     let _p2 = server.request(json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p2" } } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "p2", "meta": { "step": { "command": "test.progress", "result": "p2" } } } } }
     }));
 
     let page1 = server.request(json!({
@@ -1636,7 +2031,7 @@ fn jobs_radar_needs_manager_is_sticky_until_manager_message() {
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
-        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "Continuing while waiting" } } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "Continuing while waiting", "meta": { "step": { "command": "test.progress", "result": "Continuing while waiting" } } } } }
     }));
 
     let radar1 = server.request(json!({

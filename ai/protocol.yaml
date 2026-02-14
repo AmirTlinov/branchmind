@@ -1,0 +1,17 @@
+protocol_version: 1
+project:
+  name: "branchmind"
+  slug: "branchmind"
+  language: "rust"
+forge:
+  skill: "ai-first-project-forge"
+  skeleton_version: "0.8.5"
+  generated_at_utc: "2026-02-11T07:53:34+00:00"
+docs:
+  format:
+    legend_header: "[LEGEND]"
+    content_header: "[CONTENT]"
+gates:
+  golden_path:
+    - "./tools/doctor"
+    - "./tools/gate"

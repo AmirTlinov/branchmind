@@ -16,6 +16,60 @@ pub struct AnchorRow {
 }
 
 #[derive(Clone, Debug)]
+pub struct AnchorBindingRow {
+    pub kind: String,
+    pub repo_rel: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AnchorBindingHit {
+    pub anchor_id: String,
+    pub kind: String,
+    pub repo_rel: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AnchorBindingsLookupAnyRequest {
+    pub repo_rels: Vec<String>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct AnchorBindingsLookupAnyResult {
+    pub bindings: Vec<AnchorBindingHit>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AnchorBindingIndexRow {
+    pub anchor_id: String,
+    pub anchor_title: Option<String>,
+    pub anchor_kind: Option<String>,
+    pub kind: String,
+    pub repo_rel: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AnchorBindingsIndexListRequest {
+    pub prefix: Option<String>,
+    pub anchor_id: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct AnchorBindingsIndexListResult {
+    pub bindings: Vec<AnchorBindingIndexRow>,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct AnchorGetRequest {
     pub id: String,
 }

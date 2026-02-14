@@ -72,6 +72,24 @@ pub(crate) fn read_output(out_path: &Path) -> Result<Value, String> {
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("parse claude json failed: {e}"))?;
 
+    // Claude Code may return a wrapper error object when it fails to satisfy the provided
+    // JSON schema after internal retries (e.g. `error_max_structured_output_retries`).
+    // Treat this as a hard executor error so the runner can fail the slice deterministically,
+    // instead of attempting to validate/store an invalid payload.
+    if value.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
+        let subtype = value
+            .get("subtype")
+            .and_then(|v| v.as_str())
+            .unwrap_or("claude_error");
+        let first_error = value
+            .get("errors")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        return Err(format!("claude_code: {subtype}: {first_error}"));
+    }
+
     // Claude Code `--output-format json` returns a wrapper object with metadata and the schema-
     // validated payload nested under `structured_output`.
     //

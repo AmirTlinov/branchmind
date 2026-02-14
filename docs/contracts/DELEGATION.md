@@ -44,6 +44,55 @@ Jobs are **logistics**, not “knowledge”:
 - The actual research results should land as **cards/evidence/tests** linked to anchors/tasks.
 - Job completion should reference those artifacts via stable refs (`CARD-*`, `notes_doc@seq`, `TASK-*`).
 
+## Team-Orchestration v3 (platform pipeline)
+
+Canonical slice lifecycle (fail-closed):
+
+`dispatch.scout → dispatch.builder → dispatch.validator → pipeline.gate → pipeline.apply → tasks.evidence.capture → tasks.macro.close.step`
+
+Role contracts:
+
+- **Scout** (`jobs.macro.dispatch.scout`)
+  - defaults: `executor=claude_code`, `executor_profile=deep`, `model=haiku`,
+  - fail-closed model policy: `claude_code` scout model must be Haiku-family (`contains("haiku")`), while `codex` scout model is pinned to `gpt-5.3-codex`,
+  - fail-closed profile policy: `claude_code` scout rejects `executor_profile=xhigh`,
+  - outputs only `scout_context_pack`,
+  - forbidden: code/diff/patch/apply content,
+  - bounded extraction: max 12 repo reads, dedupe file+intent, stop after coverage targets are satisfied,
+  - optional enrichment (bounded): `architecture_map` + `mermaid_compact` for builder mental model compression,
+  - strict novelty gate rejects duplicated `change_hints(path+intent)`, duplicated `test_hints`, and duplicated `risk_map.risk`.
+- **Builder** (`jobs.macro.dispatch.builder`)
+  - consumes `scout_pack_ref`,
+  - hard pin: `executor=codex`, `executor_profile=xhigh`, `model=gpt-5.3-codex`,
+  - strict scout gate on by default (`strict_scout_mode=true`): stale/low-quality scout packs fail closed before dispatch,
+  - context quality gate on by default (`context_quality_gate=true`): warning-level scout drift fails closed; `CODE_REF_UNRESOLVABLE` (no bound workspace path for sha-check) is warning-only,
+  - default `input_mode=strict`: builder is input-only (no tool/repo discovery loops),
+  - outputs `builder_diff_batch` with rollback + proof refs,
+  - may emit `context_request` (`changes=[]`) to request more scout context; retry loop is capped (`max_context_requests/context_retry_limit<=2`).
+- **Validator** (`jobs.macro.dispatch.validator`)
+  - consumes `scout_pack_ref + builder_batch_ref + plan_ref`,
+  - hard pin: `executor=claude_code`, `executor_profile=audit`, `model=opus-4.6` family,
+  - outputs `validator_report`,
+  - must be lineage-independent from builder.
+- **Lead gate/apply** (`jobs.pipeline.gate` / `jobs.pipeline.apply`)
+  - gate returns `decision=approve|rework|reject` + `decision_ref`,
+  - apply is allowed only for `approve` and matching expected revision.
+
+Pre-builder scout quality review:
+
+- `jobs.pipeline.context.review` provides fail-closed scout context verdict (`pass|need_more|reject`)
+  with cheap quality scores (`freshness/coverage/dedupe/traceability/semantic_cohesion`) and next actions.
+
+Artifact contracts are strict (`INVALID_INPUT` on shape/unknowns/missing required evidence).
+Unknown args for these commands are fail-closed when `jobs_unknown_args_fail_closed=true`.
+
+Runner SLA defaults (role-aware slice caps, fail-closed):
+
+- scout: soft slice ≤ 5m (300s),
+- builder/writer: soft slice ≤ 20m (1200s),
+- validator: soft slice ≤ 10m (600s),
+- heartbeat is role-aware and clamped to safe range (scout 15s, builder/writer 45s, validator 30s), reported in checkpoint meta per slice.
+
 ## Multi-executor routing (v1)
 
 Jobs may request a specific executor or defer to policy-based auto routing.
@@ -51,8 +100,8 @@ Jobs may request a specific executor or defer to policy-based auto routing.
 ### Job meta (v1)
 
 - `executor`: `codex | claude_code | auto`
-- `executor_profile`: `fast | deep | audit`
-- `executor_model` (optional, for `executor=claude_code`): model selector string passed to the CLI (e.g. `sonnet`/`opus`)
+- `executor_profile`: `fast | deep | audit | xhigh`
+- `executor_model` (optional): explicit model selector passed to the executor CLI (default codex path: `gpt-5.3-codex`)
 - `policy` (for `executor=auto`):
   - `prefer`: ordered list of executors
   - `forbid`: excluded executors
@@ -315,10 +364,12 @@ Budget rules:
 3) Runner calls `tasks_jobs_claim` (transition QUEUED → RUNNING; receives `job.revision` claim token and `claim_expires_at_ms`).
 4) Runner executes the work out-of-process.
 5) Runner periodically calls `tasks_jobs_report` (bounded progress + renew claim lease; includes `runner_id` + `claim_revision`).
+   - Guardrail: for `kind=progress` and `kind=checkpoint`, runners must include `meta.step.command` and one of `meta.step.result` / `meta.step.error` (strict schema).
 6) Runner calls `tasks_jobs_complete` (includes `runner_id` + `claim_revision`) with:
    - final status (`DONE`/`FAILED`),
    - short summary,
    - stable refs to artifacts (cards/notes/tasks) that contain the real knowledge.
+   - Guardrail: for `priority=HIGH` jobs, `status=DONE` requires at least one prior `checkpoint` event and at least one proof ref in `refs` (`LINK:`/`CMD:`/`FILE:`).
 
 If a runner crashes, jobs remain durable and can be reclaimed after a lease timeout:
 

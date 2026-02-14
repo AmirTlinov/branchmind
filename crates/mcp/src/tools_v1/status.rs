@@ -47,16 +47,57 @@ pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
 
     let workspace_id = match crate::WorkspaceId::try_new(workspace_str.to_string()) {
         Ok(v) => v,
+        Err(_) if looks_like_workspace_path(workspace_str) => {
+            let resolved = match server.workspace_id_from_path_store(workspace_str) {
+                Ok(v) => v,
+                Err(crate::StoreError::InvalidInput(msg)) => {
+                    return OpResponse::error(
+                        "status".to_string(),
+                        OpError {
+                            code: "INVALID_INPUT".to_string(),
+                            message: msg.to_string(),
+                            recovery: None,
+                        },
+                    )
+                    .into_value();
+                }
+                Err(err) => {
+                    return OpResponse::error(
+                        "status".to_string(),
+                        OpError {
+                            code: "STORE_ERROR".to_string(),
+                            message: crate::format_store_error(err),
+                            recovery: None,
+                        },
+                    )
+                    .into_value();
+                }
+            };
+            crate::WorkspaceId::try_new(resolved).unwrap_or_else(|_| {
+                crate::WorkspaceId::try_new("my-workspace".to_string()).expect("fallback")
+            })
+        }
         Err(_) => {
-            return OpResponse::error(
+            let suggested = suggest_workspace_id(workspace_str);
+            let mut resp = OpResponse::error(
                 "status".to_string(),
                 OpError {
                     code: "INVALID_INPUT".to_string(),
                     message: "workspace: expected WorkspaceId".to_string(),
-                    recovery: Some("Use workspace like my-workspace".to_string()),
+                    recovery: Some(format!(
+                        "workspace must be a WorkspaceId (e.g. \"money1\"). You may also pass an absolute path (e.g. \"/home/me/repo\") and it will be mapped to an id. Fix: workspace=\"{suggested}\" (or call workspace op=use)."
+                    )),
                 },
-            )
-            .into_value();
+            );
+            resp.actions.push(Action {
+                action_id: "recover::workspace.use.suggested".to_string(),
+                priority: ActionPriority::High,
+                tool: "workspace".to_string(),
+                args: json!({ "op": "use", "args": { "workspace": suggested } }),
+                why: "Установить workspace для сессии.".to_string(),
+                risk: "Низкий".to_string(),
+            });
+            return resp.into_value();
         }
     };
 
@@ -135,4 +176,69 @@ pub(crate) fn handle(server: &mut crate::McpServer, args: Value) -> Value {
     out.refs = report.refs;
     out.actions = report.actions;
     out.into_value()
+}
+
+fn suggest_workspace_id(raw: &str) -> String {
+    let raw = raw.trim();
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw).trim();
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in base.chars() {
+        let lc = ch.to_ascii_lowercase();
+        if lc.is_ascii_alphanumeric() {
+            out.push(lc);
+            prev_dash = false;
+            continue;
+        }
+        if matches!(lc, '-' | '_' | '.' | ' ') {
+            if !out.is_empty() && !prev_dash {
+                out.push('-');
+                prev_dash = true;
+            }
+            continue;
+        }
+        // Drop other chars, but keep a single '-' separator when meaningful.
+        if !out.is_empty() && !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let mut suggested = if trimmed.is_empty() {
+        "my-workspace".to_string()
+    } else {
+        trimmed.to_string()
+    };
+    if suggested.len() > 64 {
+        suggested.truncate(64);
+        suggested = suggested.trim_matches('-').to_string();
+        if suggested.is_empty() {
+            return "my-workspace".to_string();
+        }
+    }
+    suggested
+}
+
+fn looks_like_workspace_path(raw: &str) -> bool {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    if raw.starts_with('/') || raw.starts_with('\\') {
+        return true;
+    }
+    if raw == "." || raw == ".." || raw.starts_with("./") || raw.starts_with("../") {
+        return true;
+    }
+    if raw == "~" || raw.starts_with("~/") {
+        return true;
+    }
+    if raw.contains('\\') {
+        return true;
+    }
+    // Windows drive path: "C:\..." / "C:/..."
+    if raw.len() >= 2 && raw.as_bytes().get(1) == Some(&b':') {
+        return true;
+    }
+    false
 }

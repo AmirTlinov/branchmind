@@ -1,0 +1,587 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+
+
+TOKEN_RE = re.compile(r"^[A-Z][A-Z0-9_/-]*$")
+TOKEN_REF_RE = re.compile(r"\[([^\[\]]+)\]")
+WIKI_LINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
+CONTRACT_FILE_RE = re.compile(r"^(?P<stem>.+)_v(?P<ver>[0-9]+)\.md$")
+REQUIRED_CONTRACT_HEADINGS = ("Purpose", "Scope", "Interface", "Errors", "Examples")
+SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+LAST_VERIFIED_RE = re.compile(r"(?im)^\s*(?:Last verified|Последняя проверка)\s*:\s*(\d{4}-\d{2}-\d{2})\s*$")
+
+
+@dataclass(frozen=True)
+class DocBlocks:
+    legend: str
+    content: str
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _split_front_matter(md: str) -> tuple[dict[str, str], str]:
+    """Best-effort YAML front-matter splitter.
+
+    Supports the common pattern:
+      ---
+      key: value
+      ---
+      (markdown body)
+
+    If no front matter is present, returns ({}, md).
+    """
+    lines = md.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i >= len(lines) or lines[i].strip() != "---":
+        return ({}, md)
+
+    # Find closing fence.
+    j = i + 1
+    while j < len(lines):
+        if lines[j].strip() == "---":
+            front = "\n".join(lines[i + 1 : j])
+            body = "\n".join(lines[j + 1 :])
+            return (_parse_front_matter(front), body)
+        j += 1
+    return ({}, md)
+
+
+def _parse_front_matter(front: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in front.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+        if v.startswith('"') and v.endswith('"') and len(v) >= 2:
+            v = v[1:-1]
+        if v.startswith("'") and v.endswith("'") and len(v) >= 2:
+            v = v[1:-1]
+        if k and k not in out:
+            out[k] = v
+    return out
+
+
+def _iter_plan_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    lines: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _strip_inline_code(text: str) -> str:
+    # Best-effort: remove inline `code` segments to avoid token detection noise.
+    parts = text.split("`")
+    if len(parts) < 3:
+        return text
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            out.append(part)
+    return "".join(out)
+
+
+def _parse_blocks(md: str) -> DocBlocks:
+    # Support SKILL.md style front matter while keeping the core format strict.
+    _fm, md = _split_front_matter(md)
+    lines = md.splitlines()
+    # Skip leading empty lines.
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i >= len(lines) or lines[i].strip() != "[LEGEND]":
+        raise ValueError("first non-empty line must be [LEGEND]")
+
+    # Find the content header.
+    legend_start = i + 1
+    content_header_idx = None
+    in_fence = False
+    for j in range(legend_start, len(lines)):
+        line = lines[j]
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        header = line.strip()
+        if header == "[CONTENT]":
+            content_header_idx = j
+            break
+
+    if content_header_idx is None:
+        raise ValueError("missing [CONTENT] header")
+
+    # Disallow multiple content headers (outside fenced code blocks).
+    in_fence = False
+    for j in range(content_header_idx + 1, len(lines)):
+        line = lines[j]
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        header = line.strip()
+        if header == "[CONTENT]":
+            raise ValueError("multiple [CONTENT] headers found; use exactly one")
+
+    legend = "\n".join(lines[legend_start:content_header_idx]).strip("\n")
+    content = "\n".join(lines[content_header_idx + 1 :]).strip("\n")
+    return DocBlocks(legend=legend, content=content)
+
+
+def _parse_legend_tokens(legend_block: str) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    for raw in legend_block.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"legend line must be 'TOKEN = Meaning' (got: {raw!r})")
+        left, right = line.split("=", 1)
+        token = left.strip()
+        meaning = right.strip()
+        if not token:
+            raise ValueError(f"empty token in legend line: {raw!r}")
+        if not TOKEN_RE.match(token):
+            raise ValueError(f"invalid token name: {token!r} (expected uppercase TOKEN like FOO_BAR)")
+        if token in tokens:
+            raise ValueError(f"duplicate token in legend: {token}")
+        tokens[token] = meaning
+    return tokens
+
+
+def _extract_token_refs(content_block: str) -> tuple[set[str], set[str]]:
+    refs: set[str] = set()
+    wiki_refs: set[str] = set()
+    in_fence = False
+    for raw in content_block.splitlines():
+        line = raw.rstrip("\n")
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        line = _strip_inline_code(line)
+        for m in TOKEN_REF_RE.finditer(line):
+            # Avoid treating Markdown links/images as token refs:
+            # - [TEXT](url) is a link label
+            # - ![ALT](url) is an image
+            start = m.start()
+            end = m.end()
+            if start > 0 and line[start - 1] == "!":
+                continue
+
+            k = end
+            while k < len(line) and line[k].isspace():
+                k += 1
+            if k < len(line) and line[k] == "(":
+                continue
+
+            inner = m.group(1).strip()
+            is_wiki = start > 0 and line[start - 1] == "[" and end < len(line) and line[end] == "]"
+
+            if is_wiki:
+                # Obsidian-style: [[TOKEN]] or [[TOKEN|Alias]] or [[TOKEN#Heading]].
+                base = inner.split("#", 1)[0].split("^", 1)[0].strip()
+                if "|" in base:
+                    base = base.split("|", 1)[0].strip()
+                if TOKEN_RE.match(base):
+                    refs.add(base)
+                    wiki_refs.add(base)
+                continue
+
+            # Legacy: [TOKEN] or explicit global [TOKEN|LEGEND.md].
+            candidate = inner
+            if "|" in candidate:
+                token, src = candidate.split("|", 1)
+                token = token.strip()
+                src = src.strip()
+                if src != "LEGEND.md":
+                    continue
+                candidate = token
+            if TOKEN_RE.match(candidate):
+                refs.add(candidate)
+    return refs, wiki_refs
+
+
+def _extract_wiki_token_refs(md: str) -> set[str]:
+    """Extract Obsidian-style wiki-links that look like tokens: [[TOKEN]].
+
+    This is used for repo-root freeform docs (README.md, AGENTS.md) where we do not
+    enforce [LEGEND]/[CONTENT], but we still want strict hygiene: token-like wiki-links
+    must point to global tokens (defined in LEGEND.md) to avoid ghost nodes.
+    """
+    refs: set[str] = set()
+    in_fence = False
+    for raw in md.splitlines():
+        line = raw.rstrip("\n")
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        line = _strip_inline_code(line)
+        for inner in WIKI_LINK_RE.findall(line):
+            base = inner.strip()
+            base = base.split("#", 1)[0].split("^", 1)[0].strip()
+            if "|" in base:
+                base = base.split("|", 1)[0].strip()
+            if TOKEN_RE.match(base):
+                refs.add(base)
+    return refs
+
+
+def _should_skip_dir(name: str) -> bool:
+    return name in {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".next",
+        ".cache",
+        "__pycache__",
+    }
+
+
+def _iter_markdown_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in sorted(root.rglob("*.md")):
+        if any(_should_skip_dir(p) for p in path.parts):
+            continue
+        files.append(path)
+    return files
+
+
+def _is_repo_root_freeform(path: Path, root: Path) -> bool:
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False
+    if rel.parent != Path("."):
+        return False
+    return rel.name in {"AGENTS.md", "README.md"}
+
+
+def _is_contract_doc(rel: Path) -> tuple[bool, str]:
+    # Versioned contracts live under docs/contracts/*_vN.md
+    if len(rel.parts) < 3:
+        return (False, "")
+    if rel.parts[0] != "docs" or rel.parts[1] != "contracts":
+        return (False, "")
+    m = CONTRACT_FILE_RE.match(rel.name)
+    if not m:
+        return (False, "")
+    return (True, f"v{m.group('ver')}")
+
+
+def _content_headings(content_block: str) -> set[str]:
+    headings: set[str] = set()
+    in_fence = False
+    for raw in content_block.splitlines():
+        line = raw.rstrip("\n")
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.startswith("## "):
+            headings.add(line[3:].strip())
+    return headings
+
+
+def _has_fenced_code_block(content_block: str) -> bool:
+    in_fence = False
+    for raw in content_block.splitlines():
+        line = raw.rstrip("\n")
+        if line.strip().startswith("```"):
+            # Toggle; at least one fence marker is enough to say "has a fenced block".
+            return True
+        if in_fence:
+            continue
+    return False
+
+
+def _first_non_empty_line(text: str) -> str:
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line:
+            return line
+    return ""
+
+
+def _is_skill_doc(rel: Path) -> bool:
+    # .agents/skills/<skill>/SKILL.md
+    return len(rel.parts) >= 4 and rel.parts[0] == ".agents" and rel.parts[1] == "skills" and rel.name == "SKILL.md"
+
+
+def _gate_skills_memory_v1(root: Path, errors: list[str], warnings: list[str]) -> None:
+    """Skills as long-term memory (structural + freshness checks).
+
+    Fail-closed on structure; freshness/compactness are warnings unless strict mode escalates.
+    """
+    skills_dir = root / ".agents" / "skills"
+    if not skills_dir.exists():
+        return
+
+    index_path = skills_dir / "SKILLS.md"
+    if not index_path.exists():
+        errors.append(".agents/skills: missing SKILLS.md (skills index)")
+        return
+    try:
+        index_text = index_path.read_text(encoding="utf-8")
+    except Exception as e:
+        errors.append(f".agents/skills/SKILLS.md: cannot read: {e}")
+        return
+
+    ttl_days = int(os.environ.get("SKILLS_TTL_DAYS", "90"))
+    max_lines_warn = int(os.environ.get("SKILLS_MAX_LINES_WARN", "160"))
+    max_lines_err = int(os.environ.get("SKILLS_MAX_LINES_ERROR", "260"))
+
+    for skill_dir in sorted([p for p in skills_dir.iterdir() if p.is_dir() and not p.name.startswith(".")]):
+        skill_md = skill_dir / "SKILL.md"
+        rel_skill = skill_md.relative_to(root)
+        if not skill_md.exists():
+            errors.append(f"{skill_dir.relative_to(root)}: missing SKILL.md")
+            continue
+
+        try:
+            raw = skill_md.read_text(encoding="utf-8")
+        except Exception as e:
+            errors.append(f"{rel_skill}: cannot read: {e}")
+            continue
+
+        # Index must list every skill (memory must be discoverable).
+        if f"{skill_dir.name}/SKILL.md" not in index_text:
+            errors.append(f".agents/skills/SKILLS.md: missing entry for {skill_dir.name}/SKILL.md")
+
+        fm, body = _split_front_matter(raw)
+        name = fm.get("name", "").strip()
+        desc = fm.get("description", "").strip()
+        ttl_override = fm.get("ttl_days", "").strip()
+
+        if not name:
+            errors.append(f"{rel_skill}: missing front matter 'name:'")
+        elif name != skill_dir.name:
+            errors.append(f"{rel_skill}: front matter name mismatch: {name!r} != {skill_dir.name!r}")
+        elif not SKILL_NAME_RE.match(name):
+            errors.append(f"{rel_skill}: invalid skill name {name!r} (expected kebab-case)")
+
+        if not desc:
+            errors.append(f"{rel_skill}: missing front matter 'description:' (this is the dynamic context window)")
+        elif len(desc) > 220:
+            warnings.append(f"{rel_skill}: description too long ({len(desc)} chars; keep ≤220)")
+
+        # Compactness (one-screen) heuristics.
+        n_lines = len(raw.splitlines())
+        if n_lines > max_lines_err:
+            errors.append(f"{rel_skill}: too long ({n_lines} lines; hard limit {max_lines_err})")
+        elif n_lines > max_lines_warn:
+            warnings.append(f"{rel_skill}: long ({n_lines} lines; target ≤{max_lines_warn})")
+
+        # Last verified (freshness gate).
+        m = LAST_VERIFIED_RE.search(body)
+        if not m:
+            errors.append(f"{rel_skill}: missing 'Last verified: YYYY-MM-DD' (or 'Последняя проверка: ...')")
+        else:
+            try:
+                d = date.fromisoformat(m.group(1))
+            except Exception:
+                errors.append(f"{rel_skill}: invalid Last verified date: {m.group(1)!r} (expected YYYY-MM-DD)")
+                d = None
+            if d is not None:
+                if d > date.today():
+                    errors.append(f"{rel_skill}: Last verified is in the future: {d.isoformat()}")
+                # Allow per-skill overrides: ttl_days: 0 disables staleness.
+                ttl = ttl_days
+                if ttl_override:
+                    try:
+                        ttl = int(ttl_override)
+                    except Exception:
+                        warnings.append(f"{rel_skill}: ttl_days is not an int: {ttl_override!r} (ignored)")
+                        ttl = ttl_days
+                if ttl > 0:
+                    age = (date.today() - d).days
+                    if age > ttl:
+                        errors.append(f"{rel_skill}: stale skill (age {age}d > ttl_days {ttl}); refresh or set ttl_days: 0")
+
+
+def _validate_contract_content(rel: Path, content_block: str, expected_version: str, errors: list[str]) -> None:
+    first = _first_non_empty_line(content_block)
+    if not first.startswith("Contract:"):
+        errors.append(f"{rel}: contract body must start with 'Contract:' line")
+        return
+    if expected_version not in first:
+        errors.append(f"{rel}: contract 'Contract:' line must include {expected_version}")
+
+    headings = _content_headings(content_block)
+    missing = [h for h in REQUIRED_CONTRACT_HEADINGS if h not in headings]
+    if missing:
+        errors.append(f"{rel}: missing required contract headings: {', '.join(missing)}")
+        return
+
+    if not _has_fenced_code_block(content_block):
+        errors.append(f"{rel}: missing fenced code block (required by ## Examples)")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="gate")
+    parser.add_argument("--strict", action="store_true", help="Fail on hygiene warnings (treat warnings as errors).")
+    args = parser.parse_args()
+
+    root = _repo_root()
+    legend_path = root / "LEGEND.md"
+    if not legend_path.exists():
+        print("ERROR: missing LEGEND.md", file=sys.stderr)
+        return 2
+
+    try:
+        global_blocks = _parse_blocks(legend_path.read_text(encoding="utf-8"))
+        global_tokens = _parse_legend_tokens(global_blocks.legend)
+    except Exception as e:
+        print(f"ERROR: LEGEND.md is invalid: {e}", file=sys.stderr)
+        return 2
+
+    md_files = _iter_markdown_files(root)
+
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    for path in md_files:
+        rel = path.relative_to(root)
+
+        # Repo-root docs are intentionally freeform; still apply wiki-link hygiene so Obsidian
+        # does not accumulate token-looking ghost nodes.
+        if _is_repo_root_freeform(path, root):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            wiki = _extract_wiki_token_refs(text)
+            non_global = sorted(wiki - set(global_tokens.keys()))
+            if non_global:
+                warnings.append(
+                    f"{rel}: token-looking wiki-links must be global (defined in LEGEND.md): {', '.join(non_global)}"
+                    " (use [[FILE.md]] / [[path/to/file.md]] for doc links, or define the token globally)"
+                )
+            continue
+
+        try:
+            blocks = _parse_blocks(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            errors.append(f"{rel}: {e}")
+            continue
+
+        try:
+            local_tokens = _parse_legend_tokens(blocks.legend)
+        except Exception as e:
+            errors.append(f"{rel}: invalid [LEGEND]: {e}")
+            continue
+
+        # LEGEND.md is the global token source; it may (and must) define global tokens.
+        if path == legend_path:
+            local_tokens = {}
+
+        shadowed = sorted(set(local_tokens.keys()) & set(global_tokens.keys()))
+        if shadowed:
+            errors.append(
+                f"{rel}: local tokens shadow global tokens: {', '.join(shadowed)}"
+            )
+            continue
+
+        refs, wiki_refs = _extract_token_refs(blocks.content)
+        defined = set(global_tokens.keys()) | set(local_tokens.keys())
+        missing = sorted(refs - defined)
+        if missing:
+            errors.append(f"{rel}: undefined token references: {', '.join(missing)}")
+
+        # Hygiene: local tokens should not be referenced as wiki-links ([[TOKEN]]) because
+        # Obsidian will create "ghost nodes" that look global. Keep wiki-links for global tokens.
+        local_wiki = sorted(wiki_refs & set(local_tokens.keys()))
+        if local_wiki:
+            warnings.append(
+                f"{rel}: local tokens referenced as wiki-links [[TOKEN]]: {', '.join(local_wiki)}"
+                " (use [TOKEN] for local tokens to avoid Obsidian ghost nodes)"
+            )
+
+        # Hygiene (graph completeness): if a doc references a global token in legacy form ([TOKEN] /
+        # [TOKEN|LEGEND.md]) but never as a wiki-link ([[TOKEN]]), the Obsidian graph will not be
+        # navigable/clickable for that token from this doc.
+        missing_wiki_global = sorted((refs - wiki_refs) & set(global_tokens.keys()))
+        if missing_wiki_global:
+            warnings.append(
+                f"{rel}: global tokens referenced without wiki-links [[TOKEN]]: {', '.join(missing_wiki_global)}"
+                " (prefer [[TOKEN]] at least once per doc for graph navigation)"
+            )
+
+        # Hygiene: unused local tokens are almost always accidental.
+        unused_local = sorted(set(local_tokens.keys()) - refs)
+        if unused_local:
+            warnings.append(f"{rel}: unused local tokens: {', '.join(unused_local)}")
+
+        is_contract, expected_ver = _is_contract_doc(rel)
+        if is_contract:
+            _validate_contract_content(rel, blocks.content, expected_ver, errors)
+
+    # Skills as long-term memory (project-local).
+    _gate_skills_memory_v1(root, errors, warnings)
+
+    if warnings:
+        print("== gate warnings ==")
+        for w in warnings:
+            print(f"- {w}")
+        if args.strict:
+            errors.extend([f"{w} (warning treated as error)" for w in warnings])
+
+    if errors:
+        print("== gate errors ==", file=sys.stderr)
+        for e in errors:
+            print(f"- {e}", file=sys.stderr)
+        print(f"\nFAIL: gate ({len(errors)} error(s)).", file=sys.stderr)
+        return 2
+
+    # Run project/language checks (optional, configured by forge).
+    plan = _iter_plan_lines(root / "tools" / "gate.plan")
+    plan_failures = 0
+    if plan:
+        print("\n== gate plan ==")
+    for cmd in plan:
+        print(f"\n$ {cmd}")
+        rc = subprocess.call(cmd, shell=True, cwd=root)
+        if rc != 0:
+            plan_failures += 1
+            print(f"gate: plan command failed (rc={rc})", file=sys.stderr)
+
+    if plan_failures:
+        print(f"\nFAIL: gate plan had {plan_failures} failing command(s).", file=sys.stderr)
+        return 1
+
+    print("\nOK: gate")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
