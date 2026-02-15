@@ -11,10 +11,12 @@ mod ids;
 use ids::*;
 
 mod compact;
-use compact::{compact_open_result, parse_response_verbosity as parse_open_response_verbosity};
+use compact::parse_response_verbosity as parse_open_response_verbosity;
 
 mod compact_budget;
-use compact_budget::trim_compact_open_result_for_budget;
+
+mod budget;
+use budget::{apply_open_budget_and_verbosity, dedupe_warnings_by_code};
 
 mod cards;
 use cards::*;
@@ -638,144 +640,8 @@ impl McpServer {
         }
 
         redact_value(&mut result, 6);
-
-        if verbosity == ResponseVerbosity::Compact {
-            result = compact_open_result(&id, &result);
-            if let Some(limit) = max_chars {
-                let (limit, clamped) = clamp_budget_max(limit);
-                let mut truncated = false;
-                let mut minimal = false;
-
-                let _used =
-                    ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |v| {
-                        trim_compact_open_result_for_budget(v, limit)
-                    });
-
-                warnings.extend(budget_warnings(truncated, minimal, clamped));
-            } else if result.get("budget").is_none() {
-                // Some open kinds don't go through the budget-aware super-resume machinery.
-                // Ensure budget is visible even in compact output (UX invariant).
-                let used = json_len_chars(&result);
-                let (limit, _clamped) = clamp_budget_max(used);
-                let _used = attach_budget(&mut result, limit, false);
-            }
-        } else if let Some(limit) = max_chars {
-            let (limit, clamped) = clamp_budget_max(limit);
-            let mut truncated = false;
-            let mut minimal = false;
-
-            let _used =
-                ensure_budget_limit(&mut result, limit, &mut truncated, &mut minimal, |v| {
-                    // Some open kinds (e.g. job artifacts) must preserve a stable navigation capsule
-                    // under tight budgets. Reuse the compact trimming rules to avoid falling all the
-                    // way down to `{signal:minimal}` when the payload is dominated by a large
-                    // preview string.
-                    if v.get("kind")
-                        .and_then(|vv| vv.as_str())
-                        .is_some_and(|k| k.eq_ignore_ascii_case("job_artifact"))
-                    {
-                        return trim_compact_open_result_for_budget(v, limit);
-                    }
-
-                    let mut changed = false;
-                    // Prefer dropping the heaviest content fields first.
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &[], &["steps"]);
-                        changed |= drop_fields_at(v, &[], &["slice_task"]);
-                        changed |= drop_fields_at(v, &[], &["slice_plan_spec"]);
-                        changed |= drop_fields_at(v, &["card"], &["text"]);
-                        changed |= drop_fields_at(v, &["entry"], &["content"]);
-                        changed |= drop_fields_at(v, &["entry"], &["payload"]);
-                        changed |= drop_fields_at(v, &[], &["prompt"]);
-                        changed |= drop_fields_at(v, &["content", "memory"], &["cards"]);
-                        changed |=
-                            drop_fields_at(v, &["content", "memory", "trace"], &["sequential"]);
-                        changed |= drop_fields_at(v, &["content", "memory", "trace"], &["entries"]);
-                        changed |= drop_fields_at(v, &["content", "memory", "notes"], &["entries"]);
-                        changed |= drop_fields_at(v, &["content", "timeline"], &["events"]);
-                        changed |= compact_card_fields_at(v, &["cards"], 160, true, false, true);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &["card"], &["meta"]);
-                        changed |= drop_fields_at(v, &["entry"], &["meta"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &[], &["step_focus"]);
-                        changed |= drop_fields_at(v, &[], &["degradation"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &["edges"], &["supports", "blocks"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &["card"], &["tags"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        if let Some(events) = v.get_mut("events").and_then(|vv| vv.as_array_mut()) {
-                            for ev in events.iter_mut() {
-                                if let Some(msg) = ev.get("message").and_then(|vv| vv.as_str()) {
-                                    let msg = truncate_string(&redact_text(msg), 140);
-                                    if let Some(obj) = ev.as_object_mut() {
-                                        obj.insert("message".to_string(), Value::String(msg));
-                                    }
-                                }
-                            }
-                            changed = true;
-                        }
-                        if json_len_chars(v) > limit
-                            && let Some(events) =
-                                v.get_mut("events").and_then(|vv| vv.as_array_mut())
-                        {
-                            for ev in events.iter_mut() {
-                                if let Some(obj) = ev.as_object_mut() {
-                                    obj.remove("refs");
-                                }
-                            }
-                            changed = true;
-                        }
-                    }
-                    if json_len_chars(v) > limit {
-                        let (_used, truncated_cards) = enforce_graph_list_budget(v, "cards", limit);
-                        if truncated_cards {
-                            changed = true;
-                        }
-                        let (_used, truncated_events) =
-                            enforce_graph_list_budget(v, "events", limit);
-                        if truncated_events {
-                            changed = true;
-                        }
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &[], &["cards"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &[], &["events"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &["content"], &["signals"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &["content"], &["steps"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &["content"], &["radar"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &["anchor"], &["description", "refs"]);
-                    }
-                    if json_len_chars(v) > limit {
-                        changed |= drop_fields_at(v, &[], &["stats"]);
-                    }
-                    changed
-                });
-
-            warnings.extend(budget_warnings(truncated, minimal, clamped));
-        } else if result.get("budget").is_none() {
-            // For open calls without explicit budgets, keep the payload stable but still report the
-            // effective size to the caller (cheap drift guard + UX).
-            let used = json_len_chars(&result);
-            let (limit, _clamped) = clamp_budget_max(used);
-            let _used = attach_budget(&mut result, limit, false);
-        }
+        result = apply_open_budget_and_verbosity(result, &id, verbosity, max_chars, &mut warnings);
+        dedupe_warnings_by_code(&mut warnings);
 
         if warnings.is_empty() {
             ai_ok_with("open", result, suggestions)
