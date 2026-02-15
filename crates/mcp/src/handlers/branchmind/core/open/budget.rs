@@ -41,7 +41,7 @@ pub(super) fn apply_open_budget_and_verbosity(
     max_chars: Option<usize>,
     warnings: &mut Vec<Value>,
 ) -> Value {
-    match verbosity {
+    let mut out = match verbosity {
         ResponseVerbosity::Compact => {
             let mut out = compact_open_result(open_id, &result);
             apply_open_budget_compact(&mut out, open_id, max_chars, warnings);
@@ -52,6 +52,36 @@ pub(super) fn apply_open_budget_and_verbosity(
             apply_open_budget_full(&mut out, open_id, max_chars, warnings);
             out
         }
+    };
+
+    // Parity guard: if callers already report BUDGET_TRUNCATED, force truncated flags
+    // to be explicit on the returned open result to avoid UI ambiguity in compact flows.
+    if warning_has_budget_truncated(warnings) {
+        set_truncated_flag(&mut out, true);
+        attach_budget_truncated(&mut out, true);
+    }
+
+    // Keep warning list compact: duplicates from inner handlers are deduped, but
+    // budget truncation may be injected/observed at multiple layers.
+    dedupe_warnings_by_code(warnings);
+
+    out
+}
+
+fn warning_has_budget_truncated(warnings: &[Value]) -> bool {
+    warnings.iter().any(|w| {
+        w.get("code")
+            .and_then(|code| code.as_str())
+            .is_some_and(|code| code == "BUDGET_TRUNCATED")
+    })
+}
+
+fn attach_budget_truncated(result: &mut Value, truncated: bool) {
+    if let Some(obj) = result.as_object_mut()
+        && let Some(budget_obj) = obj.get_mut("budget")
+        && let Some(budget_map) = budget_obj.as_object_mut()
+    {
+        budget_map.insert("truncated".to_string(), Value::Bool(truncated));
     }
 }
 
