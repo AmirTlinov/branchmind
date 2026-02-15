@@ -8,17 +8,28 @@ pub(crate) fn propose_next_slice_spec(
     objective: &str,
     constraints: &[String],
 ) -> SlicePlanSpec {
-    let constraint_text = if constraints.is_empty() {
+    let cleaned_constraints = constraints
+        .iter()
+        .filter_map(|value| {
+            let trimmed = value.trim();
+            if crate::support::planfs::looks_like_placeholder(trimmed) {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect::<Vec<_>>();
+    let constraint_text = if cleaned_constraints.is_empty() {
         vec![
             "Keep scope strictly within one reviewable slice.".to_string(),
             "No utility-junk or speculative abstractions.".to_string(),
             "All tests and rollback path must be explicit.".to_string(),
         ]
     } else {
-        constraints.to_vec()
+        cleaned_constraints
     };
     let objective_trimmed = objective.trim();
-    let objective_final = if objective_trimmed.is_empty() {
+    let objective_final = if crate::support::planfs::looks_like_placeholder(objective_trimmed) {
         format!("Advance plan {plan_id}: {plan_title}")
     } else {
         objective_trimmed.to_string()
@@ -103,5 +114,38 @@ pub(crate) fn propose_next_slice_spec(
             make_task(3, "Validation and readiness"),
         ],
         budgets: SliceBudgets::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::propose_next_slice_spec;
+
+    #[test]
+    fn propose_next_placeholder_objective_falls_back_to_plan_summary() {
+        let spec = propose_next_slice_spec("PLAN-014", "Live E2E pipeline", "...", &[]);
+        assert_eq!(spec.objective, "Advance plan PLAN-014: Live E2E pipeline");
+        assert!(
+            spec.tasks.iter().all(|task| task
+                .title
+                .contains("Advance plan PLAN-014: Live E2E pipeline")),
+            "task titles should use normalized objective: {:?}",
+            spec.tasks
+        );
+    }
+
+    #[test]
+    fn propose_next_ignores_placeholder_constraints() {
+        let spec = propose_next_slice_spec(
+            "PLAN-014",
+            "Live E2E pipeline",
+            "Keep gate/apply deterministic",
+            &[
+                "...".to_string(),
+                "TBD".to_string(),
+                "No hidden scope creep".to_string(),
+            ],
+        );
+        assert_eq!(spec.non_goals, vec!["No hidden scope creep".to_string()]);
     }
 }

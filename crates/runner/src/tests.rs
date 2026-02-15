@@ -94,6 +94,10 @@ fn scout_output_schema_avoids_v2_drift_and_has_array_items() {
         !required.iter().any(|k| k == "format_version"),
         "scout summary schema must remain v1-compatible unless full v2 anchors are emitted"
     );
+    assert!(
+        required.iter().any(|k| k == "coverage_matrix"),
+        "coverage_matrix must be required to force explicit change_hint↔anchor lineage in scout output"
+    );
 
     // Ensure common array nodes declare `items` (Codex JSON schema requirement).
     let anchors = summary
@@ -103,6 +107,16 @@ fn scout_output_schema_avoids_v2_drift_and_has_array_items() {
     assert!(
         anchors.get("items").is_some(),
         "codex JSON schema requires items for array nodes"
+    );
+
+    let coverage_matrix = summary
+        .get("properties")
+        .and_then(|v| v.get("coverage_matrix"))
+        .expect("coverage_matrix schema");
+    assert_eq!(
+        coverage_matrix.get("type").and_then(|v| v.as_str()),
+        Some("object"),
+        "scout summary schema must expose coverage_matrix contract for change_hint↔anchor lineage"
     );
 }
 
@@ -123,6 +137,17 @@ fn scout_anchor_items_require_all_declared_properties_for_codex_schema() {
         sorted_property_keys(anchor_item),
         "scout anchors.items must keep required[] aligned with properties for Codex schema subset"
     );
+}
+
+#[test]
+fn pipeline_roles_require_exec_mcp_isolation() {
+    assert!(role_requires_exec_mcp_isolation(Some("scout")));
+    assert!(role_requires_exec_mcp_isolation(Some("builder")));
+    assert!(role_requires_exec_mcp_isolation(Some("validator")));
+    assert!(role_requires_exec_mcp_isolation(Some("writer")));
+    assert!(role_requires_exec_mcp_isolation(Some("SCOUT")));
+    assert!(!role_requires_exec_mcp_isolation(Some("manager")));
+    assert!(!role_requires_exec_mcp_isolation(None));
 }
 
 #[test]
@@ -701,6 +726,8 @@ fn build_subagent_prompt_includes_scout_contract_when_role_is_scout() {
     let prompt = build_subagent_prompt(&cfg, "JOB-1", "spec", "ctx", "", Some("scout"), None);
     assert!(prompt.contains("PIPELINE ROLE: SCOUT"));
     assert!(prompt.contains("MUST NOT include code/patch/diff/apply"));
+    assert!(prompt.contains("Every `change_hints[].path` MUST be covered"));
+    assert!(prompt.contains("coverage_matrix.change_hint_coverage[]"));
 }
 
 #[test]
@@ -782,6 +809,121 @@ fn validate_pipeline_summary_contract_rejects_non_strict_code_ref_shape() {
         err.contains("CODE_REF token"),
         "expected CODE_REF token error, got: {err}"
     );
+}
+
+#[test]
+fn validate_pipeline_summary_contract_rejects_uncovered_change_hints_in_scout_v2() {
+    let scout_v2 = json!({
+        "format_version": 2,
+        "objective": "verify pipeline context",
+        "anchors": [
+            {
+                "id": "a:primary",
+                "anchor_type": "primary",
+                "rationale": "main pipeline entry",
+                "code_ref": "code:crates/mcp/src/handlers/tasks/jobs/pipeline.rs#L1-L30",
+                "content": "pipeline entry",
+                "line_count": 30
+            },
+            {
+                "id": "a:dep",
+                "anchor_type": "dependency",
+                "rationale": "artifacts layer",
+                "code_ref": "code:crates/storage/src/store/jobs/artifacts.rs#L1-L50",
+                "content": "artifact persistence",
+                "line_count": 50
+            },
+            {
+                "id": "a:ref",
+                "anchor_type": "reference",
+                "rationale": "contract rules",
+                "code_ref": "code:crates/mcp/src/support/artifact_contracts/mod.rs#L1-L40",
+                "content": "contract",
+                "line_count": 40
+            }
+        ],
+        "change_hints": [
+            { "path": "crates/mcp/src/handlers/tasks/jobs/pipeline.rs", "intent": "scope", "risk": "low" },
+            { "path": "crates/storage/src/store/jobs/artifacts.rs", "intent": "scope", "risk": "medium" }
+        ],
+        "summary_for_builder": "long enough summary for v2 scout contract"
+    })
+    .to_string();
+
+    let err = validate_pipeline_summary_contract("scout", &scout_v2)
+        .expect_err("must reject uncovered change_hints in v2 scout pack");
+    assert!(
+        err.contains("missing primary/structural anchor coverage"),
+        "expected coverage error, got: {err}"
+    );
+}
+
+#[test]
+fn clamp_scout_summary_code_refs_promotes_anchor_coverage_for_change_hints() {
+    let raw = json!({
+        "format_version": 2,
+        "objective": "verify pipeline context",
+        "anchors": [
+            {
+                "id": "a:primary",
+                "anchor_type": "primary",
+                "rationale": "pipeline entry",
+                "code_ref": "code:crates/mcp/src/handlers/tasks/jobs/pipeline.rs#L1-L30",
+                "content": "pipeline entry",
+                "line_count": 30
+            },
+            {
+                "id": "a:dep",
+                "anchor_type": "dependency",
+                "rationale": "artifacts layer",
+                "code_ref": "code:crates/storage/src/store/jobs/artifacts.rs#L1-L50",
+                "content": "artifact persistence",
+                "line_count": 50
+            },
+            {
+                "id": "a:ref",
+                "anchor_type": "reference",
+                "rationale": "contract rules",
+                "code_ref": "code:crates/mcp/src/support/artifact_contracts/mod.rs#L1-L40",
+                "content": "contract",
+                "line_count": 40
+            }
+        ],
+        "code_refs": [
+            "code:crates/mcp/src/handlers/tasks/jobs/pipeline.rs#L1-L30",
+            "code:crates/storage/src/store/jobs/artifacts.rs#L1-L50",
+            "code:crates/mcp/src/support/artifact_contracts/mod.rs#L1-L40"
+        ],
+        "change_hints": [
+            { "path": "crates/mcp/src/handlers/tasks/jobs/pipeline.rs", "intent": "scope", "risk": "low" },
+            { "path": "crates/storage/src/store/jobs/artifacts.rs", "intent": "scope", "risk": "medium" }
+        ],
+        "summary_for_builder": "long enough summary for v2 scout contract"
+    })
+    .to_string();
+
+    let normalized = clamp_scout_summary_code_refs(&raw, 24);
+    validate_pipeline_summary_contract("scout", &normalized)
+        .expect("normalized scout summary must satisfy v2 coverage checks");
+
+    let parsed: Value = serde_json::from_str(&normalized).expect("normalized json");
+    let anchors = parsed
+        .get("anchors")
+        .and_then(|v| v.as_array())
+        .expect("anchors array");
+    let artifacts_anchor_type = anchors
+        .iter()
+        .filter_map(|a| a.as_object())
+        .find(|obj| {
+            obj.get("code_ref")
+                .and_then(|v| v.as_str())
+                .is_some_and(|raw| raw.contains("crates/storage/src/store/jobs/artifacts.rs"))
+        })
+        .and_then(|obj| obj.get("anchor_type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert_eq!(artifacts_anchor_type, "structural");
 }
 
 fn valid_builder_batch() -> String {

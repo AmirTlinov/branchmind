@@ -12,7 +12,6 @@ mod indexes;
 mod job_artifacts;
 mod job_bus;
 mod jobs;
-mod knowledge_keys;
 mod ops_history;
 mod pragmas;
 mod reasoning;
@@ -37,7 +36,6 @@ pub(super) fn full_schema_sql() -> String {
     sql.push_str(evidence::SQL);
     sql.push_str(ops_history::SQL);
     sql.push_str(graph::SQL);
-    sql.push_str(knowledge_keys::SQL);
     sql.push_str(indexes::SQL);
     sql
 }

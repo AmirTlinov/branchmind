@@ -378,6 +378,7 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "task": { "type": "string" },
                     "anchor": { "type": "string" },
                     "slice_id": { "type": "string" },
+                    "target_ref": { "type": "string", "description": "PlanFS slice ref: planfs:<slug>#SLICE-<n> or planfs:<slug>/Slice-<n>.md" },
                     "objective": { "type": "string" },
                     "constraints": { "type": "array", "items": { "type": "string" } },
                     "max_context_refs": { "type": "integer" },
@@ -392,7 +393,7 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "max_ref_redundancy": { "type": "number" },
                     "dry_run": { "type": "boolean" },
                 },
-                "required": ["workspace", "slice_id"]
+                "required": ["workspace"]
             }
         }),
         json!({
@@ -404,6 +405,7 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "slice_id": { "type": "string" },
+                    "target_ref": { "type": "string", "description": "PlanFS slice ref: planfs:<slug>#SLICE-<n> or planfs:<slug>/Slice-<n>.md" },
                     "scout_pack_ref": { "type": "string" },
                     "objective": { "type": "string" },
                     "dod": { "type": "object" },
@@ -420,7 +422,7 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "context_retry_limit": { "type": "integer", "description": "max builder context-request retries (bounded <=2, default 2)" },
                     "dry_run": { "type": "boolean" }
                 },
-                "required": ["workspace", "slice_id", "scout_pack_ref"]
+                "required": ["workspace", "scout_pack_ref"]
             }
         }),
         json!({
@@ -432,6 +434,7 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "workspace": { "type": "string" },
                     "task": { "type": "string" },
                     "slice_id": { "type": "string" },
+                    "target_ref": { "type": "string", "description": "PlanFS slice ref: planfs:<slug>#SLICE-<n> or planfs:<slug>/Slice-<n>.md" },
                     "scout_pack_ref": { "type": "string" },
                     "builder_batch_ref": { "type": "string" },
                     "plan_ref": { "type": "string" },
@@ -440,7 +443,7 @@ pub(crate) fn jobs_definitions() -> Vec<Value> {
                     "model": { "type": "string", "description": "hard pin: opus-4.6 family" },
                     "dry_run": { "type": "boolean" }
                 },
-                "required": ["workspace", "slice_id", "scout_pack_ref", "builder_batch_ref"]
+                "required": ["workspace", "scout_pack_ref", "builder_batch_ref"]
             }
         }),
         json!({

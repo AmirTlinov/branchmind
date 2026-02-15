@@ -115,30 +115,15 @@ Rules for *using* BranchMind tools day-to-day (portal set, progressive disclosur
 are configured in the local Codex config (`config.toml`) to stay consistent across repositories.
 Project-level UX doctrine still lives in `docs/architecture/AGENT_UX.md`.
 
-### Knowledge cards (recall-first, cross-session memory)
+### Local skills (project memory; knowledge cards removed)
 
-BranchMind is designed so an agent can **learn while building** and then “recall” the right knowledge
-when touching a subsystem later.
+Knowledge-card commands are intentionally removed from v1.
 
-Practical loop:
+Use repository-local skills and plan docs as the durable memory layer:
 
-1) **Before** changing a component: recall what we already know (fast, bounded).
-2) If you learn something new: upsert a knowledge card with a stable `(anchor, key)` identity.
-3) Periodically lint/consolidate to avoid “knowledge junk drawer”.
-
-Copy/paste examples (v1 portals):
-
-```text
-think op=knowledge.recall args={"anchor":"core","limit":12}
-```
-
-```text
-think op=knowledge.upsert args={"anchor":"core","key":"determinism","card":{"title":"Determinism invariants","text":"Claim: ...\nScope: core\nApply: ...\nProof: CMD: ...\nExpiry: 2027-01-01"}}
-```
-
-Notes:
-- Knowledge is **versioned**: editing text creates a new `card_id`, while `(anchor,key)` always resolves to the latest.
-- `tasks_lint` may emit recall/seed actions when a task is anchored but knowledge is missing (semi-strict guidance).
+1) Keep reusable intent/workflows in `.agents/skills/**`.
+2) Keep execution-ready plans in `docs/plans/<plan-slug>/PLAN.md` + `Slice-*.md`.
+3) Keep proofs and implementation deltas in task steps/events (`CMD/LINK/FILE/CODE_REF`).
 
 ### Storage API discipline (request structs)
 

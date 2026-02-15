@@ -51,10 +51,6 @@ See `TYPES.md` for the full envelope. v1 adds:
 - `call`
 
 ### think_ops
-- `knowledge.upsert`
-- `knowledge.query`
-- `knowledge.recall`
-- `knowledge.lint`
 - `reasoning.seed`
 - `reasoning.pipeline`
 - `idea.branch.create`

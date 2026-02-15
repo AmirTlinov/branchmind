@@ -13,6 +13,7 @@ impl McpServer {
                 "workspace",
                 "task",
                 "slice_id",
+                "target_ref",
                 "scout_pack_ref",
                 "objective",
                 "dod",
@@ -44,30 +45,73 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let slice_id = match require_non_empty_string(args_obj, "slice_id") {
+        let planfs_target = match resolve_planfs_target_optional(self, &workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
+        };
+        let slice_id_input = match optional_non_empty_string(args_obj, "slice_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let slice_id = match (slice_id_input, planfs_target.as_ref()) {
+            (Some(value), Some(planfs)) => {
+                if !value.eq_ignore_ascii_case(&planfs.slice_id) {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "slice_id must match target_ref slice selector when both are provided",
+                    );
+                }
+                value
+            }
+            (Some(value), None) => value,
+            (None, Some(planfs)) => planfs.slice_id.clone(),
+            (None, None) => {
+                return ai_error("INVALID_INPUT", "slice_id or target_ref is required");
+            }
         };
         let binding = match resolve_slice_binding_optional(self, &workspace, &slice_id) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        if binding.is_none() && self.jobs_slice_first_fail_closed_enabled {
+        if binding.is_none() && planfs_target.is_none() && self.jobs_slice_first_fail_closed_enabled
+        {
             return ai_error(
                 "PRECONDITION_FAILED",
                 "unknown slice_id: missing plan_slices binding (run tasks.slices.apply first)",
             );
         }
         let slice_first = binding.is_some();
+        let planfs_mode = planfs_target.is_some() && !slice_first;
 
         let task_arg = match optional_non_empty_string(args_obj, "task") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let task_id = match (task_arg, binding.as_ref()) {
-            (Some(v), _) => v,
-            (None, Some(binding)) => binding.plan_id.clone(),
-            (None, None) => {
+        let focus_task = if task_arg.is_none() && binding.is_none() && planfs_target.is_some() {
+            match self.store.focus_get(&workspace) {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        } else {
+            None
+        };
+        let task_id = match (task_arg, binding.as_ref(), focus_task) {
+            (Some(v), _, _) => v,
+            (None, Some(binding), _) => binding.plan_id.clone(),
+            (None, None, Some(focus)) => {
+                if matches!(
+                    crate::support::parse_plan_or_task_kind(&focus),
+                    Some(TaskKind::Task)
+                ) {
+                    focus
+                } else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "task is required when target_ref is used without a focused TASK-*",
+                    );
+                }
+            }
+            (None, None, None) => {
                 return ai_error(
                     "INVALID_INPUT",
                     "task is required when slice binding is missing (legacy/unplanned mode)",
@@ -104,6 +148,8 @@ impl McpServer {
         };
         let objective = if let Some(binding) = binding.as_ref() {
             binding.spec.objective.clone()
+        } else if let Some(planfs) = planfs_target.as_ref() {
+            planfs.spec.objective.clone()
         } else if let Some(obj) = requested_objective.clone() {
             obj
         } else {
@@ -116,7 +162,7 @@ impl McpServer {
             Some(v) if v.is_object() => v.clone(),
             Some(_) => return ai_error("INVALID_INPUT", "dod must be an object"),
             None => {
-                if slice_first {
+                if slice_first || planfs_mode {
                     json!({})
                 } else {
                     return ai_error(
@@ -128,6 +174,8 @@ impl McpServer {
         };
         let budgets_json = if let Some(binding) = binding.as_ref() {
             binding.spec.budgets.to_json()
+        } else if let Some(planfs) = planfs_target.as_ref() {
+            planfs.spec.budgets.to_json()
         } else if let Some(budgets) = dod.get("budgets") {
             if !budgets.is_object() {
                 return ai_error("INVALID_INPUT", "dod.budgets must be an object");
@@ -143,6 +191,8 @@ impl McpServer {
             .unwrap_or_else(|| "-".to_string());
         let slice_spec = if let Some(binding) = binding.as_ref() {
             binding.spec.clone()
+        } else if let Some(planfs) = planfs_target.as_ref() {
+            planfs.spec.clone()
         } else {
             let mut spec = crate::support::propose_next_slice_spec(&task_id, "", &objective, &[]);
             if let Some(obj) = budgets_json.as_object() {
@@ -160,7 +210,7 @@ impl McpServer {
         };
         if let Some(obj) = dod.as_object_mut() {
             // Slice-first: fill DoD defaults from slice_plan_spec unless caller already provided them.
-            if slice_first {
+            if slice_first || planfs_mode {
                 obj.entry("criteria".to_string()).or_insert(Value::Array(
                     slice_spec
                         .dod
@@ -195,7 +245,7 @@ impl McpServer {
             obj.entry("budgets".to_string())
                 .or_insert(budgets_json.clone());
 
-            if !slice_first {
+            if !slice_first && !planfs_mode {
                 let tests_ok = obj
                     .get("tests")
                     .and_then(|v| v.as_array())
@@ -359,6 +409,18 @@ impl McpServer {
                 "OBJECTIVE_OVERRIDDEN",
                 "objective arg ignored: slice objective is source of truth",
                 "Remove objective or set it equal to slice_plan_spec.objective.",
+            ));
+        }
+        if let Some(planfs) = planfs_target.as_ref()
+            && binding.is_none()
+        {
+            warnings.push(warning(
+                "PLANFS_TARGET_CONTEXT",
+                &format!(
+                    "using planfs target_ref context without plan_slices binding: {}",
+                    planfs.target_ref
+                ),
+                "Run tasks.slices.apply for strict slice-first determinism when possible.",
             ));
         }
         let scout_open = match self.store.job_open(
@@ -565,6 +627,32 @@ impl McpServer {
                 Value::String(binding.slice_task_id.clone()),
             );
         }
+        if let Some(planfs) = planfs_target.as_ref() {
+            meta.insert(
+                "target_ref".to_string(),
+                Value::String(planfs.target_ref.clone()),
+            );
+            meta.insert(
+                "planfs_slug".to_string(),
+                Value::String(planfs.plan_slug.clone()),
+            );
+            meta.insert(
+                "planfs_path".to_string(),
+                Value::String(planfs.plan_path.clone()),
+            );
+            meta.insert(
+                "planfs_slice_file".to_string(),
+                Value::String(planfs.slice_file.clone()),
+            );
+            meta.insert(
+                "planfs_excerpt".to_string(),
+                Value::String(planfs.excerpt.clone()),
+            );
+            meta.insert(
+                "planfs_excerpt_chars".to_string(),
+                json!(planfs.excerpt.chars().count()),
+            );
+        }
         meta.insert("plan_id".to_string(), Value::String(task_id.clone()));
         meta.insert("slice_budgets".to_string(), budgets_json.clone());
         meta.insert(
@@ -596,6 +684,26 @@ impl McpServer {
             obj.insert(
                 "slice_task_id".to_string(),
                 Value::String(binding.slice_task_id.clone()),
+            );
+        }
+        if let Some(planfs) = planfs_target.as_ref()
+            && let Some(obj) = pipeline.as_object_mut()
+        {
+            obj.insert(
+                "target_ref".to_string(),
+                Value::String(planfs.target_ref.clone()),
+            );
+            obj.insert(
+                "planfs_path".to_string(),
+                Value::String(planfs.plan_path.clone()),
+            );
+            obj.insert(
+                "planfs_slice_file".to_string(),
+                Value::String(planfs.slice_file.clone()),
+            );
+            obj.insert(
+                "planfs_excerpt_chars".to_string(),
+                json!(planfs.excerpt.chars().count()),
             );
         }
         meta.insert("pipeline".to_string(), pipeline);
@@ -650,11 +758,20 @@ impl McpServer {
         let budgets_text = serde_json::to_string_pretty(&budgets_json)
             .or_else(|_| serde_json::to_string(&budgets_json))
             .unwrap_or_else(|_| "{}".to_string());
+        let planfs_prompt_block = if let Some(planfs) = planfs_target.as_ref() {
+            format!(
+                "PlanFS target_ref: {}\nPlanFS path: {}/{}\nPlanFS slice excerpt (bounded):\n{}\n\n",
+                planfs.target_ref, planfs.plan_path, planfs.slice_file, planfs.excerpt
+            )
+        } else {
+            String::new()
+        };
         let role_prompt = format!(
             "ROLE=BUILDER\n\
 MUST use only scout_context_pack + slice_plan_spec (provided below).\n\
 MUST output ONLY builder_diff_batch JSON.\n\
 MUST include proof_refs, rollback_plan, and execution_evidence{{revision,diff_scope,command_runs,rollback_proof,semantic_guards}}.\n\
+MUST provide non-empty checks_to_run[] (at least one concrete verification command).\n\
 MUST ensure every proof_refs[] entry starts with CMD:/LINK:/FILE:.\n\
 MUST shape execution_evidence.command_runs[] as {{cmd,exit_code,stdout_ref,stderr_ref}}.\n\
 MUST shape execution_evidence.rollback_proof as {{strategy,target_revision,verification_cmd_ref}}.\n\
@@ -666,6 +783,7 @@ Context request loop budget: context_retry_count={context_retry_count}, context_
 MUST NOT skip tests listed in DoD unless explicit EXCEPTION.\n\
 Execution target: model=gpt-5.3-codex profile=xhigh.\n\n\
 Plan: {task_id}\nSlice: {slice_id}\nSlice task: {slice_task_id}\nObjective (slice): {objective}\nScout pack ref: {scout_pack_ref}\n\n\
+{planfs_prompt_block}\
 Budgets (fail-closed):\n{budgets_text}\n\n\
 SlicePlanSpec (source of truth, bounded):\n{slice_plan_spec_text}\n\n\
 Strict scout mode: {strict_scout_mode} (stale_after_s={scout_stale_after_s}, scout_age_s={}).\n\
@@ -737,6 +855,14 @@ DoD:\n{dod_text}\n",
                 "context_retry_count": context_retry_count,
                 "context_retry_limit": context_retry_limit
             },
+            "planfs": planfs_target.as_ref().map(|planfs| json!({
+                "target_ref": planfs.target_ref,
+                "slug": planfs.plan_slug,
+                "path": planfs.plan_path,
+                "slice_file": planfs.slice_file,
+                "slice_id": planfs.slice_id,
+                "excerpt_chars": planfs.excerpt.chars().count()
+            })).unwrap_or(Value::Null),
             "mesh": mesh
         });
 

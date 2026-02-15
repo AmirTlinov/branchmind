@@ -14,6 +14,7 @@ impl McpServer {
                 "task",
                 "anchor",
                 "slice_id",
+                "target_ref",
                 "objective",
                 "constraints",
                 "max_context_refs",
@@ -43,15 +44,36 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let slice_id = match require_non_empty_string(args_obj, "slice_id") {
+        let planfs_target = match resolve_planfs_target_optional(self, &workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
+        };
+        let slice_id_input = match optional_non_empty_string(args_obj, "slice_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let slice_id = match (slice_id_input, planfs_target.as_ref()) {
+            (Some(value), Some(planfs)) => {
+                if !value.eq_ignore_ascii_case(&planfs.slice_id) {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "slice_id must match target_ref slice selector when both are provided",
+                    );
+                }
+                value
+            }
+            (Some(value), None) => value,
+            (None, Some(planfs)) => planfs.slice_id.clone(),
+            (None, None) => {
+                return ai_error("INVALID_INPUT", "slice_id or target_ref is required");
+            }
         };
         let binding = match resolve_slice_binding_optional(self, &workspace, &slice_id) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        if binding.is_none() && self.jobs_slice_first_fail_closed_enabled {
+        if binding.is_none() && planfs_target.is_none() && self.jobs_slice_first_fail_closed_enabled
+        {
             return ai_error(
                 "PRECONDITION_FAILED",
                 "unknown slice_id: missing plan_slices binding (run tasks.slices.apply first)",
@@ -62,10 +84,31 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let task_id = match (task_arg, binding.as_ref()) {
-            (Some(v), _) => v,
-            (None, Some(binding)) => binding.plan_id.clone(),
-            (None, None) => {
+        let focus_task = if task_arg.is_none() && binding.is_none() && planfs_target.is_some() {
+            match self.store.focus_get(&workspace) {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        } else {
+            None
+        };
+        let task_id = match (task_arg, binding.as_ref(), focus_task) {
+            (Some(v), _, _) => v,
+            (None, Some(binding), _) => binding.plan_id.clone(),
+            (None, None, Some(focus)) => {
+                if matches!(
+                    crate::support::parse_plan_or_task_kind(&focus),
+                    Some(TaskKind::Task)
+                ) {
+                    focus
+                } else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "task is required when target_ref is used without a focused TASK-*",
+                    );
+                }
+            }
+            (None, None, None) => {
                 return ai_error(
                     "INVALID_INPUT",
                     "task is required when slice binding is missing (legacy/unplanned mode)",
@@ -104,6 +147,15 @@ impl McpServer {
                 }
                 binding.spec.objective.clone()
             }
+            (false, _requested, None) if planfs_target.is_some() => {
+                let planfs = planfs_target.as_ref().expect("checked planfs target");
+                if let Some(obj) = requested_objective.clone()
+                    && obj != planfs.spec.objective
+                {
+                    constraints.push(format!("requested_focus: {obj}"));
+                }
+                planfs.spec.objective.clone()
+            }
             (false, Some(obj), _) => obj,
             (false, None, _) => {
                 return ai_error(
@@ -120,6 +172,8 @@ impl McpServer {
         };
         let max_budget_refs = if let Some(binding) = binding.as_ref() {
             binding.spec.budgets.max_context_refs
+        } else if let Some(planfs) = planfs_target.as_ref() {
+            planfs.spec.budgets.max_context_refs
         } else {
             64
         };
@@ -127,7 +181,11 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let max_context_refs_default = if slice_first { max_budget_refs } else { 24 };
+        let max_context_refs_default = if slice_first || planfs_target.is_some() {
+            max_budget_refs
+        } else {
+            24
+        };
         let max_context_refs = max_context_refs_requested
             .unwrap_or(max_context_refs_default)
             .clamp(8, max_budget_refs);
@@ -138,6 +196,10 @@ impl McpServer {
             .unwrap_or_else(|| "-".to_string());
         let slice_spec = if let Some(binding) = binding.as_ref() {
             binding.spec.clone()
+        } else if let Some(planfs) = planfs_target.as_ref() {
+            let mut spec = planfs.spec.clone();
+            spec.budgets.max_context_refs = max_context_refs;
+            spec
         } else {
             let mut spec =
                 crate::support::propose_next_slice_spec(&task_id, "", &objective, &constraints);
@@ -305,6 +367,18 @@ impl McpServer {
                 ));
             }
         }
+        if let Some(planfs) = planfs_target.as_ref()
+            && binding.is_none()
+        {
+            warnings.push(warning(
+                "PLANFS_TARGET_CONTEXT",
+                &format!(
+                    "using planfs target_ref context without plan_slices binding: {}",
+                    planfs.target_ref
+                ),
+                "Run tasks.slices.apply to restore slice-first binding when you need strict step-tree determinism.",
+            ));
+        }
 
         let mut meta = args_obj
             .get("meta")
@@ -328,6 +402,32 @@ impl McpServer {
             meta.insert(
                 "slice_task_id".to_string(),
                 Value::String(binding.slice_task_id.clone()),
+            );
+        }
+        if let Some(planfs) = planfs_target.as_ref() {
+            meta.insert(
+                "target_ref".to_string(),
+                Value::String(planfs.target_ref.clone()),
+            );
+            meta.insert(
+                "planfs_slug".to_string(),
+                Value::String(planfs.plan_slug.clone()),
+            );
+            meta.insert(
+                "planfs_path".to_string(),
+                Value::String(planfs.plan_path.clone()),
+            );
+            meta.insert(
+                "planfs_slice_file".to_string(),
+                Value::String(planfs.slice_file.clone()),
+            );
+            meta.insert(
+                "planfs_excerpt".to_string(),
+                Value::String(planfs.excerpt.clone()),
+            );
+            meta.insert(
+                "planfs_excerpt_chars".to_string(),
+                json!(planfs.excerpt.chars().count()),
             );
         }
         meta.insert("plan_id".to_string(), Value::String(task_id.clone()));
@@ -383,6 +483,26 @@ impl McpServer {
                 Value::String(binding.slice_task_id.clone()),
             );
         }
+        if let Some(planfs) = planfs_target.as_ref()
+            && let Some(obj) = pipeline.as_object_mut()
+        {
+            obj.insert(
+                "target_ref".to_string(),
+                Value::String(planfs.target_ref.clone()),
+            );
+            obj.insert(
+                "planfs_path".to_string(),
+                Value::String(planfs.plan_path.clone()),
+            );
+            obj.insert(
+                "planfs_slice_file".to_string(),
+                Value::String(planfs.slice_file.clone()),
+            );
+            obj.insert(
+                "planfs_excerpt_chars".to_string(),
+                json!(planfs.excerpt.chars().count()),
+            );
+        }
         meta.insert("pipeline".to_string(), pipeline);
         let meta_json = serde_json::to_string(&Value::Object(meta)).ok();
         let title = format!("Scout context for {slice_id}");
@@ -402,6 +522,14 @@ impl McpServer {
         let coverage_targets_text = serde_json::to_string_pretty(&coverage_targets)
             .or_else(|_| serde_json::to_string(&coverage_targets))
             .unwrap_or_else(|_| "{}".to_string());
+        let planfs_prompt_block = if let Some(planfs) = planfs_target.as_ref() {
+            format!(
+                "PlanFS target_ref: {}\nPlanFS path: {}/{}\nPlanFS slice excerpt (bounded):\n{}\n\n",
+                planfs.target_ref, planfs.plan_path, planfs.slice_file, planfs.excerpt
+            )
+        } else {
+            String::new()
+        };
         let quality_clause = if quality_profile == "flagship" {
             format!(
                 "QUALITY PROFILE=flagship (fail-closed).\n\
@@ -426,6 +554,7 @@ MUST emit typed anchors: every anchors[] item includes anchor_type (primary|depe
 {quality_clause}\
 Execution target: executor={executor} model={model} profile={executor_profile}.\n\n\
 Plan: {task_id}\nSlice: {slice_id}\nSlice task: {}\nAnchor: {anchor_id}\nObjective (slice): {objective}\nmax_context_refs: {max_context_refs}\n\n\
+{planfs_prompt_block}\
 SlicePlanSpec (source of truth, bounded):\n{slice_plan_spec_text}\n\n\
 Constraints:\n{constraints_text}\n\n\
 Coverage targets:\n{coverage_targets_text}\n",
@@ -499,6 +628,14 @@ Coverage targets:\n{coverage_targets_text}\n",
                 "executor_model": model
             },
             "expected_artifacts": ["scout_context_pack"],
+            "planfs": planfs_target.as_ref().map(|planfs| json!({
+                "target_ref": planfs.target_ref,
+                "slug": planfs.plan_slug,
+                "path": planfs.plan_path,
+                "slice_file": planfs.slice_file,
+                "slice_id": planfs.slice_id,
+                "excerpt_chars": planfs.excerpt.chars().count()
+            })).unwrap_or(Value::Null),
             "mesh": mesh
         });
 

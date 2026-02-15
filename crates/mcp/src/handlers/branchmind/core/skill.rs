@@ -164,15 +164,6 @@ fn render_skill_pack(profile: SkillProfile, max_chars: Option<usize>) -> String 
         ],
     );
 
-    push_section(
-        &mut out,
-        "KNOWLEDGE",
-        &[
-            "Use think.knowledge.upsert with stable (anchor,key); invalid keys return suggestions.",
-            "If keys drift: run think.knowledge.lint (or lint_mode=auto when enabled).",
-        ],
-    );
-
     let mut text = out.join("\n");
     if let Some(limit) = max_chars {
         let (limit, _clamped) = clamp_budget_max(limit);

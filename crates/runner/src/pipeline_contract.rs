@@ -134,6 +134,31 @@ fn is_code_ref_token(raw: &str) -> bool {
     true
 }
 
+fn code_ref_path_key(raw: &str) -> Option<String> {
+    raw.strip_prefix("code:")
+        .and_then(|rest| rest.split_once("#L").map(|(path, _)| path))
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| path.to_ascii_lowercase())
+}
+
+fn change_hint_path_is_covered(path_key: &str, covered_paths: &HashSet<String>) -> bool {
+    if path_key.is_empty() {
+        return false;
+    }
+    if covered_paths.contains(path_key) {
+        return true;
+    }
+    let directory = path_key.trim_end_matches('/');
+    if directory.is_empty() || directory == "." {
+        return false;
+    }
+    let prefix = format!("{directory}/");
+    covered_paths
+        .iter()
+        .any(|covered| covered.starts_with(&prefix))
+}
+
 pub(crate) fn validate_pipeline_summary_contract(role: &str, summary: &str) -> Result<(), String> {
     let parsed: Value = serde_json::from_str(summary)
         .map_err(|_| format!("{role}: summary must be JSON object text"))?;
@@ -651,6 +676,8 @@ fn validate_scout_v2_runner(obj: &serde_json::Map<String, Value>) -> Result<(), 
     }
 
     let valid_types = ["primary", "dependency", "reference", "structural"];
+    let mut primary_structural_paths = HashSet::<String>::new();
+    let mut any_anchor_paths = HashSet::<String>::new();
     for (idx, item) in anchors.iter().enumerate() {
         let Some(anchor_obj) = item.as_object() else {
             return Err(format!(
@@ -688,6 +715,12 @@ fn validate_scout_v2_runner(obj: &serde_json::Map<String, Value>) -> Result<(), 
                 "scout_context_pack_v2.anchors[{idx}].code_ref must be code:... format"
             ));
         }
+        if let Some(path_key) = code_ref_path_key(code_ref) {
+            any_anchor_paths.insert(path_key.clone());
+            if matches!(anchor_type.as_str(), "primary" | "structural") {
+                primary_structural_paths.insert(path_key);
+            }
+        }
         // Content required for primary/dependency/reference.
         if matches!(anchor_type.as_str(), "primary" | "dependency" | "reference") {
             let content = anchor_obj
@@ -709,6 +742,39 @@ fn validate_scout_v2_runner(obj: &serde_json::Map<String, Value>) -> Result<(), 
     if change_hints.len() < SCOUT_MIN_CHANGE_HINTS {
         return Err(format!(
             "scout_context_pack_v2.change_hints must have at least {SCOUT_MIN_CHANGE_HINTS} entries"
+        ));
+    }
+    let covered_paths = if primary_structural_paths.is_empty() {
+        any_anchor_paths
+    } else {
+        primary_structural_paths
+    };
+    let mut missing_paths = Vec::<String>::new();
+    for (idx, hint) in change_hints.iter().enumerate() {
+        let Some(hint_obj) = hint.as_object() else {
+            return Err(format!(
+                "scout_context_pack_v2.change_hints[{idx}] must be object"
+            ));
+        };
+        let path = hint_obj
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        if path.is_empty() {
+            return Err(format!(
+                "scout_context_pack_v2.change_hints[{idx}].path is required"
+            ));
+        }
+        let path_key = path.to_ascii_lowercase();
+        if !change_hint_path_is_covered(&path_key, &covered_paths) {
+            missing_paths.push(path.to_string());
+        }
+    }
+    if !missing_paths.is_empty() {
+        return Err(format!(
+            "scout_context_pack_v2 missing primary/structural anchor coverage for change_hints: {}",
+            missing_paths.join(", ")
         ));
     }
 

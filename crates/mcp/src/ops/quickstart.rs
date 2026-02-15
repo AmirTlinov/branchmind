@@ -329,14 +329,35 @@ pub(crate) fn quickstart_recipes_for_portal(
         }
         ToolName::ThinkOps => {
             push(
-                "recall",
-                "Recall knowledge (anchor-first)",
-                "Fast recall for a component/area (recency-first).",
+                "seed",
+                "Seed reasoning card",
+                "Create a typed reasoning card (hypothesis/question/test/evidence/decision).",
+                ToolName::ThinkOps,
+                portal_env("reasoning.seed", None, json!({ "type": "hypothesis" })),
+                "Низкий",
+                &[],
+            );
+            push(
+                "sequential-step",
+                "Sequential trace checkpoint",
+                "Record one structured hypothesis→test→evidence→decision checkpoint (strict-friendly default discipline).",
                 ToolName::ThinkOps,
                 portal_env(
-                    "knowledge.recall",
-                    None,
-                    json!({ "anchor": "core", "limit": 12 }),
+                    "call",
+                    Some("think.trace.sequential.step"),
+                    json!({
+                        "thought": "Checkpoint: hypothesis/test/evidence/decision status.",
+                        "thoughtNumber": 1,
+                        "totalThoughts": 1,
+                        "nextThoughtNeeded": false,
+                        "meta": {
+                            "checkpoint": "gate",
+                            "hypothesis": "Current patch should satisfy gate.",
+                            "test": "Run make check and inspect first failure.",
+                            "evidence": "Attach concise command output or artifact ref.",
+                            "decision": "Proceed with minimal corrective patch or stop."
+                        }
+                    }),
                 ),
                 "Низкий",
                 &[],
@@ -381,20 +402,20 @@ pub(crate) fn quickstart_recipes_for_portal(
                 &[],
             );
             push(
-                "upsert",
-                "Upsert knowledge (stable key)",
-                "Write/update a knowledge card using a stable (anchor,key) identity.",
+                "pipeline",
+                "Reasoning pipeline",
+                "Create hypothesis→question→test→evidence→decision chain in one call.",
                 ToolName::ThinkOps,
                 portal_env(
-                    "knowledge.upsert",
+                    "reasoning.pipeline",
                     None,
                     json!({
-                        "anchor": "core",
-                        "key": "determinism",
-                        "card": {
-                            "title": "Invariant",
-                            "text": "Claim: ... / Apply: ... / Proof: ... / Expiry: ..."
-                        }
+                        "title": "Pipeline from quickstart",
+                        "hypothesis": "Current approach will pass make check.",
+                        "question": "What can fail first?",
+                        "test": "Run make check and inspect first red.",
+                        "evidence": "Attach failing output snippet.",
+                        "decision": "Pick minimal patch and re-run verify."
                     }),
                 ),
                 "Низкий",
@@ -577,7 +598,7 @@ pub(crate) fn quickstart_recipes_for_portal(
                 portal_env(
                     "schema.list",
                     None,
-                    json!({ "portal": "tasks", "limit": 20, "mode": "compact" }),
+                    json!({ "portal": "tasks", "limit": 20 }),
                 ),
                 "Низкий",
                 &[],

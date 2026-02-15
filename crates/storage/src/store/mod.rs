@@ -14,7 +14,6 @@ mod focus;
 mod graph;
 mod job_bus;
 mod jobs;
-mod knowledge_keys;
 mod ops_history;
 mod portal_cursors;
 mod reasoning_ref;

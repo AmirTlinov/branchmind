@@ -37,6 +37,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             "decompose" => op_aliases.push("plan.decompose".to_string()),
             "evidence_capture" => op_aliases.push("evidence.capture".to_string()),
             "close_step" => op_aliases.push("step.close".to_string()),
+            "planfs_init" => op_aliases.push("planfs.init".to_string()),
+            "planfs_export" => op_aliases.push("planfs.export".to_string()),
+            "planfs_import" => op_aliases.push("planfs.import".to_string()),
             "search" => {
                 op_aliases.push("search".to_string());
                 tier = Tier::Gold;
@@ -69,6 +72,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 | "evidence_capture"
                 | "close_step"
                 | "search"
+                | "planfs_init"
+                | "planfs_export"
+                | "planfs_import"
                 | "slices_propose_next"
                 | "slices_apply"
                 | "slice_open"

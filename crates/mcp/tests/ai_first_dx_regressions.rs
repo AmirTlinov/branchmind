@@ -162,7 +162,13 @@ fn system_schema_list_filters_by_portal_and_includes_tasks_snapshot() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": "system", "arguments": { "op": "schema.list", "args": { "portal": "tasks", "q": "snapshot", "limit": 50 } } }
+        "params": {
+            "name": "system",
+            "arguments": {
+                "op": "schema.list",
+                "args": { "portal": "tasks", "q": "search", "limit": 50 }
+            }
+        }
     }));
 
     let text = extract_tool_text(&resp);
@@ -179,8 +185,8 @@ fn system_schema_list_filters_by_portal_and_includes_tasks_snapshot() {
     assert!(
         schemas
             .iter()
-            .any(|v| v.get("cmd").and_then(|v| v.as_str()) == Some("tasks.snapshot")),
-        "schema.list should include tasks.snapshot; got schemas={schemas:?}"
+            .any(|v| v.get("cmd").and_then(|v| v.as_str()) == Some("tasks.search")),
+        "schema.list should include tasks.search; got schemas={schemas:?}"
     );
 }
 
@@ -804,7 +810,7 @@ fn system_quickstart_other_curated_portals_are_dispatchable() {
                     && a.get("args")
                         .and_then(|v| v.get("op"))
                         .and_then(|v| v.as_str())
-                        == Some("knowledge.recall")
+                        == Some("reasoning.seed")
             }),
             "graph" => actions.iter().any(|a| {
                 a.get("tool").and_then(|v| v.as_str()) == Some("graph")
@@ -834,6 +840,44 @@ fn system_quickstart_other_curated_portals_are_dispatchable() {
             "quickstart portal={portal} should include an expected action; got actions={actions:?}"
         );
     }
+}
+
+#[test]
+fn system_quickstart_think_includes_sequential_checkpoint_recipe() {
+    let mut server = Server::start_initialized_with_args(
+        "system_quickstart_think_includes_sequential_checkpoint_recipe",
+        &["--workspace", "ws_quickstart_think_seq"],
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "system", "arguments": { "op": "quickstart", "args": { "portal": "think", "limit": 5 } } }
+    }));
+
+    let text = extract_tool_text(&resp);
+    assert_eq!(
+        text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "system quickstart portal=think must succeed; got: {text}"
+    );
+
+    let actions = text
+        .get("actions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        actions.iter().any(|a| {
+            a.get("tool").and_then(|v| v.as_str()) == Some("think")
+                && a.get("args")
+                    .and_then(|v| v.get("cmd"))
+                    .and_then(|v| v.as_str())
+                    == Some("think.trace.sequential.step")
+        }),
+        "quickstart portal=think should include sequential checkpoint recipe; got actions={actions:?}"
+    );
 }
 
 #[test]
@@ -1037,6 +1081,96 @@ fn schema_get_with_portal_returns_schema_list_action() {
 }
 
 #[test]
+fn system_schema_list_mode_golden_defaults_to_summary_rows() {
+    let mut server = Server::start_initialized_with_args(
+        "system_schema_list_mode_golden_defaults_to_summary_rows",
+        &["--workspace", "ws_schema_list_golden_mode"],
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": {
+                "op": "schema.list",
+                "args": { "portal": "jobs", "q": "summary", "limit": 50 }
+            }
+        }
+    }));
+
+    let text = extract_tool_text(&resp);
+    assert_eq!(
+        text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "system schema.list must succeed; got: {text}"
+    );
+    let schemas = text
+        .get("result")
+        .and_then(|v| v.get("schemas"))
+        .and_then(|v| v.as_array())
+        .expect("result.schemas");
+    let exec_summary = schemas
+        .iter()
+        .find(|s| s.get("cmd").and_then(|v| v.as_str()) == Some("jobs.exec.summary"))
+        .expect("jobs.exec.summary in schema.list");
+    assert!(
+        exec_summary.get("required").is_none(),
+        "golden/default mode should not include detailed required hints; got={exec_summary:?}"
+    );
+    assert!(
+        exec_summary.get("required_any_of").is_none(),
+        "golden/default mode should not include required_any_of; got={exec_summary:?}"
+    );
+}
+
+#[test]
+fn system_schema_list_mode_all_includes_required_fields() {
+    let mut server = Server::start_initialized_with_args(
+        "system_schema_list_mode_all_includes_required_fields",
+        &["--workspace", "ws_schema_list_all_mode"],
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": {
+                "op": "schema.list",
+                "args": { "portal": "jobs", "mode": "all", "q": "summary", "limit": 50 }
+            }
+        }
+    }));
+
+    let text = extract_tool_text(&resp);
+    assert_eq!(
+        text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "system schema.list all mode must succeed; got: {text}"
+    );
+    let schemas = text
+        .get("result")
+        .and_then(|v| v.get("schemas"))
+        .and_then(|v| v.as_array())
+        .expect("result.schemas");
+    let exec_summary = schemas
+        .iter()
+        .find(|s| s.get("cmd").and_then(|v| v.as_str()) == Some("jobs.exec.summary"))
+        .expect("jobs.exec.summary in schema.list");
+    assert!(
+        exec_summary.get("required").is_some(),
+        "all mode should include required in schema list row; got={exec_summary:?}"
+    );
+    assert!(
+        exec_summary.get("required_any_of").is_some(),
+        "all mode should include required_any_of in schema list row; got={exec_summary:?}"
+    );
+}
+
+#[test]
 fn system_cmd_list_supports_q_filter() {
     let mut server = Server::start_initialized_with_args(
         "system_cmd_list_supports_q_filter",
@@ -1064,6 +1198,75 @@ fn system_cmd_list_supports_q_filter() {
     assert!(
         cmds.iter().any(|v| v.as_str() == Some("system.schema.get")),
         "q filter should include system.schema.get; got cmds={cmds:?}"
+    );
+}
+
+#[test]
+fn system_cmd_list_default_mode_is_golden() {
+    let mut server = Server::start_initialized_with_args(
+        "system_cmd_list_default_mode_is_golden",
+        &["--workspace", "ws_cmd_list_golden_mode"],
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "system", "arguments": { "op": "cmd.list", "args": { "q": "system.", "limit": 200 } } }
+    }));
+
+    let text = extract_tool_text(&resp);
+    assert_eq!(
+        text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "system cmd.list must succeed; got: {text}"
+    );
+    let cmds = text
+        .get("result")
+        .and_then(|v| v.get("cmds"))
+        .and_then(|v| v.as_array())
+        .expect("result.cmds");
+
+    assert!(
+        cmds.iter()
+            .any(|v| v.as_str() == Some("system.schema.list")),
+        "default cmd.list(golden) should include system.schema.list; got cmds={cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|v| v.as_str() == Some("system.cmd.list")),
+        "default cmd.list should not include advanced cmd list; got cmds={cmds:?}"
+    );
+}
+
+#[test]
+fn system_cmd_list_all_mode_includes_advanced_ops() {
+    let mut server = Server::start_initialized_with_args(
+        "system_cmd_list_all_mode_includes_advanced_ops",
+        &["--workspace", "ws_cmd_list_all_mode"],
+    );
+
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "system", "arguments": { "op": "cmd.list", "args": { "q": "system.", "mode": "all", "limit": 200 } } }
+    }));
+
+    let text = extract_tool_text(&resp);
+    assert_eq!(
+        text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "system cmd.list all mode must succeed; got: {text}"
+    );
+    let cmds = text
+        .get("result")
+        .and_then(|v| v.get("cmds"))
+        .and_then(|v| v.as_array())
+        .expect("result.cmds");
+
+    assert!(
+        cmds.iter().any(|v| v.as_str() == Some("system.cmd.list")),
+        "all mode should include system.cmd.list; got cmds={cmds:?}"
     );
 }
 

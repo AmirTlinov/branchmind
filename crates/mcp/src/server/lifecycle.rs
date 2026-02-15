@@ -12,8 +12,6 @@ impl McpServer {
             response_verbosity: cfg.response_verbosity,
             dx_mode: cfg.dx_mode,
             ux_proof_v2_enabled: cfg.ux_proof_v2_enabled,
-            knowledge_autolint_enabled: cfg.knowledge_autolint_enabled,
-            note_promote_enabled: cfg.note_promote_enabled,
             jobs_unknown_args_fail_closed_enabled: cfg.jobs_unknown_args_fail_closed_enabled,
             jobs_strict_progress_schema_enabled: cfg.jobs_strict_progress_schema_enabled,
             jobs_high_done_proof_gate_enabled: cfg.jobs_high_done_proof_gate_enabled,

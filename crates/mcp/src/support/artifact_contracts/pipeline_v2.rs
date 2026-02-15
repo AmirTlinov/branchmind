@@ -247,6 +247,32 @@ pub(crate) struct PreValidatorChecks {
     pub intent_coverage_missing: Vec<String>,
 }
 
+fn code_ref_path_key(code_ref: &str) -> Option<String> {
+    code_ref
+        .strip_prefix("code:")
+        .and_then(|rest| rest.split_once("#L").map(|(path, _)| path))
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| path.to_ascii_lowercase())
+}
+
+fn change_hint_path_is_covered(path_key: &str, covered_paths: &HashSet<String>) -> bool {
+    if path_key.is_empty() {
+        return false;
+    }
+    if covered_paths.contains(path_key) {
+        return true;
+    }
+    let directory = path_key.trim_end_matches('/');
+    if directory.is_empty() || directory == "." {
+        return false;
+    }
+    let prefix = format!("{directory}/");
+    covered_paths
+        .iter()
+        .any(|covered| covered.starts_with(&prefix))
+}
+
 fn synthesize_anchor_type(index: usize, total: usize) -> ScoutAnchorType {
     if index == 0 {
         ScoutAnchorType::Primary
@@ -410,7 +436,7 @@ pub(crate) fn pre_validate_scout_pack(
     }
 
     // 1. Completeness: each change_hints[].path covered by primary or structural anchor.
-    let covered_paths: HashSet<String> = anchors
+    let mut covered_paths: HashSet<String> = anchors
         .iter()
         .filter(|a| {
             matches!(
@@ -418,25 +444,47 @@ pub(crate) fn pre_validate_scout_pack(
                 ScoutAnchorType::Primary | ScoutAnchorType::Structural
             )
         })
-        .filter_map(|a| {
-            a.code_ref
-                .strip_prefix("code:")
-                .and_then(|rest| rest.split_once("#L").map(|(path, _)| path.to_string()))
-        })
+        .filter_map(|a| code_ref_path_key(&a.code_ref))
         .collect();
+    if covered_paths.is_empty() {
+        // Legacy/bridge tolerance: if anchor typing degraded, still use any anchor/code_ref
+        // path as a bounded fallback instead of hard-rejecting a likely-valid scout pack.
+        covered_paths = anchors
+            .iter()
+            .filter_map(|a| code_ref_path_key(&a.code_ref))
+            .collect();
+    }
+    if covered_paths.is_empty() {
+        covered_paths = normalized_pack
+            .get("code_refs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .filter_map(code_ref_path_key)
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+    }
 
     if let Some(change_hints) = normalized_pack
         .get("change_hints")
         .and_then(|v| v.as_array())
     {
         for hint in change_hints {
-            if let Some(path) = hint.get("path").and_then(|v| v.as_str())
-                && !covered_paths.contains(path)
-            {
+            if let Some(path) = hint.get("path").and_then(|v| v.as_str()) {
+                let path_key = path.trim().to_ascii_lowercase();
+                if !change_hint_path_is_covered(&path_key, &covered_paths) {
+                    checks.completeness_ok = false;
+                    checks
+                        .completeness_missing
+                        .push(format!("no primary/structural anchor for: {path}"));
+                }
+            } else {
                 checks.completeness_ok = false;
                 checks
                     .completeness_missing
-                    .push(format!("no primary/structural anchor for: {path}"));
+                    .push("change_hints entry missing path".to_string());
             }
         }
     }
@@ -446,21 +494,13 @@ pub(crate) fn pre_validate_scout_pack(
     let primary_files: Vec<String> = anchors
         .iter()
         .filter(|a| matches!(a.anchor_type, ScoutAnchorType::Primary))
-        .filter_map(|a| {
-            a.code_ref
-                .strip_prefix("code:")
-                .and_then(|rest| rest.split_once("#L").map(|(path, _)| path.to_string()))
-        })
+        .filter_map(|a| code_ref_path_key(&a.code_ref))
         .collect();
 
     let dependency_files: HashSet<String> = anchors
         .iter()
         .filter(|a| matches!(a.anchor_type, ScoutAnchorType::Dependency))
-        .filter_map(|a| {
-            a.code_ref
-                .strip_prefix("code:")
-                .and_then(|rest| rest.split_once("#L").map(|(path, _)| path.to_string()))
-        })
+        .filter_map(|a| code_ref_path_key(&a.code_ref))
         .collect();
 
     // Check: at least one dependency anchor exists somewhere.
@@ -1292,6 +1332,49 @@ mod tests {
         assert!(checks.dependencies_ok);
         assert!(checks.patterns_ok);
         assert!(checks.intent_coverage_ok);
+    }
+
+    #[test]
+    fn pre_validator_accepts_directory_scoped_change_hint_when_descendant_anchor_exists() {
+        let anchors = vec![
+            make_anchor(
+                "a:routes-handler",
+                ScoutAnchorType::Primary,
+                "code:src/routes.rs#L10-L30@sha256:aaa",
+                "pub fn create_user() {}",
+            ),
+            make_anchor(
+                "a:middleware-base",
+                ScoutAnchorType::Structural,
+                "code:src/middleware.rs#L1-L20@sha256:bbb",
+                "pub struct Middleware;",
+            ),
+            make_anchor(
+                "a:types-dep",
+                ScoutAnchorType::Dependency,
+                "code:src/types.rs#L1-L10@sha256:ccc",
+                "pub struct Request;",
+            ),
+            make_anchor(
+                "a:style-ref",
+                ScoutAnchorType::Reference,
+                "code:src/existing.rs#L1-L5@sha256:ddd",
+                "// existing pattern",
+            ),
+        ];
+        let mut pack = full_scout_pack(&anchors);
+        if let Some(change_hints) = pack.get_mut("change_hints").and_then(|v| v.as_array_mut())
+            && let Some(first) = change_hints.get_mut(0)
+        {
+            *first = json!({
+                "path": "src/",
+                "intent": "apply folder-level scope for router changes",
+                "risk": "medium"
+            });
+        }
+        let (verdict, checks) = pre_validate_scout_pack(&pack, &anchors);
+        assert_eq!(verdict, PreValidatorVerdict::Pass);
+        assert!(checks.completeness_ok);
     }
 
     #[test]

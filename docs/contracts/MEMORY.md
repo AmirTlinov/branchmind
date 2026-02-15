@@ -169,8 +169,8 @@ Appends a single note entry to the **notes** document of a target (plan/task), o
 
 Input (one of):
 
-- `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta?, agent_id?, promote_to_knowledge?, knowledge_anchor?, knowledge_key?, knowledge_title? }`
-- `{ workspace, branch, doc, content, title?, format?, meta?, agent_id?, promote_to_knowledge?, knowledge_anchor?, knowledge_key?, knowledge_title? }`
+- `{ workspace, target: "PLAN-###"|"TASK-###", content, title?, format?, meta?, agent_id? }`
+- `{ workspace, branch, doc, content, title?, format?, meta?, agent_id? }`
 
 `target` may be a string id or `TargetRef` (see `TYPES.md`), e.g. `{ "id": "TASK-001", "kind": "task" }`.
 
@@ -187,10 +187,7 @@ Output:
 
 Notes:
 
-- If `promote_to_knowledge=true`, the server creates a **draft** knowledge card from the note content.
-  - `knowledge_anchor` / `knowledge_key` / `knowledge_title` can override the defaults (anchor from target if available, title from note title).
-  - `knowledge_key_mode` controls key derivation: `auto` (default) derives a slug from title/text, `explicit` requires `knowledge_key`.
-  - The created knowledge card is tagged `v:draft` unless explicitly promoted later.
+- Notes are always stored as `kind:"note"` entries in the target reasoning document.
 
 ### `show`
 
@@ -704,9 +701,9 @@ Design:
   - the **graph** document as a typed node + optional edges (structure).
 - Idempotency is mandatory: repeating the same `card_id` must be a no-op.
 
-Supported card types (v0):
+Supported card types (v1):
 
-- `frame`, `hypothesis`, `question`, `test`, `evidence`, `decision`, `knowledge`, `note`, `update`
+- `frame`, `hypothesis`, `question`, `test`, `evidence`, `decision`, `note`, `update`
 
 ### `think_template`
 
@@ -910,7 +907,7 @@ Defaults:
 - If `target` is absent, explicit `branch`/`ref` wins; otherwise fallback to checkout.
 - Doc keys default to `notes` / `graph` / `trace` when supported by the tool.
 
-### `think_add_hypothesis` / `think_add_question` / `think_add_test` / `think_add_note` / `think_add_decision` / `think_add_evidence` / `think_add_knowledge` / `think_add_frame` / `think_add_update`
+### `think_add_hypothesis` / `think_add_question` / `think_add_test` / `think_add_note` / `think_add_decision` / `think_add_evidence` / `think_add_frame` / `think_add_update`
 
 Thin wrappers over `think_card` that enforce the corresponding `card.type`
 and normalize fields.
@@ -934,21 +931,6 @@ Optional:
 - `agent_id` — accepted for compatibility and audit metadata; it does not filter results in meaning-mode.
 - `all_lanes` — when `true`, includes drafts (`v:draft` + legacy `lane:agent:*`) in this read view. Intended for explicit audit/sync.
 - `include_drafts` — alias for `all_lanes` (read UX: “show drafts”).
-
-### `knowledge_list`
-
-List knowledge cards (`type="knowledge"`), optionally filtered by anchor/tags.
-
-Input: `{ workspace, target?, ref?, graph_doc?, anchor?, key?, ids?, status?, tags_any?, tags_all?, text?, limit?, context_budget?, max_chars?, agent_id?, all_lanes?, include_drafts?, include_history? }`
-
-Semantics:
-
-- `types` are forced to `["knowledge"]` (request cannot override).
-- `anchor` accepts either `a:<slug>` or `<slug>` and adds it to `tags_all`.
-- Knowledge keys (optional convention): `k:<slug>` tags may be used to keep a stable identity for an evolving knowledge item.
-- `include_drafts` defaults to `true` for `knowledge_list` (knowledge management view). Set `include_drafts=false` to hide `v:draft`.
-- `include_history` defaults to `false`: the response is **latest-only** (deduped by `(a:<anchor>, k:<key>)` when possible, otherwise by `(a:<anchor>, title)`), keeping the most recent version by `last_seq`.
-- If `include_drafts=false` and `tags_all` is omitted, the server defaults to `tags_all=["v:canon"]`.
 
 ### `think_pack`
 

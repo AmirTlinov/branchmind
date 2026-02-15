@@ -18,12 +18,7 @@ pub(crate) fn notes_vcs_definitions() -> Vec<Value> {
                     "title": { "type": "string" },
                     "format": { "type": "string" },
                     "meta": { "type": "object" },
-                    "agent_id": { "type": "string" },
-                    "promote_to_knowledge": { "type": "boolean" },
-                    "knowledge_anchor": { "type": "string" },
-                    "knowledge_key": { "type": "string" },
-                    "knowledge_title": { "type": "string" },
-                    "knowledge_key_mode": { "type": "string", "enum": ["explicit", "auto"] }
+                    "agent_id": { "type": "string" }
                 },
                 "required": ["workspace", "content"]
             }

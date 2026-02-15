@@ -274,7 +274,7 @@ fn strict_reasoning_mode_blocks_step_close_until_disciplined() {
     let closed_text = extract_tool_text_str(&closed);
     assert!(
         !closed_text.starts_with("ERROR:"),
-        "expected strict gate to allow closing after hypothesis+test+counter are present"
+        "expected strict gate to allow closing after hypothesis+test+counter are present; got: {closed_text}"
     );
 }
 
@@ -437,7 +437,7 @@ fn think_card_auto_tags_counter_for_counter_hypothesis_title_prefix() {
     let closed_text = extract_tool_text_str(&closed);
     assert!(
         !closed_text.starts_with("ERROR:"),
-        "expected strict gate to allow closing after auto-tagged counter-hypothesis + test are present"
+        "expected strict gate to allow closing after auto-tagged counter-hypothesis + test are present; got: {closed_text}"
     );
 }
 
@@ -542,6 +542,189 @@ fn think_macro_counter_hypothesis_stub_creates_counter_and_test() {
     let closed_text = extract_tool_text_str(&closed);
     assert!(
         !closed_text.starts_with("ERROR:"),
-        "expected strict gate to allow closing after counter stub macro was applied"
+        "expected strict gate to allow closing after counter stub macro was applied; got: {closed_text}"
+    );
+}
+
+#[test]
+fn strict_gate_requires_sequential_trace_for_explicit_gate_checkpoints() {
+    let mut server = Server::start_initialized("strict_gate_requires_sequential_trace");
+
+    let cmds = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "system",
+            "arguments": { "op": "cmd.list", "args": { "prefix": "think.", "limit": 200 } }
+        }
+    }));
+    let cmds_text = extract_tool_text(&cmds);
+    let cmd_list = cmds_text
+        .get("result")
+        .and_then(|v| v.get("cmds"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        cmd_list
+            .iter()
+            .any(|v| v.as_str() == Some("think.trace.sequential.step")),
+        "golden cmd list must include think.trace.sequential.step; got: {cmds_text}"
+    );
+
+    let bootstrap = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.bootstrap", "args": {
+                "workspace": "ws_strict_seq_gate",
+                "plan_title": "Plan Strict Seq Gate",
+                "task_title": "Task Strict Seq Gate",
+                "reasoning_mode": "strict",
+                "steps": [
+                    { "title": "S1", "success_criteria": ["c1"], "tests": ["t1"], "blockers": [] }
+                ]
+            } } }
+    }));
+    let bootstrap_text = extract_tool_text(&bootstrap);
+    let task_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("task"))
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("task id")
+        .to_string();
+    let step_id = bootstrap_text
+        .get("result")
+        .and_then(|v| v.get("steps"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("step_id"))
+        .and_then(|v| v.as_str())
+        .expect("step id")
+        .to_string();
+
+    for (idx, (id, ty, title, text, supports, blocks, tags)) in [
+        (
+            "H1",
+            "hypothesis",
+            "H1",
+            "Main hypothesis",
+            Vec::<&str>::new(),
+            Vec::<&str>::new(),
+            Vec::<&str>::new(),
+        ),
+        (
+            "T1",
+            "test",
+            "T1",
+            "Test for H1",
+            vec!["H1"],
+            Vec::<&str>::new(),
+            Vec::<&str>::new(),
+        ),
+        (
+            "H2",
+            "hypothesis",
+            "Counter-hypothesis: H1",
+            "Counter",
+            Vec::<&str>::new(),
+            vec!["H1"],
+            vec!["counter"],
+        ),
+        (
+            "T2",
+            "test",
+            "T2",
+            "Test for H2",
+            vec!["H2"],
+            Vec::<&str>::new(),
+            Vec::<&str>::new(),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut card = json!({
+            "id": id,
+            "type": ty,
+            "title": title,
+            "text": text
+        });
+        if !tags.is_empty() {
+            card["tags"] = json!(tags);
+        }
+        let mut args = json!({
+            "workspace": "ws_strict_seq_gate",
+            "target": task_id.clone(),
+            "step": step_id.clone(),
+            "card": card
+        });
+        if !supports.is_empty() {
+            args["supports"] = json!(supports);
+        }
+        if !blocks.is_empty() {
+            args["blocks"] = json!(blocks);
+        }
+        let _ = server.request(json!({
+            "jsonrpc":"2.0",
+            "id": 10 + idx,
+            "method":"tools/call",
+            "params":{"name":"think","arguments":{"op":"call","cmd":"think.card","args":args}}
+        }));
+    }
+
+    let blocked = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
+                "workspace": "ws_strict_seq_gate",
+                "task": task_id.clone(),
+                "checkpoints": "gate"
+            } } }
+    }));
+    let blocked_text = extract_tool_text_str(&blocked);
+    assert!(
+        blocked_text.starts_with("ERROR:") && blocked_text.contains("REASONING_REQUIRED"),
+        "explicit gate checkpoints must require sequential trace: {blocked_text}"
+    );
+    assert!(
+        blocked_text.contains("sequential trace"),
+        "error should mention sequential trace gate: {blocked_text}"
+    );
+
+    for (num, need_next) in [(1, true), (2, false)] {
+        let _ = server.request(json!({
+            "jsonrpc":"2.0",
+            "id": 30 + num,
+            "method":"tools/call",
+            "params":{"name":"think","arguments":{"op":"call","cmd":"think.trace.sequential.step","args":{
+                "workspace":"ws_strict_seq_gate",
+                "target":task_id.clone(),
+                "thought":"Checkpoint: hypothesis/test/counter status.",
+                "thoughtNumber":num,
+                "totalThoughts":2,
+                "nextThoughtNeeded":need_next,
+                "meta":{"step_id":step_id.clone(),"checkpoint":"gate"}
+            }}}
+        }));
+    }
+
+    let closed = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 40,
+        "method": "tools/call",
+        "params": { "name": "tasks", "arguments": { "op": "call", "cmd": "tasks.macro.close.step", "args": {
+                "workspace": "ws_strict_seq_gate",
+                "task": task_id,
+                "checkpoints": "gate"
+            } } }
+    }));
+    let closed_text = extract_tool_text_str(&closed);
+    assert!(
+        !closed_text.starts_with("ERROR:"),
+        "close must pass after sequential checkpoints are recorded: {closed_text}"
     );
 }

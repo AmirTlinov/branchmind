@@ -14,6 +14,8 @@ This folder defines the **stable, versioned contracts** for the MCP tools expose
 
 - Contract version: **v1** (breaking changes require a major bump).
 - Once v1 is declared, breaking changes require a major bump and migration notes.
+- Server package version may move independently (current rollout: `2.0.0`) while preserving v1
+  contract docs as the stable surface.
 
 ## Naming constraints
 

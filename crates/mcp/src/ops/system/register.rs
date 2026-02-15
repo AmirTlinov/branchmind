@@ -62,7 +62,10 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                     "portal": { "type": "string" },
                     "prefix": { "type": "string" },
                     "q": { "type": "string" },
-                    "mode": { "type": "string", "enum": ["names", "compact"] },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["golden", "all", "names", "compact"]
+                    },
                     "offset": { "type": "integer" },
                     "limit": { "type": "integer" }
                 },
@@ -97,6 +100,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 "properties": {
                     "prefix": { "type": "string" },
                     "q": { "type": "string" },
+                    "mode": { "type": "string", "enum": ["golden", "all", "names", "compact"] },
                     "offset": { "type": "integer" },
                     "limit": { "type": "integer" }
                 },

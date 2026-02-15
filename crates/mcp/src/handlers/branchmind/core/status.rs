@@ -419,8 +419,6 @@ mod tests {
                     response_verbosity: crate::ResponseVerbosity::Full,
                     dx_mode,
                     ux_proof_v2_enabled: true,
-                    knowledge_autolint_enabled: true,
-                    note_promote_enabled: true,
                     jobs_unknown_args_fail_closed_enabled: true,
                     jobs_strict_progress_schema_enabled: true,
                     jobs_high_done_proof_gate_enabled: true,

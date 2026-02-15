@@ -7,7 +7,6 @@ mod branches;
 mod core;
 mod docs;
 mod graph;
-mod knowledge;
 mod notes_vcs;
 mod packs;
 mod think;
@@ -22,7 +21,6 @@ pub(crate) fn branchmind_tool_definitions() -> Vec<Value> {
     out.extend(notes_vcs::notes_vcs_definitions());
     out.extend(docs::docs_definitions());
     out.extend(graph::graph_definitions());
-    out.extend(knowledge::knowledge_definitions());
     out.extend(think::think_definitions());
     out.extend(trace::trace_definitions());
     out.extend(packs::packs_definitions());

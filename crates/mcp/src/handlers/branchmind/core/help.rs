@@ -98,7 +98,7 @@ fn render_help_text(max_chars: Option<usize>) -> String {
         "ANCHORS",
         &[
             "Anchors are meaning coordinates: a:<slug> (not file paths).",
-            "Recall-first: think(op=knowledge.recall args={anchor:\"a:<slug>\", limit:12}).",
+            "Start with a typed reasoning card: think(op=reasoning.seed args={type:\"hypothesis\"}).",
             "To discover anchor commands: system(op=cmd.list args={q:\"anchor.\"}) and then system(op=schema.get ...).",
         ],
     );

@@ -119,6 +119,13 @@ Parity tool set (v0.2 target):
 - Templates: `tasks_templates_list`, `tasks_scaffold`
 - Utilities: `tasks_storage`
 
+PlanFS bridge (v1):
+
+- `tasks.planfs.init` — materialize task plan into physical files under `docs/plans/<slug>/`.
+- `tasks.planfs.export` — deterministic re-render from task graph (or `from_plan_spec=true`) into `PLAN.md` + `Slice-*.md`.
+- `tasks.planfs.import` — strict fail-closed import from files back into task steps.
+- `tasks.planfs.init/export` persist canonical `plan_spec.v1` snapshot for branch/diff/merge workflows.
+
 For full intent surfaces and semantics, use this project’s contracts as the source of truth (do not import legacy behavior blindly).
 
 ## Core lifecycle (v0.2)
@@ -597,11 +604,6 @@ Semantics:
     через `macro_anchor_note` (создать/привязать anchor к задаче),
   - для `plan`: если у плана есть `ACTIVE` задачи без anchor‑связей, добавляет `ACTIVE_TASKS_MISSING_ANCHOR`
     и предлагает ограниченный набор one‑shot патчей (по нескольким задачам), чтобы быстро закрыть KPI.
-- Делает **knowledge hygiene** (semi-strict, no hard gates):
-  - если `task` привязан к anchor‑ам, но для них нет knowledge (по индексу `(anchor,key)`),
-    добавляет `KNOWLEDGE_EMPTY_FOR_ANCHOR` и предлагает copy/paste `actions[]`:
-    - `action:task:knowledge:recall` → `think op=knowledge.recall` (bounded),
-    - `action:task:knowledge:seed` → `think op=knowledge.upsert` (anchor+key → latest).
 - Для `plan`-таргета включает anti‑kasha проверки Active Horizon:
   - если `ACTIVE` задач больше 3, добавляет предупреждение `ACTIVE_LIMIT_EXCEEDED`,
   - предлагает безопасные патчи “припарковать” часть задач обратно в `TODO` (через `tasks_complete`),
@@ -1028,6 +1030,9 @@ Semantics:
 - If the target task has `reasoning_mode="strict"`, the macro may fail with `error.code="REASONING_REQUIRED"` when the
   reasoning engine signals missing discipline for the current step (e.g. `BM4_HYPOTHESIS_NO_TEST`, `BM10_NO_COUNTER_EDGES`).
   The response should include portal-first recovery suggestions (typically `think_card`).
+- Additional strict gate for explicit `checkpoints="gate"`: the macro requires a minimal structured sequential-trace trail
+  (`think.trace.sequential.step`) before close. This is fail-closed and returns `REASONING_REQUIRED` when missing.
+  Recommended shape is step-scoped metadata (`meta.step_id` + `meta.step_tag`) with non-sensitive checkpoint text.
 - To avoid dead-ends, callers may pass `override={ reason, risk }` to bypass the strict reasoning gate for this close attempt.
   The server must record a durable note (reason + risk + missing signals) and emit `WARNING: STRICT_OVERRIDE_APPLIED`.
   `override` does **not** bypass checkpoint or proof requirements.

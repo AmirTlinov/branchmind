@@ -31,6 +31,34 @@ Recommended metadata (stored in `meta_json`) for the mirrored note:
 - `note_seq` (step note seq)
 - `event_id` (the corresponding task event id)
 
+## PlanFS mirroring (files ↔ reasoning/task stream)
+
+PlanFS keeps planning as durable repo files (`docs/plans/<slug>/PLAN.md` + `Slice-*.md`) while
+preserving integration guarantees inside the organism.
+
+### `tasks.planfs.init` / `tasks.planfs.export`
+
+- Source of truth for rendering is the task step tree (or `from_plan_spec=true` snapshot).
+- Every successful init/export also persists canonical `plan_spec.v1` JSON into reasoning docs:
+  - canonical branch: target `reasoning_ref.branch`
+  - canonical doc: `plan_spec:<TASK-ID>`
+- Append is idempotent:
+  - `status="unchanged"` when latest payload is identical
+  - `status="appended"` when a new snapshot is written
+
+This gives deterministic replay/branching/merge for plans without relying on implicit client state.
+
+### `tasks.planfs.import`
+
+- `apply=true` maps PlanFS files back into the task step tree.
+- Step/task mutations emit normal task events (`step_defined`, `step_noted`, `step_verified`, `step_done`, …),
+  which are ingested into trace/graph via the standard atomic integration path.
+- `apply=false` is validation-only (no task mutation, no task events).
+
+Fail-closed rule:
+
+- Invalid PlanFS structure/placeholders/budgets reject before mutation.
+
 ## Reasoning reference
 
 Each task/plan must be associated with a stable “reasoning reference”:

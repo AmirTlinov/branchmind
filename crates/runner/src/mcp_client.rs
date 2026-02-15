@@ -79,7 +79,7 @@ impl McpClient {
             "params": {
                 "protocolVersion": super::MCP_PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": { "name": "bm_runner", "version": "0.1.0" }
+                "clientInfo": { "name": "bm_runner", "version": env!("CARGO_PKG_VERSION") }
             }
         }))?;
         self.send(json!({

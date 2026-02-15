@@ -2,9 +2,11 @@
 
 use super::ai::ai_error;
 use super::code_ref::{parse_code_ref_required, validate_code_ref};
+use super::repo_paths::{normalize_repo_rel, repo_rel_from_path_input};
 use bm_core::ids::WorkspaceId;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 mod pipeline_v2;
 pub(crate) use pipeline_v2::*;
@@ -150,6 +152,51 @@ fn normalize_signature(raw: &str) -> String {
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_claim_path_key(raw: &str, repo_root: Option<&Path>) -> Result<String, Value> {
+    let repo_rel = match repo_rel_from_path_input(raw, repo_root) {
+        Ok(v) => v,
+        Err(_) => normalize_repo_rel(raw)?,
+    };
+    Ok(repo_rel)
+}
+
+fn change_hint_is_directory_like(
+    raw_path: &str,
+    normalized_path: &str,
+    repo_root: Option<&Path>,
+) -> bool {
+    if raw_path.trim_end().ends_with('/') || normalized_path.ends_with('/') {
+        return true;
+    }
+    let Some(root) = repo_root else {
+        return false;
+    };
+    root.join(normalized_path).is_dir()
+}
+
+fn change_hint_path_bound(
+    raw_path: &str,
+    normalized_path: &str,
+    bound_path_keys: &HashSet<String>,
+    repo_root: Option<&Path>,
+) -> bool {
+    let normalized_key = normalized_path.to_ascii_lowercase();
+    if bound_path_keys.contains(&normalized_key) {
+        return true;
+    }
+    if !change_hint_is_directory_like(raw_path, normalized_path, repo_root) {
+        return false;
+    }
+    let dir = normalized_key.trim_end_matches('/');
+    if dir.is_empty() {
+        return false;
+    }
+    let prefix = format!("{dir}/");
+    bound_path_keys
+        .iter()
+        .any(|bound| bound.starts_with(&prefix))
 }
 
 fn unique_violation_message(field: &str, what: &str) -> String {
@@ -450,9 +497,23 @@ pub(crate) fn validate_scout_context_pack(
     }
     let mut code_refs = Vec::<String>::new();
     let mut warnings = Vec::<Value>::new();
+    let repo_root = store
+        .workspace_path_primary_get(workspace)
+        .map_err(|err| ai_error("STORE_ERROR", &format!("{err:?}")))?
+        .map(PathBuf::from);
+    let mut bound_path_keys = HashSet::<String>::new();
     for raw_ref in refs {
         let parsed = parse_code_ref_required(&raw_ref, "scout_context_pack.code_refs[]")?;
         let validated = validate_code_ref(store, workspace, &parsed)?;
+        let normalized =
+            parse_code_ref_required(&validated.normalized, "scout_context_pack.code_refs[]")
+                .map_err(|_| {
+                    ai_error(
+                        "INVALID_INPUT",
+                        "internal: normalized CODE_REF parsing failed",
+                    )
+                })?;
+        bound_path_keys.insert(normalized.repo_rel.to_ascii_lowercase());
         code_refs.push(validated.normalized);
         warnings.extend(validated.warnings);
     }
@@ -527,6 +588,17 @@ pub(crate) fn validate_scout_context_pack(
                 .or_else(|| code_refs.first().cloned())
                 .unwrap_or_default(),
         };
+        if !code_ref.trim().is_empty() {
+            let parsed =
+                parse_code_ref_required(&code_ref, "scout_context_pack.anchors[].code_ref")
+                    .map_err(|_| {
+                        ai_error(
+                            "INVALID_INPUT",
+                            "internal: normalized anchor CODE_REF parsing failed",
+                        )
+                    })?;
+            bound_path_keys.insert(parsed.repo_rel.to_ascii_lowercase());
+        }
 
         let content = anchor
             .get("content")
@@ -577,7 +649,7 @@ pub(crate) fn validate_scout_context_pack(
         ));
     }
 
-    let change_hints = obj
+    let change_hints_raw = obj
         .get("change_hints")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
@@ -585,17 +657,33 @@ pub(crate) fn validate_scout_context_pack(
                 "INVALID_INPUT",
                 "scout_context_pack.change_hints: expected array",
             )
-        })?
-        .iter()
-        .map(|item| {
-            let o = require_object(item, "scout_context_pack.change_hints[]")?;
-            Ok(json!({
-                "path": require_string(o, "path", "scout_context_pack.change_hints[]")?,
-                "intent": require_string(o, "intent", "scout_context_pack.change_hints[]")?,
-                "risk": require_string(o, "risk", "scout_context_pack.change_hints[]")?
-            }))
-        })
-        .collect::<Result<Vec<_>, Value>>()?;
+        })?;
+    let mut change_hints = Vec::<Value>::new();
+    for item in change_hints_raw {
+        let o = require_object(item, "scout_context_pack.change_hints[]")?;
+        let raw_path = require_string(o, "path", "scout_context_pack.change_hints[]")?;
+        let normalized_path = normalize_claim_path_key(&raw_path, repo_root.as_deref())?;
+        if !change_hint_path_bound(
+            &raw_path,
+            &normalized_path,
+            &bound_path_keys,
+            repo_root.as_deref(),
+        ) {
+            return Err(ai_error(
+                "INVALID_INPUT",
+                &format!(
+                    "scout_context_pack.change_hints[].path must be bound by code_refs/anchors CODE_REF paths: {raw_path}"
+                ),
+            ));
+        }
+        let intent = require_string(o, "intent", "scout_context_pack.change_hints[]")?;
+        let risk = require_string(o, "risk", "scout_context_pack.change_hints[]")?;
+        change_hints.push(json!({
+            "path": normalized_path,
+            "intent": intent,
+            "risk": risk
+        }));
+    }
     if change_hints.len() < SCOUT_MIN_CHANGE_HINTS {
         return Err(ai_error(
             "INVALID_INPUT",
@@ -1029,6 +1117,12 @@ pub(crate) fn validate_builder_diff_batch(raw: &Value) -> Result<Value, Value> {
         .collect::<Result<Vec<_>, Value>>()?;
 
     let checks_to_run = string_array(obj, "checks_to_run", "builder_diff_batch")?;
+    if checks_to_run.is_empty() {
+        return Err(ai_error(
+            "INVALID_INPUT",
+            "builder_diff_batch.checks_to_run must not be empty",
+        ));
+    }
     let rollback_plan = require_string(obj, "rollback_plan", "builder_diff_batch")?;
     let proof_refs = string_array(obj, "proof_refs", "builder_diff_batch")?;
     if proof_refs.is_empty() {

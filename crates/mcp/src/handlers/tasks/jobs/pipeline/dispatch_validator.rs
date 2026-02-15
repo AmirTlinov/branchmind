@@ -13,6 +13,7 @@ impl McpServer {
                 "workspace",
                 "task",
                 "slice_id",
+                "target_ref",
                 "scout_pack_ref",
                 "builder_batch_ref",
                 "plan_ref",
@@ -36,30 +37,73 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let slice_id = match require_non_empty_string(args_obj, "slice_id") {
+        let planfs_target = match resolve_planfs_target_optional(self, &workspace, args_obj) {
             Ok(v) => v,
             Err(resp) => return resp,
+        };
+        let slice_id_input = match optional_non_empty_string(args_obj, "slice_id") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let slice_id = match (slice_id_input, planfs_target.as_ref()) {
+            (Some(value), Some(planfs)) => {
+                if !value.eq_ignore_ascii_case(&planfs.slice_id) {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "slice_id must match target_ref slice selector when both are provided",
+                    );
+                }
+                value
+            }
+            (Some(value), None) => value,
+            (None, Some(planfs)) => planfs.slice_id.clone(),
+            (None, None) => {
+                return ai_error("INVALID_INPUT", "slice_id or target_ref is required");
+            }
         };
         let binding = match resolve_slice_binding_optional(self, &workspace, &slice_id) {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        if binding.is_none() && self.jobs_slice_first_fail_closed_enabled {
+        if binding.is_none() && planfs_target.is_none() && self.jobs_slice_first_fail_closed_enabled
+        {
             return ai_error(
                 "PRECONDITION_FAILED",
                 "unknown slice_id: missing plan_slices binding (run tasks.slices.apply first)",
             );
         }
         let slice_first = binding.is_some();
+        let planfs_mode = planfs_target.is_some() && !slice_first;
 
         let task_arg = match optional_non_empty_string(args_obj, "task") {
             Ok(v) => v,
             Err(resp) => return resp,
         };
-        let task_id = match (task_arg, binding.as_ref()) {
-            (Some(v), _) => v,
-            (None, Some(binding)) => binding.plan_id.clone(),
-            (None, None) => {
+        let focus_task = if task_arg.is_none() && binding.is_none() && planfs_target.is_some() {
+            match self.store.focus_get(&workspace) {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            }
+        } else {
+            None
+        };
+        let task_id = match (task_arg, binding.as_ref(), focus_task) {
+            (Some(v), _, _) => v,
+            (None, Some(binding), _) => binding.plan_id.clone(),
+            (None, None, Some(focus)) => {
+                if matches!(
+                    crate::support::parse_plan_or_task_kind(&focus),
+                    Some(TaskKind::Task)
+                ) {
+                    focus
+                } else {
+                    return ai_error(
+                        "INVALID_INPUT",
+                        "task is required when target_ref is used without a focused TASK-*",
+                    );
+                }
+            }
+            (None, None, None) => {
                 return ai_error(
                     "INVALID_INPUT",
                     "task is required when slice binding is missing (legacy/unplanned mode)",
@@ -124,7 +168,7 @@ impl McpServer {
         // validator prompts deterministic and aligned with gate/apply enforcement.
         let mut legacy_objective: Option<String> = None;
         let mut legacy_budgets_json: Option<Value> = None;
-        if !slice_first && !dry_run {
+        if !slice_first && !planfs_mode && !dry_run {
             let builder_open = match self.store.job_open(
                 &workspace,
                 bm_storage::JobOpenRequest {
@@ -207,6 +251,18 @@ impl McpServer {
 
         let mut warnings = Vec::<Value>::new();
         push_warning_if(&mut warnings, unknown_warning);
+        if let Some(planfs) = planfs_target.as_ref()
+            && binding.is_none()
+        {
+            warnings.push(warning(
+                "PLANFS_TARGET_CONTEXT",
+                &format!(
+                    "using planfs target_ref context without plan_slices binding: {}",
+                    planfs.target_ref
+                ),
+                "Run tasks.slices.apply for strict slice-first determinism when possible.",
+            ));
+        }
 
         let mut meta = args_obj
             .get("meta")
@@ -240,12 +296,40 @@ impl McpServer {
                 Value::String(binding.slice_task_id.clone()),
             );
             meta.insert("slice_budgets".to_string(), binding.spec.budgets.to_json());
+        } else if let Some(planfs) = planfs_target.as_ref() {
+            meta.insert("slice_budgets".to_string(), planfs.spec.budgets.to_json());
         } else {
             meta.insert(
                 "slice_budgets".to_string(),
                 legacy_budgets_json
                     .clone()
                     .unwrap_or_else(|| crate::support::SliceBudgets::default().to_json()),
+            );
+        }
+        if let Some(planfs) = planfs_target.as_ref() {
+            meta.insert(
+                "target_ref".to_string(),
+                Value::String(planfs.target_ref.clone()),
+            );
+            meta.insert(
+                "planfs_slug".to_string(),
+                Value::String(planfs.plan_slug.clone()),
+            );
+            meta.insert(
+                "planfs_path".to_string(),
+                Value::String(planfs.plan_path.clone()),
+            );
+            meta.insert(
+                "planfs_slice_file".to_string(),
+                Value::String(planfs.slice_file.clone()),
+            );
+            meta.insert(
+                "planfs_excerpt".to_string(),
+                Value::String(planfs.excerpt.clone()),
+            );
+            meta.insert(
+                "planfs_excerpt_chars".to_string(),
+                json!(planfs.excerpt.chars().count()),
             );
         }
         meta.insert("plan_id".to_string(), Value::String(task_id.clone()));
@@ -289,6 +373,26 @@ impl McpServer {
                 Value::String(binding.slice_task_id.clone()),
             );
         }
+        if let Some(planfs) = planfs_target.as_ref()
+            && let Some(obj) = pipeline.as_object_mut()
+        {
+            obj.insert(
+                "target_ref".to_string(),
+                Value::String(planfs.target_ref.clone()),
+            );
+            obj.insert(
+                "planfs_path".to_string(),
+                Value::String(planfs.plan_path.clone()),
+            );
+            obj.insert(
+                "planfs_slice_file".to_string(),
+                Value::String(planfs.slice_file.clone()),
+            );
+            obj.insert(
+                "planfs_excerpt_chars".to_string(),
+                json!(planfs.excerpt.chars().count()),
+            );
+        }
         meta.insert("pipeline".to_string(), pipeline);
         let meta_json = serde_json::to_string(&Value::Object(meta)).ok();
         let title = format!("Validator review for {slice_id}");
@@ -301,10 +405,13 @@ impl McpServer {
         let budgets_json = binding
             .as_ref()
             .map(|b| b.spec.budgets.to_json())
+            .or_else(|| planfs_target.as_ref().map(|p| p.spec.budgets.to_json()))
             .or_else(|| legacy_budgets_json.clone())
             .unwrap_or_else(|| crate::support::SliceBudgets::default().to_json());
         let slice_spec_json = if let Some(binding) = binding.as_ref() {
             binding.spec.to_json()
+        } else if let Some(planfs) = planfs_target.as_ref() {
+            planfs.spec.to_json()
         } else {
             let objective = legacy_objective
                 .clone()
@@ -329,6 +436,14 @@ impl McpServer {
         let budgets_text = serde_json::to_string_pretty(&budgets_json)
             .or_else(|_| serde_json::to_string(&budgets_json))
             .unwrap_or_else(|_| "{}".to_string());
+        let planfs_prompt_block = if let Some(planfs) = planfs_target.as_ref() {
+            format!(
+                "PlanFS target_ref: {}\nPlanFS path: {}/{}\nPlanFS slice excerpt (bounded):\n{}\n\n",
+                planfs.target_ref, planfs.plan_path, planfs.slice_file, planfs.excerpt
+            )
+        } else {
+            String::new()
+        };
         let role_prompt = format!(
             "ROLE=VALIDATOR\n\
 MUST perform independent verification.\n\
@@ -337,6 +452,7 @@ MUST include plan-fit score and concrete rework actions.\n\
 MUST reject when execution_evidence is missing or ambiguous.\n\
 Execution target: executor={executor} model={model} profile={executor_profile}.\n\n\
 Plan: {task_id}\nSlice: {slice_id}\nSlice task: {slice_task_id}\nPlan ref: {plan_ref}\n\n\
+{planfs_prompt_block}\
 Budgets (fail-closed):\n{budgets_text}\n\n\
 SlicePlanSpec (source of truth, bounded):\n{slice_plan_spec_text}\n\n\
 Scout pack ref: {scout_pack_ref}\nBuilder batch ref: {builder_batch_ref}\n"
@@ -402,6 +518,14 @@ Scout pack ref: {scout_pack_ref}\nBuilder batch ref: {builder_batch_ref}\n"
                 "executor_model": model,
                 "expected_artifacts": ["validator_report"]
             },
+            "planfs": planfs_target.as_ref().map(|planfs| json!({
+                "target_ref": planfs.target_ref,
+                "slug": planfs.plan_slug,
+                "path": planfs.plan_path,
+                "slice_file": planfs.slice_file,
+                "slice_id": planfs.slice_id,
+                "excerpt_chars": planfs.excerpt.chars().count()
+            })).unwrap_or(Value::Null),
             "mesh": mesh
         });
 

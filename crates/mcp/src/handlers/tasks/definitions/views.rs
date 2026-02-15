@@ -22,6 +22,69 @@ pub(crate) fn views_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "tasks_planfs_init",
+            "description": "Initialize docs/plans/<slug>/PLAN.md + Slice-*.md from current task step tree.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "target": { "type": ["string", "object"] },
+                    "slug": { "type": "string" },
+                    "path": { "type": "string" },
+                    "overwrite": { "type": "boolean" },
+                    "from_plan_spec": { "type": "boolean" },
+                    "plan_spec_branch": { "type": "string" },
+                    "plan_spec_doc": { "type": "string" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_planfs_export",
+            "description": "Export current task step tree into PLAN.md + Slice-*.md (idempotent when unchanged).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "target": { "type": ["string", "object"] },
+                    "slug": { "type": "string" },
+                    "path": { "type": "string" },
+                    "overwrite": { "type": "boolean" },
+                    "from_plan_spec": { "type": "boolean" },
+                    "plan_spec_branch": { "type": "string" },
+                    "plan_spec_doc": { "type": "string" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
+            "name": "tasks_planfs_import",
+            "description": "Import PLAN.md + Slice-*.md into current task step tree with strict placeholder/budget checks.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string" },
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "target": { "type": ["string", "object"] },
+                    "slug": { "type": "string" },
+                    "path": { "type": "string" },
+                    "strict": { "type": "boolean" },
+                    "apply": { "type": "boolean" },
+                    "max_slices": { "type": "integer" },
+                    "max_items_per_list": { "type": "integer" },
+                    "max_tasks_per_slice": { "type": "integer" },
+                    "max_steps_per_task": { "type": "integer" },
+                    "max_file_bytes": { "type": "integer" }
+                },
+                "required": ["workspace"]
+            }
+        }),
+        json!({
             "name": "tasks_contract",
             "description": "Set or clear a plan contract.",
             "inputSchema": {

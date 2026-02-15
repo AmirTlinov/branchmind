@@ -46,13 +46,16 @@ pub(crate) fn schema_bundle_for_cmd(
 ) -> Result<SchemaBundle, OpError> {
     let registry = CommandRegistry::global();
     let Some(spec) = registry.find_by_cmd(cmd) else {
+        let recovery = crate::ops::recovery::removed_knowledge_recovery(cmd)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                "Use system op=cmd.list to discover cmds (and system op=schema.get for exact schemas)."
+                    .to_string()
+            });
         return Err(OpError {
             code: "UNKNOWN_CMD".to_string(),
             message: format!("Unknown cmd: {cmd}"),
-            recovery: Some(
-                "Use system op=cmd.list to discover cmds (and system op=schema.get for exact schemas)."
-                    .to_string(),
-            ),
+            recovery: Some(recovery),
         });
     };
 

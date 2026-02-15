@@ -524,8 +524,6 @@ pub(crate) struct SocketTagConfig<'a> {
     pub(crate) response_verbosity: ResponseVerbosity,
     pub(crate) dx_mode: bool,
     pub(crate) ux_proof_v2_enabled: bool,
-    pub(crate) knowledge_autolint_enabled: bool,
-    pub(crate) note_promote_enabled: bool,
     pub(crate) jobs_unknown_args_fail_closed_enabled: bool,
     pub(crate) jobs_strict_progress_schema_enabled: bool,
     pub(crate) jobs_high_done_proof_gate_enabled: bool,
@@ -558,20 +556,6 @@ pub(crate) fn socket_tag_for_config(cfg: SocketTagConfig<'_>) -> String {
         hash,
         "ux_proof_v2",
         if cfg.ux_proof_v2_enabled { "1" } else { "0" },
-    );
-    hash = fnv1a_kv(
-        hash,
-        "knowledge_autolint",
-        if cfg.knowledge_autolint_enabled {
-            "1"
-        } else {
-            "0"
-        },
-    );
-    hash = fnv1a_kv(
-        hash,
-        "note_promote",
-        if cfg.note_promote_enabled { "1" } else { "0" },
     );
     hash = fnv1a_kv(
         hash,
@@ -738,24 +722,6 @@ pub(crate) fn parse_ux_proof_v2_enabled() -> bool {
         "BRANCHMIND_UX_PROOF_V2",
         "--ux-proof-v2",
         "--no-ux-proof-v2",
-    )
-}
-
-pub(crate) fn parse_knowledge_autolint_enabled() -> bool {
-    parse_feature_enabled_with_default(
-        true,
-        "BRANCHMIND_KNOWLEDGE_AUTOLINT",
-        "--knowledge-autolint",
-        "--no-knowledge-autolint",
-    )
-}
-
-pub(crate) fn parse_note_promote_enabled() -> bool {
-    parse_feature_enabled_with_default(
-        true,
-        "BRANCHMIND_NOTE_PROMOTE",
-        "--note-promote",
-        "--no-note-promote",
     )
 }
 
@@ -942,8 +908,6 @@ mod tests {
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: false,
             ux_proof_v2_enabled: true,
-            knowledge_autolint_enabled: true,
-            note_promote_enabled: true,
             jobs_unknown_args_fail_closed_enabled: true,
             jobs_strict_progress_schema_enabled: true,
             jobs_high_done_proof_gate_enabled: true,
@@ -965,8 +929,6 @@ mod tests {
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: false,
             ux_proof_v2_enabled: true,
-            knowledge_autolint_enabled: true,
-            note_promote_enabled: true,
             jobs_unknown_args_fail_closed_enabled: true,
             jobs_strict_progress_schema_enabled: true,
             jobs_high_done_proof_gate_enabled: true,
@@ -994,8 +956,6 @@ mod tests {
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: false,
             ux_proof_v2_enabled: true,
-            knowledge_autolint_enabled: true,
-            note_promote_enabled: true,
             jobs_unknown_args_fail_closed_enabled: true,
             jobs_strict_progress_schema_enabled: true,
             jobs_high_done_proof_gate_enabled: true,
@@ -1017,8 +977,6 @@ mod tests {
             response_verbosity: ResponseVerbosity::Full,
             dx_mode: true,
             ux_proof_v2_enabled: true,
-            knowledge_autolint_enabled: true,
-            note_promote_enabled: true,
             jobs_unknown_args_fail_closed_enabled: true,
             jobs_strict_progress_schema_enabled: true,
             jobs_high_done_proof_gate_enabled: true,

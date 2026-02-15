@@ -57,11 +57,9 @@ Where:
 - `mode ∈ {"combined","system","execution","reasoning","risk"}`
 - `time_window ∈ {"all","7d","24h"}`
 
-### Search / knowledge
+### Search
 
 - `tasks_search(storage_dir, workspace, text, limit) -> TasksSearchDto`
-- `knowledge_search(storage_dir, workspace, text, limit) -> KnowledgeSearchDto`
-- `knowledge_card_get(storage_dir, workspace, card_id) -> GraphNodeDto | null`
 - `anchors_list(storage_dir, workspace, text?, kind?, status?, limit) -> AnchorsListDto`
 
 ## Errors

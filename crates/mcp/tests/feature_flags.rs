@@ -36,50 +36,10 @@ fn ux_proof_v2_flag_can_disable_proof_input() {
 }
 
 #[test]
-fn note_promote_flag_can_disable_note_promote_cmd() {
+fn knowledge_commands_are_removed_from_surface() {
     let mut server = Server::start_initialized_with_args(
-        "note_promote_flag_can_disable_note_promote_cmd",
-        &[
-            "--toolset",
-            "daily",
-            "--workspace",
-            "ws_flags_note",
-            "--no-note-promote",
-        ],
-    );
-
-    let resp = server.request(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.note.promote", "args": {} } }
-    }));
-    let out = extract_tool_text(&resp);
-    assert!(
-        !out.get("success").and_then(|v| v.as_bool()).unwrap_or(true),
-        "expected failure: {out}"
-    );
-    assert_eq!(
-        out.get("error")
-            .and_then(|v| v.get("code"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-        "FEATURE_DISABLED",
-        "expected FEATURE_DISABLED: {out}"
-    );
-}
-
-#[test]
-fn knowledge_autolint_flag_downgrades_auto_lint_to_warning() {
-    let mut server = Server::start_initialized_with_args(
-        "knowledge_autolint_flag_downgrades_auto_lint_to_warning",
-        &[
-            "--toolset",
-            "daily",
-            "--workspace",
-            "ws_flags_kb",
-            "--no-knowledge-autolint",
-        ],
+        "knowledge_commands_are_removed_from_surface",
+        &["--toolset", "daily", "--workspace", "ws_flags_no_knowledge"],
     );
 
     let resp = server.request(json!({
@@ -89,27 +49,100 @@ fn knowledge_autolint_flag_downgrades_auto_lint_to_warning() {
         "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.knowledge.upsert", "args": {
             "anchor": "core",
             "key": "determinism",
-            "lint_mode": "auto",
-            "card": { "title": "Determinism invariants", "text": "Claim: ...\nScope: core\nApply: ...\nProof: CMD: make check\nExpiry: 2027-01-01" }
+            "card": { "title": "Invariant", "text": "Removed feature check" }
         } } }
     }));
     let out = extract_tool_text(&resp);
     assert!(
-        out.get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        "expected success: {out}"
+        !out.get("success").and_then(|v| v.as_bool()).unwrap_or(true),
+        "expected failure for removed command: {out}"
     );
-    let warnings = out
-        .get("warnings")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    assert_eq!(
+        out.get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        "UNKNOWN_CMD",
+        "expected UNKNOWN_CMD for removed knowledge command: {out}"
+    );
+    let recovery = out
+        .get("error")
+        .and_then(|v| v.get("recovery"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     assert!(
-        warnings
-            .iter()
-            .any(|w| { w.get("code").and_then(|v| v.as_str()) == Some("FEATURE_DISABLED") }),
-        "expected FEATURE_DISABLED warning when auto lint is requested but disabled: {warnings:?}"
+        recovery.contains("knowledge removed by design"),
+        "expected explicit removed-knowledge recovery hint: {out}"
+    );
+
+    let schema_resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "system", "arguments": { "op": "schema.get", "args": {
+            "cmd": "think.knowledge.recall"
+        } } }
+    }));
+    let schema_out = extract_tool_text(&schema_resp);
+    assert!(
+        !schema_out
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        "expected failure for removed schema target: {schema_out}"
+    );
+    assert_eq!(
+        schema_out
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        "UNKNOWN_CMD",
+        "expected UNKNOWN_CMD for removed schema target: {schema_out}"
+    );
+    let schema_recovery = schema_out
+        .get("error")
+        .and_then(|v| v.get("recovery"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(
+        schema_recovery.contains("knowledge removed by design"),
+        "expected explicit removed-knowledge recovery hint in schema.get: {schema_out}"
+    );
+
+    let add_resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.add.knowledge", "args": {
+            "text": "legacy removed"
+        } } }
+    }));
+    let add_out = extract_tool_text(&add_resp);
+    assert!(
+        !add_out
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        "expected failure for removed think.add.knowledge command: {add_out}"
+    );
+    assert_eq!(
+        add_out
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        "UNKNOWN_CMD",
+        "expected UNKNOWN_CMD for think.add.knowledge: {add_out}"
+    );
+    let add_recovery = add_out
+        .get("error")
+        .and_then(|v| v.get("recovery"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(
+        add_recovery.contains("knowledge removed by design"),
+        "expected explicit removed-knowledge recovery hint in think.add.knowledge: {add_out}"
     );
 }
 

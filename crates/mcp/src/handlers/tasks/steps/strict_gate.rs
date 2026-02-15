@@ -3,6 +3,9 @@
 use crate::*;
 use serde_json::{Value, json};
 
+const STRICT_SEQUENTIAL_MIN_STEPS: usize = 2;
+const STRICT_SEQUENTIAL_SCAN_LIMIT: usize = 200;
+
 #[derive(Clone, Debug)]
 pub(crate) struct StrictReasoningOverride {
     reason: String,
@@ -428,6 +431,14 @@ pub(crate) fn enforce_strict_reasoning_gate(mut ctx: StrictGateContext<'_>) -> R
         }
     }
 
+    if !strict_overridden && checkpoints_gate_requested(ctx.args_obj) {
+        let seq_override =
+            enforce_sequential_trace_gate(&mut ctx, &reasoning_ref, &step_ref, &step_tag)?;
+        if seq_override {
+            strict_overridden = true;
+        }
+    }
+
     Ok(strict_overridden)
 }
 
@@ -559,4 +570,166 @@ fn apply_strict_override(
     ));
 
     Ok(())
+}
+
+fn checkpoints_gate_requested(args_obj: &serde_json::Map<String, Value>) -> bool {
+    match args_obj.get("checkpoints") {
+        Some(Value::String(mode)) => mode.trim().eq_ignore_ascii_case("gate"),
+        Some(Value::Object(obj)) => {
+            let all = obj.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            if all {
+                return true;
+            }
+            let criteria = obj
+                .get("criteria")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let tests = obj.get("tests").and_then(|v| v.as_bool()).unwrap_or(false);
+            criteria && tests
+        }
+        _ => false,
+    }
+}
+
+fn enforce_sequential_trace_gate(
+    ctx: &mut StrictGateContext<'_>,
+    reasoning_ref: &bm_storage::ReasoningRefRow,
+    step_ref: &bm_storage::StepRef,
+    step_tag: &str,
+) -> Result<bool, Value> {
+    let trace_tail = match ctx.server.store.doc_show_tail(
+        ctx.workspace,
+        &reasoning_ref.branch,
+        &reasoning_ref.trace_doc,
+        None,
+        STRICT_SEQUENTIAL_SCAN_LIMIT,
+    ) {
+        Ok(v) => v,
+        Err(StoreError::InvalidInput(msg)) => return Err(ai_error("INVALID_INPUT", msg)),
+        Err(err) => return Err(ai_error("STORE_ERROR", &format_store_error(err))),
+    };
+    let mut total_seq = 0usize;
+    let mut step_seq = 0usize;
+    for entry in trace_tail.entries {
+        if entry.format.as_deref() != Some("trace_sequential_step") {
+            continue;
+        }
+        total_seq = total_seq.saturating_add(1);
+        if sequential_entry_matches_step(&entry, &step_ref.step_id, step_tag) {
+            step_seq = step_seq.saturating_add(1);
+        }
+    }
+    let has_enough = step_seq >= STRICT_SEQUENTIAL_MIN_STEPS
+        || (step_seq == 0 && total_seq >= STRICT_SEQUENTIAL_MIN_STEPS);
+    if has_enough {
+        return Ok(false);
+    }
+
+    if ctx.allow_override
+        && let Some(override_input) = ctx.reasoning_override
+    {
+        apply_strict_override_from_ctx(
+            ctx,
+            override_input,
+            vec!["STRICT_NO_SEQUENTIAL_TRACE".to_string()],
+        )?;
+        return Ok(true);
+    }
+
+    let next_num = step_seq.saturating_add(1);
+    let mut suggestions = vec![suggest_call(
+        "think_playbook",
+        "Load strict reasoning playbook (structured sequential checkpoints).",
+        "medium",
+        json!({ "workspace": ctx.workspace.as_str(), "name": "strict", "max_chars": 1200 }),
+    )];
+    suggestions.push(suggest_call(
+        "think_trace_sequential_step",
+        "Add a structured sequential trace checkpoint for this step.",
+        "high",
+        json!({
+            "workspace": ctx.workspace.as_str(),
+            "target": ctx.task_id.to_string(),
+            "branch": reasoning_ref.branch.clone(),
+            "doc": reasoning_ref.trace_doc.clone(),
+            "thought": "Checkpoint: hypothesis/test/counter status for this step.",
+            "thoughtNumber": next_num,
+            "totalThoughts": STRICT_SEQUENTIAL_MIN_STEPS,
+            "nextThoughtNeeded": next_num < STRICT_SEQUENTIAL_MIN_STEPS,
+            "message": format!("sequential gate for {}", step_ref.step_id),
+            "meta": {
+                "step_id": step_ref.step_id.clone(),
+                "step_tag": step_tag,
+                "checkpoint": "gate",
+                "structured": true
+            }
+        }),
+    ));
+    suggestions.push(build_override_suggestion(
+        ctx.args_obj,
+        ctx.workspace.as_str(),
+        ctx.task_id,
+        step_ref,
+        "Override sequential gate: close now and backfill trace checkpoints.",
+        "Risk: close without explicit sequential gate trail may hide reasoning gaps.",
+    ));
+
+    Err(ai_error_with(
+        "REASONING_REQUIRED",
+        &format!(
+            "strict reasoning: checkpoints=gate requires at least {STRICT_SEQUENTIAL_MIN_STEPS} sequential trace steps (step_scoped={step_seq}, total={total_seq})"
+        ),
+        Some(
+            "Add structured think.trace.sequential.step checkpoints for this step, then retry close.",
+        ),
+        suggestions,
+    ))
+}
+
+fn sequential_entry_matches_step(
+    entry: &bm_storage::DocEntryRow,
+    step_id: &str,
+    step_tag: &str,
+) -> bool {
+    let Some(raw) = entry.meta_json.as_deref() else {
+        return false;
+    };
+    let Ok(meta_value) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    let Some(meta) = meta_value.as_object() else {
+        return false;
+    };
+
+    let step_tag_lc = step_tag.to_ascii_lowercase();
+    let step_id_lc = step_id.to_ascii_lowercase();
+    let key_matches = |value: &str| {
+        let val = value.trim().to_ascii_lowercase();
+        !val.is_empty() && (val == step_id_lc || val == step_tag_lc)
+    };
+
+    if meta
+        .get("step_id")
+        .and_then(|v| v.as_str())
+        .is_some_and(key_matches)
+    {
+        return true;
+    }
+    if meta
+        .get("step_tag")
+        .and_then(|v| v.as_str())
+        .is_some_and(key_matches)
+    {
+        return true;
+    }
+    if meta
+        .get("step")
+        .and_then(|v| v.as_str())
+        .is_some_and(key_matches)
+    {
+        return true;
+    }
+    meta.get("tags")
+        .and_then(|v| v.as_array())
+        .is_some_and(|arr| arr.iter().filter_map(|v| v.as_str()).any(key_matches))
 }

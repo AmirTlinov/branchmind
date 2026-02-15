@@ -24,7 +24,7 @@ use std::sync::atomic::AtomicBool;
 // We keep this at the widely deployed baseline and remain forward-compatible in behavior.
 const MCP_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "branchmind-rust-mcp";
-const SERVER_VERSION: &str = "0.1.0";
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const DEFAULT_NOTES_DOC: &str = "notes";
 const DEFAULT_GRAPH_DOC: &str = "graph";
@@ -95,8 +95,6 @@ pub(crate) struct McpServer {
     response_verbosity: ResponseVerbosity,
     dx_mode: bool,
     ux_proof_v2_enabled: bool,
-    knowledge_autolint_enabled: bool,
-    note_promote_enabled: bool,
     jobs_unknown_args_fail_closed_enabled: bool,
     jobs_strict_progress_schema_enabled: bool,
     jobs_high_done_proof_gate_enabled: bool,
@@ -134,8 +132,6 @@ pub(crate) struct McpServerConfig {
     response_verbosity: ResponseVerbosity,
     dx_mode: bool,
     ux_proof_v2_enabled: bool,
-    knowledge_autolint_enabled: bool,
-    note_promote_enabled: bool,
     jobs_unknown_args_fail_closed_enabled: bool,
     jobs_strict_progress_schema_enabled: bool,
     jobs_high_done_proof_gate_enabled: bool,
@@ -232,8 +228,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project_guard_rebind_enabled = parse_project_guard_rebind_enabled(&storage_dir);
     let default_agent_id_config = parse_default_agent_id_config();
     let ux_proof_v2_enabled = parse_ux_proof_v2_enabled();
-    let knowledge_autolint_enabled = parse_knowledge_autolint_enabled();
-    let note_promote_enabled = parse_note_promote_enabled();
     let jobs_unknown_args_fail_closed_enabled = parse_jobs_unknown_args_fail_closed_enabled();
     let jobs_strict_progress_schema_enabled = parse_jobs_strict_progress_schema_enabled();
     let jobs_high_done_proof_gate_enabled = parse_jobs_high_done_proof_gate_enabled();
@@ -249,8 +243,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         response_verbosity,
         dx_mode,
         ux_proof_v2_enabled,
-        knowledge_autolint_enabled,
-        note_promote_enabled,
         jobs_unknown_args_fail_closed_enabled,
         jobs_strict_progress_schema_enabled,
         jobs_high_done_proof_gate_enabled,
@@ -288,8 +280,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 response_verbosity,
                 dx_mode,
                 ux_proof_v2_enabled,
-                knowledge_autolint_enabled,
-                note_promote_enabled,
                 jobs_unknown_args_fail_closed_enabled,
                 jobs_strict_progress_schema_enabled,
                 jobs_high_done_proof_gate_enabled,
@@ -338,8 +328,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 response_verbosity,
                 dx_mode,
                 ux_proof_v2_enabled,
-                knowledge_autolint_enabled,
-                note_promote_enabled,
                 jobs_unknown_args_fail_closed_enabled,
                 jobs_strict_progress_schema_enabled,
                 jobs_high_done_proof_gate_enabled,
@@ -392,8 +380,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             response_verbosity,
             dx_mode,
             ux_proof_v2_enabled,
-            knowledge_autolint_enabled,
-            note_promote_enabled,
             jobs_unknown_args_fail_closed_enabled,
             jobs_strict_progress_schema_enabled,
             jobs_high_done_proof_gate_enabled,

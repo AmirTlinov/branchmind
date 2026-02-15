@@ -216,6 +216,15 @@ fn job_meta_pipeline_role(job_meta: Option<&Value>) -> Option<&str> {
     }
 }
 
+fn role_requires_exec_mcp_isolation(role: Option<&str>) -> bool {
+    role.is_some_and(|r| {
+        r.eq_ignore_ascii_case("scout")
+            || r.eq_ignore_ascii_case("builder")
+            || r.eq_ignore_ascii_case("validator")
+            || r.eq_ignore_ascii_case("writer")
+    })
+}
+
 fn job_meta_input_mode(job_meta: Option<&Value>) -> Option<&str> {
     let mode = job_meta
         .and_then(|v| v.as_object())
@@ -430,6 +439,83 @@ fn send_runner_heartbeat(
             "args": Value::Object(args)
         }),
     );
+}
+
+struct CompleteJobRequest<'a> {
+    job_id: &'a str,
+    claim_revision: i64,
+    status: &'a str,
+    summary: &'a str,
+    refs: &'a [String],
+    meta: Value,
+}
+
+fn complete_job_with_retry(
+    mcp: &mut McpClient,
+    cfg: &RunnerConfig,
+    req: CompleteJobRequest<'_>,
+) -> Result<(), String> {
+    const COMPLETE_ATTEMPTS: usize = 3;
+    let mut last_err: Option<String> = None;
+    for attempt in 0..COMPLETE_ATTEMPTS {
+        match mcp.call_tool(
+            "jobs",
+            json!({
+                "workspace": cfg.workspace,
+                "op": "call",
+                "cmd": "jobs.complete",
+                "args": {
+                    "job": req.job_id,
+                    "runner_id": cfg.runner_id,
+                    "claim_revision": req.claim_revision,
+                    "status": req.status,
+                    "summary": req.summary,
+                    "refs": req.refs,
+                    "meta": req.meta.clone()
+                }
+            }),
+        ) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                last_err = Some(err);
+                if attempt + 1 < COMPLETE_ATTEMPTS {
+                    let backoff_ms = 150 * (attempt as u64 + 1);
+                    sleep(Duration::from_millis(backoff_ms));
+                }
+            }
+        }
+    }
+
+    let err = last_err.unwrap_or_else(|| "jobs.complete failed".to_string());
+    let _ = mcp.call_tool(
+        "jobs",
+        json!({
+            "workspace": cfg.workspace,
+            "op": "call",
+            "cmd": "jobs.report",
+            "args": {
+                "job": req.job_id,
+                "runner_id": cfg.runner_id,
+                "claim_revision": req.claim_revision,
+                "lease_ttl_ms": job_claim_lease_ttl_ms(cfg),
+                "kind": "error",
+                "message": format!(
+                    "runner: jobs.complete failed after {COMPLETE_ATTEMPTS} attempts (status={}): {err}",
+                    req.status
+                ),
+                "percent": 0,
+                "refs": [req.job_id],
+                "meta": {
+                    "runner": cfg.runner_id,
+                    "step": {
+                        "command": "jobs.complete",
+                        "error": err
+                    }
+                }
+            }
+        }),
+    );
+    Err("jobs.complete failed".to_string())
 }
 
 fn default_storage_dir() -> PathBuf {
@@ -976,28 +1062,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .is_some_and(|role| role.eq_ignore_ascii_case("builder"))
             && job_meta_input_mode(job_meta)
                 .is_some_and(|mode| mode.eq_ignore_ascii_case("strict"));
+        let disable_mcp_for_exec = role_requires_exec_mcp_isolation(pipeline_role);
         let slice_timing = resolve_slice_timing(&cfg, job_meta, pipeline_role);
 
         let (executor_kind, executor_profile, executor_model) =
             match resolve_job_executor_plan(job_meta, &cfg) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = mcp.call_tool(
-                        "jobs",
-                        json!({
-                            "workspace": cfg.workspace,
-                            "op": "call",
-                            "cmd": "jobs.complete",
-                            "args": {
-                                "job": job_id,
-                                "runner_id": cfg.runner_id,
-                                "claim_revision": claim_revision,
-                                "status": "FAILED",
-                                "summary": format!("runner: unsupported executor: {err}"),
-                                "refs": [ job_id ],
-                                "meta": { "runner": cfg.runner_id }
-                            }
-                        }),
+                    let summary = format!("runner: unsupported executor: {err}");
+                    let refs = vec![job_id.to_string()];
+                    let _ = complete_job_with_retry(
+                        &mut mcp,
+                        &cfg,
+                        CompleteJobRequest {
+                            job_id,
+                            claim_revision,
+                            status: "FAILED",
+                            summary: &summary,
+                            refs: &refs,
+                            meta: json!({ "runner": cfg.runner_id }),
+                        },
                     );
 
                     last_runner_beat_ms = now_ms();
@@ -1084,22 +1168,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }),
             );
-            let _ = mcp.call_tool(
-                "jobs",
-                json!({
-                    "workspace": cfg.workspace,
-                    "op": "call",
-                    "cmd": "jobs.complete",
-                    "args": {
-                        "job": job_id,
-                        "runner_id": cfg.runner_id,
-                        "claim_revision": claim_revision,
-                        "status": "DONE",
-                        "summary": "dry-run complete",
-                        "refs": [ job_id ],
-                        "meta": { "dry_run": true }
-                    }
-                }),
+            let refs = vec![job_id.to_string()];
+            let _ = complete_job_with_retry(
+                &mut mcp,
+                &cfg,
+                CompleteJobRequest {
+                    job_id,
+                    claim_revision,
+                    status: "DONE",
+                    summary: "dry-run complete",
+                    refs: &refs,
+                    meta: json!({ "dry_run": true }),
+                },
             );
             last_runner_beat_ms = now_ms();
             send_runner_heartbeat(&mut mcp, &cfg, "idle", None);
@@ -1116,30 +1196,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut failures: u32 = 0;
         let mut last_summary: Option<String> = None;
         let mut last_refs: Vec<String> = Vec::new();
+        let mut continue_loops: u32 = 0;
+        let continue_limit: Option<u32> = pipeline_role
+            .map(|role| role.trim().to_ascii_lowercase())
+            .map(|role| {
+                if role == "builder" {
+                    let retry_limit = base_meta
+                        .get("context_retry_limit")
+                        .or_else(|| base_meta.get("max_context_requests"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(2)
+                        .clamp(0, 8) as u32;
+                    // Initial slice + bounded context retries.
+                    retry_limit.saturating_add(1)
+                } else {
+                    // Pipeline roles should not spin in unbounded CONTINUE loops.
+                    2
+                }
+            });
 
         'job_loop: loop {
             let now = now_ms();
             if now.saturating_sub(job_started_ms) >= max_runtime_ms {
-                let _ = mcp.call_tool(
-                    "jobs",
-                    json!({
-                        "workspace": cfg.workspace,
-                        "op": "call",
-                        "cmd": "jobs.complete",
-                        "args": {
-                            "job": job_id,
-                            "runner_id": cfg.runner_id,
-                            "claim_revision": claim_revision,
-                            "status": "FAILED",
-                            "summary": "runner: max runtime exceeded",
-                            "refs": [ job_id ],
-                            "meta": {
-                                "runner": cfg.runner_id,
-                                "slice_index": slice_index,
-                                "max_runtime_s": cfg.max_runtime_s
-                            }
-                        }
-                    }),
+                let refs = vec![job_id.to_string()];
+                let _ = complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "FAILED",
+                        summary: "runner: max runtime exceeded",
+                        refs: &refs,
+                        meta: json!({
+                            "runner": cfg.runner_id,
+                            "slice_index": slice_index,
+                            "max_runtime_s": cfg.max_runtime_s
+                        }),
+                    },
                 );
                 break 'job_loop;
             }
@@ -1264,12 +1358,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let child_res = match executor_kind {
                 executors::ExecutorKind::Codex => executors::codex::spawn_exec(
                     &cfg,
-                    schema_path_for_exec,
-                    &out_path,
-                    &stderr_path,
-                    &full_prompt,
-                    executor_profile,
-                    executor_model.as_deref(),
+                    executors::codex::SpawnExecRequest {
+                        schema_path: schema_path_for_exec,
+                        out_path: &out_path,
+                        stderr_path: &stderr_path,
+                        prompt: &full_prompt,
+                        executor_profile,
+                        model: executor_model.as_deref(),
+                        disable_mcp: disable_mcp_for_exec,
+                    },
                 ),
                 executors::ExecutorKind::ClaudeCode => executors::claude_code::spawn_exec(
                     &cfg,
@@ -1305,29 +1402,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }),
                     );
                     if failures >= cfg.max_failures {
-                        let _ = mcp.call_tool(
-                            "jobs",
-                            json!({
-                                "workspace": cfg.workspace,
-                                "op": "call",
-                                "cmd": "jobs.complete",
-                                "args": {
-                                    "job": job_id,
-                                    "runner_id": cfg.runner_id,
-                                    "claim_revision": claim_revision,
-                                    "status": "FAILED",
-                                    "summary": format!(
-                                        "runner: spawn failures exceeded (executor={executor})"
-                                    ),
-                                    "refs": [ job_id ],
-                                    "meta": {
-                                        "runner": cfg.runner_id,
-                                        "failures": failures,
-                                        "executor": executor,
-                                        "executor_profile": executor_profile
-                                    }
-                                }
-                            }),
+                        let summary =
+                            format!("runner: spawn failures exceeded (executor={executor})");
+                        let refs = vec![job_id.to_string()];
+                        let _ = complete_job_with_retry(
+                            &mut mcp,
+                            &cfg,
+                            CompleteJobRequest {
+                                job_id,
+                                claim_revision,
+                                status: "FAILED",
+                                summary: &summary,
+                                refs: &refs,
+                                meta: json!({
+                                    "runner": cfg.runner_id,
+                                    "failures": failures,
+                                    "executor": executor,
+                                    "executor_profile": executor_profile
+                                }),
+                            },
                         );
                         break 'job_loop;
                     }
@@ -1439,22 +1532,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }),
                 );
                 if failures >= cfg.max_failures {
-                    let _ = mcp.call_tool(
-                        "jobs",
-                        json!({
-                            "workspace": cfg.workspace,
-                            "op": "call",
-                            "cmd": "jobs.complete",
-                            "args": {
-                                "job": job_id,
-                                "runner_id": cfg.runner_id,
-                                "claim_revision": claim_revision,
-                                "status": "FAILED",
-                                "summary": format!("runner: {executor} exec failures exceeded"),
-                                "refs": [ job_id ],
-                                "meta": { "runner": cfg.runner_id, "failures": failures }
-                            }
-                        }),
+                    let summary = format!("runner: {executor} exec failures exceeded");
+                    let refs = vec![job_id.to_string()];
+                    let _ = complete_job_with_retry(
+                        &mut mcp,
+                        &cfg,
+                        CompleteJobRequest {
+                            job_id,
+                            claim_revision,
+                            status: "FAILED",
+                            summary: &summary,
+                            refs: &refs,
+                            meta: json!({ "runner": cfg.runner_id, "failures": failures }),
+                        },
                     );
                     break 'job_loop;
                 }
@@ -1496,22 +1586,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }),
                     );
                     if failures >= cfg.max_failures {
-                        let _ = mcp.call_tool(
-                            "jobs",
-                            json!({
-                                "workspace": cfg.workspace,
-                                "op": "call",
-                                "cmd": "jobs.complete",
-                                "args": {
-                                    "job": job_id,
-                                    "runner_id": cfg.runner_id,
-                                    "claim_revision": claim_revision,
-                                    "status": "FAILED",
-                                    "summary": "runner: output failures exceeded",
-                                    "refs": [ job_id ],
-                                    "meta": { "runner": cfg.runner_id, "failures": failures }
-                                }
-                            }),
+                        let refs = vec![job_id.to_string()];
+                        let _ = complete_job_with_retry(
+                            &mut mcp,
+                            &cfg,
+                            CompleteJobRequest {
+                                job_id,
+                                claim_revision,
+                                status: "FAILED",
+                                summary: "runner: output failures exceeded",
+                                refs: &refs,
+                                meta: json!({ "runner": cfg.runner_id, "failures": failures }),
+                            },
                         );
                         break 'job_loop;
                     }
@@ -1526,6 +1612,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && pipeline_role.is_some_and(|role| role.eq_ignore_ascii_case("builder"))
             {
                 agent_summary = normalize_builder_summary_revision(&agent_summary, claim_revision);
+            }
+            if status.eq_ignore_ascii_case("DONE")
+                && pipeline_role.is_some_and(|role| role.eq_ignore_ascii_case("scout"))
+            {
+                let max_context_refs = base_meta
+                    .get("max_context_refs")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v.clamp(8, 64) as usize)
+                    .unwrap_or(24);
+                agent_summary = clamp_scout_summary_code_refs(&agent_summary, max_context_refs);
             }
             let mut refs = v
                 .get("refs")
@@ -1690,70 +1786,141 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && let Some(role) = pipeline_role
                 && let Err(contract_err) = validate_pipeline_summary_contract(role, &agent_summary)
             {
-                effective_status = "CONTINUE";
-                proof_gate_triggered = true;
                 checkpoint_summary = format!("contract gate ({role}): {contract_err}");
                 prior_summary = format!("{agent_summary}\n\n{checkpoint_summary}");
+                // Pipeline roles are fail-closed by contract: invalid summary must stop immediately.
+                effective_status = "FAILED";
             }
 
             // Quality gate: never accept DONE without at least one stable non-job proof ref.
             if status.eq_ignore_ascii_case("DONE")
                 && !has_done_proof_ref(job_id, &job_priority, &refs)
             {
-                effective_status = "CONTINUE";
-                proof_gate_triggered = true;
                 checkpoint_summary = if job_priority.eq_ignore_ascii_case("HIGH") {
                     "proof gate (HIGH): add CMD:/LINK:/FILE: to refs[] (or events.refs)".to_string()
                 } else {
                     "proof gate: add non-job proof refs (CMD:/LINK:/FILE:/CARD-/TASK-/notes@seq) to refs[] (or events.refs)".to_string()
                 };
                 prior_summary = format!("{agent_summary}\n\n{checkpoint_summary}");
+                if pipeline_role.is_some() {
+                    // Pipeline jobs are fail-closed by default: missing proof is terminal.
+                    effective_status = "FAILED";
+                } else {
+                    effective_status = "CONTINUE";
+                    proof_gate_triggered = true;
+                }
             }
 
             last_summary = Some(prior_summary);
 
             if effective_status.eq_ignore_ascii_case("DONE") {
-                let _ = mcp.call_tool(
-                    "jobs",
-                    json!({
-                        "workspace": cfg.workspace,
-                        "op": "call",
-                        "cmd": "jobs.complete",
-                        "args": {
-                            "job": job_id,
-                            "runner_id": cfg.runner_id,
-                            "claim_revision": claim_revision,
-                            "status": "DONE",
-                            "summary": agent_summary,
-                            "refs": refs,
-                            "meta": { "runner": cfg.runner_id, "slice_index": slice_index }
-                        }
-                    }),
-                );
+                if complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "DONE",
+                        summary: &agent_summary,
+                        refs: &refs,
+                        meta: json!({ "runner": cfg.runner_id, "slice_index": slice_index }),
+                    },
+                )
+                .is_err()
+                {
+                    // Fail-safe: do not leave terminal-complete jobs stuck in RUNNING.
+                    let _ = mcp.call_tool(
+                        "jobs",
+                        json!({
+                            "workspace": cfg.workspace,
+                            "op": "call",
+                            "cmd": "jobs.cancel",
+                            "args": {
+                                "job": job_id,
+                                "force_running": true,
+                                "reason": "runner fallback: jobs.complete failed repeatedly after DONE"
+                            }
+                        }),
+                    );
+                }
                 break 'job_loop;
             }
             if effective_status.eq_ignore_ascii_case("FAILED") {
-                let _ = mcp.call_tool(
-                    "jobs",
-                    json!({
-                        "workspace": cfg.workspace,
-                        "op": "call",
-                        "cmd": "jobs.complete",
-                        "args": {
-                            "job": job_id,
-                            "runner_id": cfg.runner_id,
-                            "claim_revision": claim_revision,
-                            "status": "FAILED",
-                            "summary": agent_summary,
-                            "refs": refs,
-                            "meta": { "runner": cfg.runner_id, "slice_index": slice_index }
-                        }
-                    }),
-                );
+                if complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "FAILED",
+                        summary: &agent_summary,
+                        refs: &refs,
+                        meta: json!({ "runner": cfg.runner_id, "slice_index": slice_index }),
+                    },
+                )
+                .is_err()
+                {
+                    let _ = mcp.call_tool(
+                        "jobs",
+                        json!({
+                            "workspace": cfg.workspace,
+                            "op": "call",
+                            "cmd": "jobs.cancel",
+                            "args": {
+                                "job": job_id,
+                                "force_running": true,
+                                "reason": "runner fallback: jobs.complete failed repeatedly after FAILED"
+                            }
+                        }),
+                    );
+                }
                 break 'job_loop;
             }
 
             // CONTINUE: persist progress via events and run another slice.
+            continue_loops = continue_loops.saturating_add(1);
+            if let Some(limit) = continue_limit
+                && continue_loops > limit
+            {
+                let exhausted = format!(
+                    "runner: CONTINUE retry budget exhausted (loops={continue_loops}, limit={limit}); last checkpoint: {checkpoint_summary}"
+                );
+                if complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "FAILED",
+                        summary: &exhausted,
+                        refs: &refs,
+                        meta: json!({
+                            "runner": cfg.runner_id,
+                            "slice_index": slice_index,
+                            "continue_loops": continue_loops,
+                            "continue_limit": limit,
+                            "proof_gate": proof_gate_triggered
+                        }),
+                    },
+                )
+                .is_err()
+                {
+                    let _ = mcp.call_tool(
+                        "jobs",
+                        json!({
+                            "workspace": cfg.workspace,
+                            "op": "call",
+                            "cmd": "jobs.cancel",
+                            "args": {
+                                "job": job_id,
+                                "force_running": true,
+                                "reason": "runner fallback: CONTINUE retry budget exhausted and jobs.complete failed"
+                            }
+                        }),
+                    );
+                }
+                break 'job_loop;
+            }
             let _ = mcp.call_tool(
                 "jobs",
                 json!({

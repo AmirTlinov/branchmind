@@ -142,15 +142,19 @@ pub(crate) fn build_subagent_prompt(
     };
 
     let role_contract = match pipeline_role.map(|v| v.trim().to_ascii_lowercase()) {
-        Some(role) if role == "scout" => r#"PIPELINE ROLE: SCOUT
+Some(role) if role == "scout" => r#"PIPELINE ROLE: SCOUT
 MUST return context-only output.
 MUST NOT include code/patch/diff/apply instructions.
 In `summary`, provide a JSON object `scout_context_pack` with keys:
-objective, scope{in,out}, anchors{id,rationale}, code_refs, change_hints,
-test_hints, risk_map{risk,falsifier}, open_questions, summary_for_builder.
+objective, scope{in,out}, anchors{id,rationale,anchor_type,code_ref,content,line_count}, code_refs, change_hints,
+test_hints, risk_map{risk,falsifier}, open_questions, summary_for_builder, coverage_matrix.
 Each `code_refs[]` item MUST be a CODE_REF token:
 `code:<repo_rel_path>#L<start>-L<end>` (optionally `@sha256:<64hex>`; BranchMind normalizes).
 Every anchor in `anchors[]` MUST include `anchor_type` + `code_ref` for pre-validator lineage.
+Every `change_hints[].path` MUST be covered by at least one `primary|structural` anchor with matching code_ref path
+(directory scope allowed only when the change hint path is a directory, not a single file path).
+MUST include `coverage_matrix.objective_items[]` and `coverage_matrix.change_hint_coverage[]`;
+each coverage row MUST reference `path`, `primary_or_structural_anchor_ids[]`, and `status` (`covered|needs_more_context`).
 For very large code areas, prefer layered anchors: first 8-12 primary anchors, then extended anchors up to 64 max.
 QUALITY MINIMA: anchors>=3, change_hints>=2, test_hints>=3, risk_map>=3,
 summary_for_builder>=320 chars.

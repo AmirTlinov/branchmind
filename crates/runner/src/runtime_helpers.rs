@@ -194,6 +194,253 @@ pub(super) fn normalize_builder_summary_revision(summary: &str, claim_revision: 
     serde_json::to_string(&parsed).unwrap_or_else(|_| summary.to_string())
 }
 
+fn dedup_string_array_in_place(items: &mut Vec<Value>) -> bool {
+    let before = items.len();
+    let mut seen = HashSet::<String>::new();
+    items.retain(|item| {
+        let Some(raw) = item.as_str() else {
+            return false;
+        };
+        let token = raw.trim();
+        if token.is_empty() {
+            return false;
+        }
+        seen.insert(token.to_string())
+    });
+    items.len() != before
+}
+
+fn code_ref_path_key(code_ref: &str) -> Option<String> {
+    code_ref
+        .strip_prefix("code:")
+        .and_then(|rest| rest.split_once("#L").map(|(path, _)| path))
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| path.to_ascii_lowercase())
+}
+
+fn change_hint_path_is_covered(path_key: &str, covered_paths: &HashSet<String>) -> bool {
+    if path_key.is_empty() {
+        return false;
+    }
+    if covered_paths.contains(path_key) {
+        return true;
+    }
+    let directory = path_key.trim_end_matches('/');
+    if directory.is_empty() || directory == "." {
+        return false;
+    }
+    let prefix = format!("{directory}/");
+    covered_paths
+        .iter()
+        .any(|covered| covered.starts_with(&prefix))
+}
+
+fn collect_anchor_paths(anchors: &[Value], primary_structural_only: bool) -> HashSet<String> {
+    anchors
+        .iter()
+        .filter_map(|anchor| anchor.as_object())
+        .filter(|obj| {
+            if !primary_structural_only {
+                return true;
+            }
+            obj.get("anchor_type")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .map(|raw| {
+                    raw.eq_ignore_ascii_case("primary") || raw.eq_ignore_ascii_case("structural")
+                })
+                .unwrap_or(false)
+        })
+        .filter_map(|obj| obj.get("code_ref").and_then(|v| v.as_str()))
+        .filter_map(code_ref_path_key)
+        .collect::<HashSet<_>>()
+}
+
+fn ensure_scout_anchor_coverage(obj: &mut serde_json::Map<String, Value>) -> bool {
+    let change_paths = obj
+        .get("change_hints")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|hint| hint.as_object())
+                .filter_map(|hint| hint.get("path").and_then(|v| v.as_str()))
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(|path| path.to_ascii_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if change_paths.is_empty() {
+        return false;
+    }
+
+    let mut code_ref_by_path = std::collections::HashMap::<String, String>::new();
+    if let Some(code_refs) = obj.get("code_refs").and_then(|v| v.as_array()) {
+        for raw in code_refs.iter().filter_map(|v| v.as_str()) {
+            if let Some(path_key) = code_ref_path_key(raw) {
+                code_ref_by_path
+                    .entry(path_key)
+                    .or_insert_with(|| raw.trim().to_string());
+            }
+        }
+    }
+
+    let Some(anchors) = obj.get_mut("anchors").and_then(|v| v.as_array_mut()) else {
+        return false;
+    };
+
+    let mut covered_paths = collect_anchor_paths(anchors, true);
+    if covered_paths.is_empty() {
+        covered_paths = collect_anchor_paths(anchors, false);
+    }
+
+    let mut existing_ids = anchors
+        .iter()
+        .filter_map(|anchor| anchor.as_object())
+        .filter_map(|obj| obj.get("id").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+
+    let mut changed = false;
+    let mut synthetic_seq: u32 = 1;
+    for path_key in change_paths {
+        if change_hint_path_is_covered(&path_key, &covered_paths) {
+            continue;
+        }
+
+        let mut promoted = false;
+        for anchor in anchors.iter_mut() {
+            let Some(anchor_obj) = anchor.as_object_mut() else {
+                continue;
+            };
+            let anchor_path = anchor_obj
+                .get("code_ref")
+                .and_then(|v| v.as_str())
+                .and_then(code_ref_path_key);
+            if anchor_path.as_deref() != Some(path_key.as_str()) {
+                continue;
+            }
+
+            let is_primary_or_structural = anchor_obj
+                .get("anchor_type")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .map(|raw| {
+                    raw.eq_ignore_ascii_case("primary") || raw.eq_ignore_ascii_case("structural")
+                })
+                .unwrap_or(false);
+            if !is_primary_or_structural {
+                anchor_obj.insert("anchor_type".to_string(), json!("structural"));
+                changed = true;
+            }
+            let content_missing = anchor_obj
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .map(|s| s.is_empty())
+                .unwrap_or(true);
+            if content_missing {
+                let fallback = anchor_obj
+                    .get("rationale")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(path_key.as_str())
+                    .to_string();
+                anchor_obj.insert("content".to_string(), Value::String(fallback));
+                changed = true;
+            }
+            if anchor_obj
+                .get("line_count")
+                .and_then(|v| v.as_u64())
+                .is_none()
+            {
+                anchor_obj.insert("line_count".to_string(), json!(1));
+                changed = true;
+            }
+            covered_paths.insert(path_key.clone());
+            promoted = true;
+            break;
+        }
+
+        if promoted {
+            continue;
+        }
+
+        let Some(code_ref) = code_ref_by_path.get(&path_key).cloned() else {
+            continue;
+        };
+        let new_id = loop {
+            let candidate = format!("a:auto-coverage-{synthetic_seq}");
+            synthetic_seq = synthetic_seq.saturating_add(1);
+            if existing_ids.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
+        anchors.push(json!({
+            "id": new_id,
+            "anchor_type": "structural",
+            "rationale": format!("Auto-synthesized structural anchor for change_hints path `{path_key}`."),
+            "code_ref": code_ref,
+            "content": format!("Auto coverage anchor for `{path_key}`."),
+            "line_count": 1,
+            "meta_hint": "auto_synthesized_coverage_anchor"
+        }));
+        covered_paths.insert(path_key);
+        changed = true;
+    }
+
+    changed
+}
+
+fn clamp_object_code_refs(
+    obj: &mut serde_json::Map<String, Value>,
+    max_context_refs: usize,
+) -> bool {
+    let Some(code_refs) = obj.get_mut("code_refs").and_then(|v| v.as_array_mut()) else {
+        return false;
+    };
+    let mut changed = dedup_string_array_in_place(code_refs);
+    if max_context_refs > 0 && code_refs.len() > max_context_refs {
+        code_refs.truncate(max_context_refs);
+        changed = true;
+    }
+    changed
+}
+
+fn clamp_and_normalize_scout_pack(
+    obj: &mut serde_json::Map<String, Value>,
+    max_context_refs: usize,
+) -> bool {
+    let mut changed = clamp_object_code_refs(obj, max_context_refs);
+    changed |= ensure_scout_anchor_coverage(obj);
+    changed
+}
+
+pub(super) fn clamp_scout_summary_code_refs(summary: &str, max_context_refs: usize) -> String {
+    let Ok(mut parsed) = serde_json::from_str::<Value>(summary) else {
+        return summary.to_string();
+    };
+
+    let mut changed = false;
+    if let Some(obj) = parsed.as_object_mut() {
+        changed = clamp_and_normalize_scout_pack(obj, max_context_refs);
+        if let Some(inner) = obj
+            .get_mut("scout_context_pack")
+            .and_then(|v| v.as_object_mut())
+        {
+            changed |= clamp_and_normalize_scout_pack(inner, max_context_refs);
+        }
+    }
+    if !changed {
+        return summary.to_string();
+    }
+    serde_json::to_string(&parsed).unwrap_or_else(|_| summary.to_string())
+}
+
 pub(super) fn normalize_task_snapshot_lines(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty()

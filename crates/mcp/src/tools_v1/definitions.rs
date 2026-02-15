@@ -96,13 +96,8 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "think",
-            "description": "Reasoning/knowledge operations (v1).",
+            "description": "Reasoning operations (v1).",
             "inputSchema": ops_schema(&[
-                "knowledge.upsert",
-                "knowledge.query",
-                "knowledge.search",
-                "knowledge.recall",
-                "knowledge.lint",
                 "reasoning.seed",
                 "reasoning.pipeline",
                 "idea.branch.create",

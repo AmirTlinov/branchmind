@@ -10,210 +10,6 @@ use serde_json::json;
 use super::handlers;
 
 pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
-    // v1 curated commands (custom UX layer).
-    specs.push(CommandSpec {
-        cmd: "think.knowledge.upsert".to_string(),
-        domain_tool: ToolName::ThinkOps,
-        tier: Tier::Gold,
-        stability: Stability::Stable,
-        doc_ref: DocRef {
-            path: "docs/contracts/V1_COMMANDS.md".to_string(),
-            anchor: "#think.knowledge.upsert".to_string(),
-        },
-        safety: Safety {
-            destructive: false,
-            confirm_level: ConfirmLevel::None,
-            idempotent: true,
-        },
-        budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Custom {
-            args_schema: json!({
-                "type": "object",
-                "properties": {
-                    "anchor": { "type": "string" },
-                    "key": { "type": "string", "description": "Stable knowledge key slug (enables evolvable upsert)." },
-                    "key_mode": { "type": "string", "enum": ["explicit", "auto"] },
-                    "lint_mode": { "type": "string", "enum": ["manual", "auto"] },
-                    "card": { "type": ["object", "string"] },
-                    "supports": { "type": "array", "items": { "type": "string" } },
-                    "blocks": { "type": "array", "items": { "type": "string" } }
-                },
-                "required": ["card"]
-            }),
-            example_minimal_args: json!({
-                "anchor": "core",
-                "key": "determinism",
-                "card": { "title": "Invariant", "text": "Claim: ... / Apply: ... / Proof: ... / Expiry: ..." }
-            }),
-        },
-        op_aliases: vec!["knowledge.upsert".to_string()],
-        handler_name: None,
-        handler: Some(handlers::handle_knowledge_upsert),
-    });
-
-    specs.push(CommandSpec {
-        cmd: "think.knowledge.key.suggest".to_string(),
-        domain_tool: ToolName::ThinkOps,
-        tier: Tier::Advanced,
-        stability: Stability::Experimental,
-        doc_ref: DocRef {
-            path: "docs/contracts/V1_COMMANDS.md".to_string(),
-            anchor: "#think.knowledge.key.suggest".to_string(),
-        },
-        safety: Safety {
-            destructive: false,
-            confirm_level: ConfirmLevel::None,
-            idempotent: true,
-        },
-        budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Custom {
-            args_schema: json!({
-                "type": "object",
-                "properties": {
-                    "anchor": { "type": "string" },
-                    "title": { "type": "string" },
-                    "text": { "type": "string" },
-                    "card": { "type": ["object", "string"] },
-                    "limit": { "type": "integer" }
-                },
-                "required": []
-            }),
-            example_minimal_args: json!({
-                "anchor": "core",
-                "title": "Determinism invariants"
-            }),
-        },
-        op_aliases: vec!["knowledge.key.suggest".to_string()],
-        handler_name: None,
-        handler: Some(handlers::handle_knowledge_key_suggest),
-    });
-
-    super::note_promote::register(specs);
-
-    specs.push(CommandSpec {
-        cmd: "think.knowledge.query".to_string(),
-        domain_tool: ToolName::ThinkOps,
-        tier: Tier::Gold,
-        stability: Stability::Stable,
-        doc_ref: DocRef {
-            path: "docs/contracts/V1_COMMANDS.md".to_string(),
-            anchor: "#think.knowledge.query".to_string(),
-        },
-        safety: Safety {
-            destructive: false,
-            confirm_level: ConfirmLevel::None,
-            idempotent: true,
-        },
-        budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Custom {
-            args_schema: json!({
-                "type": "object",
-                "properties": {
-                    "anchor": {
-                        "anyOf": [
-                            { "type": "string" },
-                            { "type": "array", "items": { "type": "string" } }
-                        ]
-                    },
-                    "key": { "type": "string", "description": "Filter to a single knowledge key (k:<slug> or <slug>)." },
-                    "limit": { "type": "integer" },
-                    "include_drafts": { "type": "boolean", "description": "Include draft-lane knowledge (default true for query)." },
-                    "include_history": { "type": "boolean", "description": "When true, return historical versions; when false (default), latest-only." }
-                },
-                "required": []
-            }),
-            example_minimal_args: json!({ "limit": 12 }),
-        },
-        op_aliases: vec!["knowledge.query".to_string()],
-        handler_name: None,
-        handler: Some(handlers::handle_knowledge_query),
-    });
-
-    super::knowledge_search::register(specs);
-
-    specs.push(CommandSpec {
-        cmd: "think.knowledge.recall".to_string(),
-        domain_tool: ToolName::ThinkOps,
-        tier: Tier::Gold,
-        stability: Stability::Stable,
-        doc_ref: DocRef {
-            path: "docs/contracts/V1_COMMANDS.md".to_string(),
-            anchor: "#think.knowledge.recall".to_string(),
-        },
-        safety: Safety {
-            destructive: false,
-            confirm_level: ConfirmLevel::None,
-            idempotent: true,
-        },
-        budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Custom {
-            args_schema: json!({
-                "type": "object",
-                "properties": {
-                    "anchor": {
-                        "anyOf": [
-                            { "type": "string" },
-                            { "type": "array", "items": { "type": "string" } }
-                        ],
-                        "description": "Anchor slug(s) or a:<slug> (recall is anchor-first)."
-                    },
-                    "limit": { "type": "integer" },
-                    "text": { "type": "string" },
-                    "include_drafts": { "type": "boolean" },
-                    "max_chars": { "type": "integer" }
-                },
-                "required": []
-            }),
-            example_minimal_args: json!({
-                "anchor": "core",
-                "limit": 12
-            }),
-        },
-        op_aliases: vec!["knowledge.recall".to_string()],
-        handler_name: None,
-        handler: Some(handlers::handle_knowledge_recall),
-    });
-
-    specs.push(CommandSpec {
-        cmd: "think.knowledge.lint".to_string(),
-        domain_tool: ToolName::ThinkOps,
-        tier: Tier::Gold,
-        stability: Stability::Stable,
-        doc_ref: DocRef {
-            path: "docs/contracts/V1_COMMANDS.md".to_string(),
-            anchor: "#think.knowledge.lint".to_string(),
-        },
-        safety: Safety {
-            destructive: false,
-            confirm_level: ConfirmLevel::None,
-            idempotent: true,
-        },
-        budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Custom {
-            args_schema: json!({
-                "type": "object",
-                "properties": {
-                    "scope": { "type": "string", "description": "Legacy/compat knob. Prefer anchor filter + limit." },
-                    "limit": { "type": "integer", "description": "Max knowledge key index rows to scan (budget-capped)." },
-                    "anchor": {
-                        "anyOf": [
-                            { "type": "string" },
-                            { "type": "array", "items": { "type": "string" } }
-                        ],
-                        "description": "Optional anchor slug(s) to restrict lint. Same format as think.knowledge.recall."
-                    },
-                    "include_drafts": { "type": "boolean", "description": "Include draft-lane knowledge (default true)." },
-                    "max_chars": { "type": "integer", "description": "Output budget (clamped by budget profile)." }
-                },
-                "required": []
-            }),
-            example_minimal_args: json!({ "anchor": "core" }),
-        },
-        op_aliases: vec!["knowledge.lint".to_string()],
-        handler_name: None,
-        handler: Some(handlers::handle_knowledge_lint),
-    });
-
     specs.push(CommandSpec {
         cmd: "think.reasoning.seed".to_string(),
         domain_tool: ToolName::ThinkOps,
@@ -401,6 +197,28 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         handler: None,
     });
 
+    // Sequential trace checkpoint is a core strict-reasoning primitive.
+    specs.push(CommandSpec {
+        cmd: "think.trace.sequential.step".to_string(),
+        domain_tool: ToolName::ThinkOps,
+        tier: Tier::Gold,
+        stability: Stability::Stable,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#think.trace.sequential.step".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: false,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Handler,
+        op_aliases: vec!["trace.sequential.step".to_string()],
+        handler_name: Some("trace_sequential_step".to_string()),
+        handler: None,
+    });
+
     // Auto-map remaining non-task handlers into think op=call surface.
     for def in crate::handlers::handler_definitions() {
         let Some(name) = def.get("name").and_then(|v| v.as_str()) else {
@@ -427,12 +245,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
                 confirm_level: ConfirmLevel::None,
                 idempotent: matches!(
                     name,
-                    "think_query"
-                        | "think_pack"
-                        | "think_next"
-                        | "think_frontier"
-                        | "think_lint"
-                        | "knowledge_list"
+                    "think_query" | "think_pack" | "think_next" | "think_frontier" | "think_lint"
                 ),
             },
             budget: BudgetPolicy::standard(),

@@ -125,8 +125,42 @@ fn scout_summary_schema() -> Value {
                 "items": { "type": "string", "maxLength": 220 }
             },
             "summary_for_builder": { "type": "string", "minLength": 320, "maxLength": 1200 },
-            // Optional fields are deliberately excluded from the runner schema to avoid
-            // structured-output retry loops on small models. bm_mcp may compute/derive them.
+            "coverage_matrix": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "objective_items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 16,
+                        "items": { "type": "string", "minLength": 2, "maxLength": 180 }
+                    },
+                    "change_hint_coverage": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 32,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "path": { "type": "string", "minLength": 2, "maxLength": 220 },
+                                "primary_or_structural_anchor_ids": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 16,
+                                    "items": { "type": "string", "minLength": 2, "maxLength": 96 }
+                                },
+                                "status": { "type": "string", "enum": ["covered", "needs_more_context"] }
+                            },
+                            "required": ["path", "primary_or_structural_anchor_ids", "status"]
+                        }
+                    }
+                },
+                "required": ["objective_items", "change_hint_coverage"]
+            },
+            // Most optional fields are deliberately excluded from runner schema to avoid
+            // structured-output retry loops on small models.
+            // coverage_matrix stays optional but is included to codify change_hint↔anchor coverage.
         },
         "required": [
             "objective",
@@ -137,7 +171,8 @@ fn scout_summary_schema() -> Value {
             "test_hints",
             "risk_map",
             "open_questions",
-            "summary_for_builder"
+            "summary_for_builder",
+            "coverage_matrix"
         ]
     })
 }

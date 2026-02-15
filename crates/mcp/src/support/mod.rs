@@ -19,6 +19,7 @@ mod lane;
 mod lane_summary;
 mod line_protocol;
 mod note_templates;
+pub(crate) mod planfs;
 mod proof;
 mod radar;
 mod reasoning;

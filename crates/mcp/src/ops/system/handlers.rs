@@ -2,7 +2,7 @@
 
 use crate::ops::{
     Action, ActionPriority, CommandRegistry, CommandSpec, Envelope, OpError, OpResponse,
-    QUICKSTART_DEFAULT_PORTAL, SchemaSource, ToolName, handler_to_op_response,
+    QUICKSTART_DEFAULT_PORTAL, SchemaSource, Tier, ToolName, handler_to_op_response,
     quickstart_curated_portals_joined, quickstart_example_env, quickstart_recipes_for_portal,
     schema_bundle_for_cmd,
 };
@@ -313,17 +313,24 @@ pub(crate) fn handle_schema_list(_server: &mut crate::McpServer, env: &Envelope)
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_ascii_lowercase())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "names".to_string());
-    if !matches!(mode.as_str(), "names" | "compact") {
-        return OpResponse::error(
-            env.cmd.clone(),
-            OpError {
-                code: "INVALID_INPUT".to_string(),
-                message: "mode must be one of: names|compact".to_string(),
-                recovery: None,
-            },
-        );
-    }
+        .unwrap_or_else(|| "golden".to_string());
+    let include_detailed = match mode.as_str() {
+        "golden" => false,
+        "all" => true,
+        // Backward-compatible aliases.
+        "names" => false,
+        "compact" => true,
+        _ => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "mode must be one of: golden|all".to_string(),
+                    recovery: Some("Use mode=\"golden\" (default) or mode=\"all\".".to_string()),
+                },
+            );
+        }
+    };
 
     let offset = args_obj.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let limit = args_obj.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
@@ -351,6 +358,9 @@ pub(crate) fn handle_schema_list(_server: &mut crate::McpServer, env: &Envelope)
     let registry = CommandRegistry::global();
     let mut hits = Vec::<&CommandSpec>::new();
     for spec in registry.specs() {
+        if !include_detailed && spec.tier != Tier::Gold {
+            continue;
+        }
         if let Some(tool) = portal_tool
             && spec.domain_tool != tool
         {
@@ -376,7 +386,7 @@ pub(crate) fn handle_schema_list(_server: &mut crate::McpServer, env: &Envelope)
         .skip(offset)
         .take(limit)
         .map(|spec| {
-            if mode == "compact" {
+            if include_detailed {
                 let hints = schema_required_hints_for_spec(spec);
                 json!({
                     "cmd": spec.cmd.clone(),
@@ -493,7 +503,7 @@ pub(crate) fn handle_tools_list(_server: &mut crate::McpServer, env: &Envelope) 
     schema_list.insert("op".to_string(), Value::String("schema.list".to_string()));
     schema_list.insert(
         "args".to_string(),
-        json!({ "portal": "tasks", "limit": 20, "mode": "compact" }),
+        json!({ "portal": "tasks", "limit": 20 }),
     );
     schema_list.insert(
         "budget_profile".to_string(),
@@ -1041,13 +1051,35 @@ pub(crate) fn handle_ops_summary(_server: &mut crate::McpServer, env: &Envelope)
 
 pub(crate) fn handle_cmd_list(_server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
     let args_obj = env.args.as_object().cloned().unwrap_or_default();
+    let mode = args_obj
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "golden".to_string());
+    let include_all = match mode.as_str() {
+        "golden" => false,
+        "all" => true,
+        // Backward-compatible aliases.
+        "names" => false,
+        _ => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: "mode must be one of: golden|all".to_string(),
+                    recovery: Some("Use mode=\"golden\" (default) or mode=\"all\".".to_string()),
+                },
+            );
+        }
+    };
     let mut unknown = args_obj
         .keys()
         .filter(|k| {
             !matches!(
                 k.as_str(),
                 // command args
-                "prefix" | "q" | "offset" | "limit"
+                "prefix" | "q" | "offset" | "limit" | "mode"
                 // injected/envelope budget keys (must be ignored, not rejected)
                 | "workspace" | "context_budget" | "max_chars"
             )
@@ -1063,7 +1095,7 @@ pub(crate) fn handle_cmd_list(_server: &mut crate::McpServer, env: &Envelope) ->
                 code: "UNKNOWN_ARG".to_string(),
                 message: format!("unknown args for system.cmd.list: {}", unknown.join(", ")),
                 recovery: Some(
-                    "Remove unknown args and retry. Supported args: prefix?, q?, offset?, limit?."
+                    "Remove unknown args and retry. Supported args: prefix?, q?, offset?, limit?, mode?."
                         .to_string(),
                 ),
             },
@@ -1081,16 +1113,31 @@ pub(crate) fn handle_cmd_list(_server: &mut crate::McpServer, env: &Envelope) ->
     let offset = args_obj.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let limit = args_obj.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
-    let mut cmds = CommandRegistry::global().list_cmds();
-    if let Some(prefix) = prefix.as_deref() {
-        cmds.retain(|c| c.starts_with(prefix));
+    let mut cmds = CommandRegistry::global()
+        .specs()
+        .iter()
+        .filter(|spec| include_all || spec.tier == Tier::Gold)
+        .map(|spec| spec.cmd.clone())
+        .collect::<Vec<_>>();
+    cmds.sort();
+    cmds.dedup();
+    let mut filtered = Vec::<String>::new();
+    for cmd in cmds {
+        if let Some(prefix) = prefix.as_deref()
+            && !cmd.starts_with(prefix)
+        {
+            continue;
+        }
+        if let Some(q) = q.as_deref()
+            && !cmd.to_ascii_lowercase().contains(q)
+        {
+            continue;
+        }
+        filtered.push(cmd);
     }
-    if let Some(q) = q.as_deref() {
-        cmds.retain(|c| c.to_ascii_lowercase().contains(q));
-    }
-    let total = cmds.len();
+    let total = filtered.len();
 
-    let page = cmds
+    let page = filtered
         .into_iter()
         .skip(offset)
         .take(limit)
@@ -1130,7 +1177,7 @@ pub(crate) fn handle_tutorial(_server: &mut crate::McpServer, env: &Envelope) ->
         .and_then(|v| v.as_u64())
         .map(|v| v as usize);
 
-    let mut summary = "Пошаговый старт: 1) status → контекст, 2) tasks.macro.start → первая задача, 3) tasks.snapshot → фокус.".to_string();
+    let mut summary = "Пошаговый старт: 1) status → контекст, 2) tasks.macro.start → первая задача, 3) think.trace.sequential.step → структурный reasoning checkpoint, 4) tasks.snapshot → фокус.".to_string();
     let mut truncated = false;
     if let Some(max_chars) = max_chars {
         let (max_chars, clamped) = crate::clamp_budget_max(max_chars);
@@ -1161,6 +1208,14 @@ pub(crate) fn handle_tutorial(_server: &mut crate::McpServer, env: &Envelope) ->
             "cmd": "tasks.macro.start",
             "purpose": "Создаёт задачу по базовому шаблону.",
             "action_id": "tutorial::tasks.macro.start"
+        }),
+        json!({
+            "id": "sequential-checkpoint",
+            "title": "Зафиксировать reasoning checkpoint",
+            "tool": "think",
+            "cmd": "think.trace.sequential.step",
+            "purpose": "Структурно записать hypothesis→test→evidence→decision для текущего шага.",
+            "action_id": "tutorial::think.trace.sequential.step"
         }),
         json!({
             "id": "snapshot",
@@ -1248,6 +1303,42 @@ pub(crate) fn handle_tutorial(_server: &mut crate::McpServer, env: &Envelope) ->
                     Value::String("tasks.snapshot".to_string()),
                 );
                 obj.insert("args".to_string(), json!({ "view": "smart" }));
+                obj.insert(
+                    "budget_profile".to_string(),
+                    Value::String("portal".to_string()),
+                );
+                obj.insert(
+                    "portal_view".to_string(),
+                    Value::String("compact".to_string()),
+                );
+                Value::Object(obj)
+            }
+            Some("sequential-checkpoint") => {
+                let mut obj = serde_json::Map::new();
+                if let Some(ws) = workspace {
+                    obj.insert("workspace".to_string(), Value::String(ws.to_string()));
+                }
+                obj.insert("op".to_string(), Value::String("call".to_string()));
+                obj.insert(
+                    "cmd".to_string(),
+                    Value::String("think.trace.sequential.step".to_string()),
+                );
+                obj.insert(
+                    "args".to_string(),
+                    json!({
+                        "thought": "Checkpoint: hypothesis/test/evidence/decision status.",
+                        "thoughtNumber": 1,
+                        "totalThoughts": 1,
+                        "nextThoughtNeeded": false,
+                        "meta": {
+                            "checkpoint": "gate",
+                            "hypothesis": "Current approach should pass gate.",
+                            "test": "Run make check and inspect first red.",
+                            "evidence": "Attach concise output snippet.",
+                            "decision": "Proceed with minimal fix or stop."
+                        }
+                    }),
+                );
                 obj.insert(
                     "budget_profile".to_string(),
                     Value::String("portal".to_string()),

@@ -28,7 +28,7 @@ lean enough for daily use.
 ## Concrete benefits (what users actually feel)
 
 **For AI agents**
-- **Knowledge that sticks**: versioned memory you can recall, update, and lint (no “lost context”).
+- **Context that sticks**: repo-local skills (`.agents/skills/**`) + PlanFS files (`docs/plans/**`) + reasoning docs.
 - **Planning with control**: explicit steps, checkpoints, and next‑action guidance.
 - **Better reasoning**: hypotheses → tests → evidence → decisions, not just chat.
 - **Artifacts you can trust**: proofs, logs, and refs are first‑class.
@@ -50,7 +50,7 @@ lean enough for daily use.
 4. Apply only from an approved gate decision (fail-closed by default).
 5. Close steps with `tasks.macro.close.step` + `proof_input`  
    (URL/CMD/path → LINK/CMD/FILE; NOTE doesn’t satisfy proof).
-6. Persist learning with `think.knowledge.upsert` and keep it clean via `think.knowledge.lint`.
+6. Persist plans and slices as files (`docs/plans/<slug>/PLAN.md`, `SLICE-*.md`) and keep BranchMind steps aligned 1:1 with those slices.
 
 ## Quick start (from source)
 
@@ -89,6 +89,13 @@ Notes:
 - `--shared` / `--daemon` — shared local daemon modes.
 
 Full list: `bm_mcp --help`.
+
+## Release notes (v2.0.0)
+
+- Removed legacy knowledge-card command family (`think.knowledge.*`, `think.add.knowledge`).
+- PlanFS is the planning SSOT in git (`docs/plans/<slug>/PLAN.md` + `Slice-*.md`).
+- `doc_kind=plan_spec` supports branch/diff/merge/export for deterministic plan evolution.
+- Default command/schema listing is golden-first (`mode=golden`, opt-in `mode=all`).
 
 ## Repository map
 

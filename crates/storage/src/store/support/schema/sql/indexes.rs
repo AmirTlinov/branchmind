@@ -32,13 +32,6 @@ pub(super) const SQL: &str = r#"
         CREATE INDEX IF NOT EXISTS idx_anchor_links_lookup ON anchor_links(workspace, anchor_id, last_ts_ms);
         CREATE INDEX IF NOT EXISTS idx_anchor_links_card ON anchor_links(workspace, branch, graph_doc, card_id);
         CREATE INDEX IF NOT EXISTS idx_anchor_bindings_repo_rel ON anchor_bindings(workspace, repo_rel, anchor_id);
-        CREATE INDEX IF NOT EXISTS idx_knowledge_keys_anchor_updated
-          ON knowledge_keys(workspace, anchor_id, updated_at_ms DESC);
-        CREATE INDEX IF NOT EXISTS idx_knowledge_keys_workspace_updated
-          ON knowledge_keys(workspace, updated_at_ms DESC);
-        CREATE INDEX IF NOT EXISTS idx_knowledge_keys_key_updated
-          ON knowledge_keys(workspace, key, updated_at_ms DESC);
-        CREATE INDEX IF NOT EXISTS idx_knowledge_keys_card ON knowledge_keys(workspace, card_id);
         CREATE INDEX IF NOT EXISTS idx_jobs_status_updated ON jobs(workspace, status, updated_at_ms);
         CREATE INDEX IF NOT EXISTS idx_jobs_task_updated ON jobs(workspace, task_id, updated_at_ms);
         CREATE INDEX IF NOT EXISTS idx_jobs_anchor_updated ON jobs(workspace, anchor_id, updated_at_ms);

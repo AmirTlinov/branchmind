@@ -57,13 +57,13 @@ Inputs (selected):
 - `portal` (string, optional): filter by portal (`tasks|jobs|think|graph|vcs|docs|workspace|system`).
 - `prefix` (string, optional): `starts_with` filter (e.g. `tasks.`).
 - `q` (string, optional): case-insensitive substring filter (applied after `portal/prefix`).
-- `mode` (string, optional): `names` (default) or `compact`.
+- `mode` (string, optional): `golden` (default) or `all` (`names|compact` kept for compatibility).
 - `offset` / `limit` (int, optional): pagination (limit is clamped).
 
 Output (selected):
 
 - `{ schemas:[...], pagination:{...} }`
-- In `mode=compact`, each schema row includes:
+- In `mode=all` (`compact` compatibility), each schema row includes:
   - `required`: always-required args (workspace excluded for v1 envelope parity).
   - `required_any_of`: alternative required sets for disjunction schemas (`oneOf`/`anyOf`),
     useful for commands like `jobs.claim`.
@@ -80,12 +80,13 @@ Inputs (selected):
 
 - `q` (string, optional): case-insensitive substring filter (applied after `prefix`).
 - `prefix` (string, optional): `starts_with` filter (e.g. `tasks.`).
+- `mode` (string, optional): `golden` (default) or `all` (`names|compact` kept for compatibility).
 - `offset` (int, optional): pagination offset.
 - `limit` (int, optional): page size.
 
 Notes:
 
-- Intended for discovery (“what is the real cmd name?”) and for driving `system.schema.get`.
+- By default, returns only golden-ops commands; use `mode=all` for full registry.
 
 ## system.tools.list
 
@@ -188,7 +189,7 @@ Output (selected):
 
 Notes:
 
-- Steps follow the golden path: `status → tasks.macro.start → tasks.snapshot`.
+- Steps follow the golden path: `status → tasks.macro.start → think.trace.sequential.step → tasks.snapshot`.
 - `actions[]` includes executable calls for each returned step (bounded by `limit`).
 - If `workspace` is not set, actions rely on the default workspace (or call `workspace.use` first).
 - `truncated=true` when `limit` or `max_chars` cuts the tutorial output.
@@ -259,6 +260,52 @@ plus ready‑to‑run `jobs.*` `actions[]`.
 ## tasks.slice.validate
 
 Validate slice plan structure + deterministic step tree + budgets (fail‑closed).
+
+## tasks.planfs.init
+
+Initialize a physical plan package in repo files:
+
+- `docs/plans/<slug>/PLAN.md`
+- `docs/plans/<slug>/Slice-1.md`, `Slice-2.md`, …
+
+Notes:
+- Source of truth for generation is the current task step tree (`s:0`, `s:1`, … + child steps).
+- Optional source switch: `from_plan_spec=true` reads latest `doc_kind=plan_spec` snapshot instead of task tree.
+  - Optional selectors: `plan_spec_branch`, `plan_spec_doc` (defaults: task reasoning branch + `plan_spec:<TASK-ID>`).
+- Fails closed when the task has no root steps, or required list fields are empty.
+- Requires workspace to be bound to a repo root path.
+
+## tasks.planfs.export
+
+Render/export the current task step tree into the same PlanFS layout as `tasks.planfs.init`.
+
+Notes:
+- Idempotent renderer: unchanged files are reported under `write.unchanged` and are not rewritten.
+- `overwrite=true` updates changed files; `overwrite=false` fails on drift.
+- Every successful init/export also persists canonical `plan_spec.v1` snapshot into reasoning docs (`doc_kind=plan_spec`),
+  with idempotent append (`status=unchanged|appended`).
+
+## tasks.planfs.import
+
+Import `PLAN.md` + `Slice-*.md` from PlanFS files back into the current task step tree.
+
+Strict fail-closed defaults:
+- rejects placeholders (`TODO`, `TBD`, `<fill>`, …) in `Success Criteria` / `Tests` / `Blockers`;
+- rejects empty required lists (`Success Criteria`, `Tests`, `Blockers`);
+- enforces explicit import budgets (`max_slices`, `max_items_per_list`, `max_tasks_per_slice`, `max_steps_per_task`, `max_file_bytes`).
+
+Notes:
+- `apply=true` mutates task steps.
+
+## docs.show / docs.diff / docs.merge (plan_spec)
+
+`doc_kind` now supports `plan_spec` (in addition to `notes` / `trace`):
+
+- `docs.show` returns latest canonical parsed payload under `result.plan_spec`.
+- `docs.diff` adds `result.plan_spec_diff` with structural JSON paths (`changed_paths[]`).
+- `docs.merge` supports deterministic `plan_spec` merge by appending canonical latest payload from `from` into `into`
+  (idempotent when already identical).
+- `apply=false` performs strict validation only (dry-run import gate).
 
 ## tasks.evidence.capture
 
@@ -478,6 +525,10 @@ Notes:
 Dispatch a **scout** stage for one slice (`task + anchor + slice_id + objective`).
 
 Notes:
+- `slice_id` may be provided directly **or** via `target_ref`:
+  - `target_ref=planfs:<slug>#SLICE-<n>`
+  - `target_ref=planfs:<slug>/Slice-<n>.md`
+  When `target_ref` is provided, objective/budgets come from PlanFS slice spec and the runner prompt includes a bounded PlanFS slice excerpt.
 - Slice-first (default): `slice_id` must have a `plan_slices` binding (created via `tasks.slices.apply`);
   `task` must match the binding `plan_id`; `objective` + budgets are sourced from the stored `slice_plan_spec`.
   If `BRANCHMIND_JOBS_SLICE_FIRST_FAIL_CLOSED=0` (or `--no-jobs-slice-first-fail-closed`), the binding becomes optional
@@ -487,8 +538,13 @@ Notes:
 - Fail-closed profile policy: for `executor=claude_code`, `executor_profile=xhigh` is rejected (use `fast|deep|audit`).
 - Runner prompt enforces context-only output (no code/diff/patch/apply).
 - Runner prompt enforces bounded scout extraction (max 12 repo reads), with mandatory dedupe for repeated file+intent pairs.
+- Runner executes Claude in strict local mode with `--strict-mcp-config --mcp-config {"mcpServers":{}}` (no user/global MCP/plugin servers).
+- Runner executes Codex pipeline roles in strict local mode with `--ephemeral -c mcp_servers={}` (no user/global MCP/plugin servers).
 - `code_refs[]` are strict CODE_REF tokens: `code:<repo_rel>#L<start>-L<end>@sha256:<64hex>` (fail-closed at builder/pre-validate gates).
 - `anchors[]` are typed for pre-validator lineage: each anchor must include `anchor_type` (`primary|dependency|reference|structural`) + `code_ref`.
+- Fail-closed path binding: every `change_hints[].path` must be bound by at least one `code_refs[]` / `anchors[].code_ref` path.
+  - File path: exact repo-relative match.
+  - Directory path (for example `docs/contracts/`): allowed only when at least one bound CODE_REF path is a descendant of that directory.
 - Strict novelty contract rejects duplicated `change_hints(path+intent)`, duplicated `test_hints`, and duplicated `risk_map.risk` entries.
 - Scout quality gate is strict: `anchors>=3`, `change_hints>=2`, `test_hints>=3`, `risk_map>=3`, `summary_for_builder>=320 chars`.
 - Job metadata persists pipeline lineage (`pipeline_role=scout`, `slice_id`, `max_context_refs`).
@@ -498,12 +554,15 @@ Notes:
 Dispatch a **builder** stage for one slice.
 
 Notes:
+- `slice_id` may be provided directly or resolved from PlanFS `target_ref` (same syntax as scout).
+- When `target_ref` is used, builder prompt receives bounded PlanFS excerpt + derived slice spec (no copy/paste objective/DoD boilerplate).
 - Slice-first (default): `slice_id` must be bound via `tasks.slices.apply` and `tasks.slice.validate` must pass.
   `objective` + budgets are sourced from `slice_plan_spec`; missing DoD fields are auto-filled from the slice spec.
   If `BRANCHMIND_JOBS_SLICE_FIRST_FAIL_CLOSED=0` (or `--no-jobs-slice-first-fail-closed`), binding becomes optional
   (legacy/unplanned mode): builder requires args-provided `objective` + `dod` and skips slice step-tree determinism checks.
 - Required inputs: `task`, `slice_id`, `scout_pack_ref`, `objective`, `dod`.
 - Output contract is `builder_diff_batch` (stored as structured summary payload).
+- `builder_diff_batch.checks_to_run` is required and must be non-empty (at least one explicit verification command).
 - Hard pin: `executor=codex`, `executor_profile=xhigh`, `model=gpt-5.3-codex` (fail-closed).
 - Default is fail-closed on scout quality: dispatch rejects when deterministic `jobs.pipeline.pre.validate` verdict is not `pass`.
 - `strict_scout_mode=true` by default and enforces additional scout freshness/quality guards:
@@ -512,6 +571,7 @@ Notes:
   - `allow_prevalidate_non_pass=true` is forbidden.
 - `context_quality_gate=true` by default (hard-fail on warning-level scout drift, including `CODE_REF_STALE`).
 - `input_mode=strict` by default: builder must use provided context only and avoid tool/repo discovery loops.
+  Runner-level enforcement: Codex pipeline roles run with `--ephemeral -c mcp_servers={}` (no MCP tool side effects).
 - `max_context_requests` (alias over retry limit) is bounded `<=2` to prevent endless ping-pong.
 - Escape hatch (only with `strict_scout_mode=false`): `allow_prevalidate_non_pass=true` allows dispatch with warning (`need_more`/`reject`) for controlled experiments only.
 - Builder may return `context_request` in `builder_diff_batch` with `changes=[]` to request missing scout context.
@@ -522,10 +582,13 @@ Notes:
 Dispatch an **independent validator** stage for one slice.
 
 Notes:
+- `slice_id` may be provided directly or resolved from PlanFS `target_ref` (same syntax as scout).
+- When `target_ref` is used, validator prompt includes bounded PlanFS slice excerpt + derived slice spec.
 - Required inputs: `task`, `slice_id`, `scout_pack_ref`, `builder_batch_ref`, `plan_ref`.
 - Output contract is `validator_report`.
 - Runner uses role-aware soft slice caps (scout 300s, builder/writer 1200s, validator 600s) and role-aware heartbeat cadence (scout 15s, builder/writer 45s, validator 30s); effective values are emitted in checkpoint meta.
 - Hard pin: `executor=claude_code`, `executor_profile=audit`, `model=opus-4.6` family (fail-closed).
+- Runner executes Claude in strict local mode with `--strict-mcp-config --mcp-config {"mcpServers":{}}` (no user/global MCP/plugin servers).
 - Lineage guard: validator parent lineage must not point to the builder job.
 
 ## jobs.macro.dispatch.writer
@@ -697,23 +760,23 @@ Runner heartbeat + capabilities (legacy `tasks_runner_heartbeat`).
 
 ---
 
-## think.knowledge.upsert
+## think.knowledge.\* (removed)
 
-Upsert a knowledge card.
+Knowledge cards are removed from v1 by design.
 
-Notes:
-- When `args.key` is provided (together with `args.anchor`), the command uses a **stable identity**
-  `(anchor,key)` with **versioned card_ids**. Editing the text produces a new `card_id` and updates
-  the knowledge index so `think.knowledge.recall` and future `think.knowledge.upsert` calls resolve
-  to the latest version (history stays in the graph).
-- Visibility: knowledge defaults to `v:draft` unless explicitly tagged (`v:canon`) or later promoted via publish.
-- v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`, `kb-trace`).
-- `key_mode`:
-  - `explicit` (default): requires `anchor` + `key` when a stable identity is desired.
-  - `auto`: derives a deterministic key from the card title/text when `key` is omitted.
-- `lint_mode`:
-  - `manual` (default): no lint side-effects.
-  - `auto`: emits bounded, low-noise warnings for key hygiene (no blocking).
+All commands in this namespace are unavailable:
+
+- `think.knowledge.upsert`
+- `think.knowledge.key.suggest`
+- `think.knowledge.query`
+- `think.knowledge.search`
+- `think.knowledge.recall`
+- `think.knowledge.lint`
+- `think.note.promote`
+
+When called, server returns `UNKNOWN_CMD` + recovery text:
+
+- "Use repo-local skills (.agents/skills/**) and PlanFS docs; knowledge removed by design."
 
 ## think.atlas.suggest
 
@@ -754,116 +817,6 @@ Notes:
 - The macro enforces `counter.type="hypothesis"` and `test.type="test"`, and ensures the counter card has the `counter` tag.
 - Idempotency: pass explicit `card.id` values inside `args.counter` / `args.test` if you need repeat-safe writes.
 
-## think.knowledge.key.suggest
-
-Suggest a stable knowledge key for a given anchor/title.
-
-Notes:
-- Returns `{ suggested_key, key_tag, collisions[] }`.
-- `collisions[]` lists existing `(anchor,key)` hits to prevent noisy key reuse.
-
-## think.knowledge.query
-
-List knowledge cards (bounded, step-aware).
-
-Notes:
-- v1 UX defaults to the workspace knowledge base scope (`kb/main`, docs: `kb-graph`).
-- Convenience filter: `args.key=<key>` limits results to a single knowledge key (useful for reviewing
-  lint findings / consolidation candidates).
-- When `args.key` is present and `include_history=false`, the command uses the storage knowledge key
-  index to resolve the *latest* card per `(anchor,key)` (no historical duplicates).
-- Defaults are product-UX oriented:
-  - `include_drafts=true` (management view; show what’s in the KB, not only what’s published)
-  - `include_history=false` (latest-only; no duplicate historical versions unless explicitly requested)
-- Use `think.knowledge.recall` for fast “what do we know about X?” recall; use `include_history=true`
-  here when you need audit/history across versions.
-
-## think.knowledge.search
-
-Jump/search for knowledge cards by text (anchor/key/card_id) and return openable ids.
-
-Notes:
-- Intended to avoid “knowledge.query → scroll → copy card_id” loops.
-- The response includes `actions[]` to `open id=CARD-... include_content=true` for each returned hit
-  (bounded by `limit`).
-
-## think.knowledge.recall
-
-Fast knowledge recall by anchor (bounded, recency-first).
-
-Notes:
-- Intended for “I’m touching component X → pull relevant knowledge” UX.
-- Anchor-first and lightweight: uses the knowledge key index + graph fetch (not a full tag scan).
-- Defaults to `include_drafts=false` (canon-first); for draft-heavy audits use `think.knowledge.query`.
-
-## think.knowledge.lint
-
-Lint knowledge key hygiene (precision-first) and propose consolidation actions.
-
-This command is intended to keep `think.knowledge.recall` cheap and high-signal across long-lived,
-research-heavy workspaces by helping agents:
-
-- detect high-confidence duplicate keys (same content under different keys),
-- detect same-key duplicate content across anchors (same `(key,content)` in multiple anchors),
-- spot potentially too-generic / overloaded keys via objective metrics (fanout / variants),
-- open the exact cards involved so consolidation is cheap.
-
-## think.note.promote
-
-Promote an existing `notes@seq` entry into a knowledge card (draft by default).
-
-Notes:
-- Input: `{ note_ref, anchor?, key?, title?, key_mode? }`
-- Uses the note content as card text; visibility defaults to `v:draft` unless overridden.
-
-### Inputs (selected)
-
-- `limit` (int): max number of knowledge key index rows to scan (budget-capped).
-- `anchor` (string | string[]): optional anchor(s) to restrict lint to a subset (same format as
-  `think.knowledge.recall`).
-- `include_drafts` (bool): include draft-lane knowledge (default `true`).
-- `max_chars` (int): output budget knob (injected/clamped by budget profile if omitted).
-
-### Output (selected)
-
-- `result.stats`:
-  - `keys_scanned`, `has_more` (from key index pagination)
-  - `anchors`, `keys`, `cards_resolved`
-  - `issues_total` (before truncation)
-- `result.issues[]`: findings objects:
-  - `severity`: `warning|info`
-  - `code`: stable issue code
-  - `message`: human summary
-  - `evidence`: structured proof (anchor ids, key slugs, card ids)
-
-### Issue codes (precision-first)
-
-The linter is intentionally conservative: it only emits `warning` when there is strong evidence.
-
-- `KNOWLEDGE_DUPLICATE_CONTENT_SAME_ANCHOR` (`warning`):
-  two or more distinct keys under the same anchor resolve to identical normalized content.
-- `KNOWLEDGE_DUPLICATE_CONTENT_SAME_KEY_ACROSS_ANCHORS` (`info`):
-  the same key is present across multiple anchors with identical content (often a candidate for
-  shared/canonical knowledge).
-- `KNOWLEDGE_DUPLICATE_CONTENT_ACROSS_ANCHORS_MULTIPLE_KEYS` (`info`):
-  identical normalized content appears across multiple anchors under multiple distinct keys (often
-  a sign of key drift / duplicated knowledge that can be consolidated).
-- `KNOWLEDGE_KEY_OVERLOADED_ACROSS_ANCHORS` (`info`):
-  the same key is present across multiple anchors with multiple distinct content variants (potentially
-  too-generic / bucketed key).
-- `KNOWLEDGE_KEY_OVERLOADED_OUTLIERS` (`info`):
-  a special-case of overloaded keys where one content variant dominates and other variants look like
-  outliers (the linter includes deterministic evidence to make consolidation cheap).
-
-### Actions (v1 UX)
-
-On success, `actions[]` may include deterministic “open helpers” such as:
-
-- `graph.query` for the exact `ids=[...]` involved in a duplicate set.
-- `graph.query` for the exact `ids=[...]` involved in a cross-anchor duplicate-content group.
-- `think.knowledge.query` with `args.key=<key>` to review a reused/overloaded key across anchors.
-- `graph.query` for the outlier card ids when a key has a dominant variant (`KNOWLEDGE_KEY_OVERLOADED_OUTLIERS`).
-
 ## think.reasoning.seed
 
 Seed a reasoning frame/hypothesis template (legacy `think_template`).
@@ -871,6 +824,18 @@ Seed a reasoning frame/hypothesis template (legacy `think_template`).
 ## think.reasoning.pipeline
 
 Run the reasoning pipeline (legacy `think_pipeline`).
+
+## think.trace.sequential.step
+
+Append one structured sequential trace checkpoint (golden strict-reasoning primitive).
+
+Notes:
+- Canonical command for strict gate trails before `tasks.macro.close.step(checkpoints="gate")`.
+- Recommended metadata for step-scoped trails:
+  - `meta.step_id`
+  - `meta.step_tag`
+  - `meta.checkpoint="gate"`
+- Content should stay compact and non-sensitive (checkpoint status, not full private CoT dump).
 
 ## think.idea.branch.create
 

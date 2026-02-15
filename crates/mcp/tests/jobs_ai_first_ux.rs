@@ -108,7 +108,7 @@ fn system_schema_list_compact_exposes_required_any_of_for_jobs_claim() {
             "name": "system",
             "arguments": {
                 "op": "schema.list",
-                "args": { "portal": "jobs", "mode": "compact", "q": "claim", "limit": 50 }
+                "args": { "portal": "jobs", "mode": "all", "q": "claim", "limit": 50 }
             }
         }
     }));
@@ -394,7 +394,7 @@ fn jobs_schema_list_includes_flagship_teamlead_commands() {
             "name": "system",
             "arguments": {
                 "op": "schema.list",
-                "args": { "portal": "jobs", "mode": "compact", "limit": 200 }
+                "args": { "portal": "jobs", "mode": "all", "limit": 200 }
             }
         }
     }));
@@ -955,6 +955,322 @@ fn jobs_complete_rejects_duplicate_change_hints_in_strict_scout_pack() {
 }
 
 #[test]
+fn jobs_complete_rejects_unbound_change_hint_paths_in_scout_pack() {
+    let root = repo_root();
+    let workspace = root.to_string_lossy().to_string();
+    let mut server = Server::start_initialized_with_args(
+        "jobs_complete_rejects_unbound_change_hint_paths_in_scout_pack",
+        &["--agent-id", "manager"],
+    );
+    let objective = "Собери контекст с явной трассируемостью path→CODE_REF.";
+    let (plan_id, slice_id) = setup_plan_and_slice(&mut server, &workspace, objective);
+
+    let dispatch = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": workspace,
+                "op": "call",
+                "cmd": "jobs.macro.dispatch.scout",
+                "args": {
+                    "task": plan_id.clone(),
+                    "anchor": "a:scout-path-binding",
+                    "slice_id": slice_id.clone(),
+                    "objective": objective,
+                    "quality_profile": "standard",
+                    "novelty_policy": "warn"
+                }
+            }
+        }
+    }));
+    let dispatch_text = extract_tool_text(&dispatch);
+    let scout_job = dispatch_text
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("job_id"))
+        .and_then(|v| v.as_str())
+        .expect("scout job id")
+        .to_string();
+
+    let claim = server.request(json!({
+        "jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"jobs","arguments":{"workspace":root.to_string_lossy(),"op":"call","cmd":"jobs.claim","args":{"job":scout_job,"runner_id":"runner-test"}}}
+    }));
+    let claim_text = extract_tool_text(&claim);
+    let scout_claim_rev = claim_text
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("revision"))
+        .and_then(|v| v.as_i64())
+        .expect("scout claim revision");
+
+    let readme = std::fs::read(root.join("README.md")).expect("read README");
+    let sha = sha256_hex(&readme);
+    let code_ref_a = format!("code:README.md#L1-L1@sha256:{sha}");
+    let code_ref_b = format!("code:README.md#L2-L2@sha256:{sha}");
+    let code_ref_c = format!("code:README.md#L3-L3@sha256:{sha}");
+    let summary_text = "Контекст должен быть кратким, трассируемым и пригодным для fail-closed builder/validator пайплайна. \
+Каждый change_hint должен быть привязан к реальному CODE_REF пути без выдуманных файлов. \
+Это защищает от ложных правок и снижает риск дрейфа контекста.".repeat(2);
+    let scout_pack = json!({
+        "objective":"Контекст для path-binding gate",
+        "scope":{"in":["README.md"],"out":["crates/storage/*"]},
+        "anchors":[
+            {"id":"a:readme", "rationale":"Главный файл"},
+            {"id":"a:intro", "rationale":"Секция быстрых команд"},
+            {"id":"a:ux", "rationale":"UX-последствия"}
+        ],
+        "code_refs":[code_ref_a,code_ref_b,code_ref_c],
+        "change_hints":[
+            {"path":"docs/plans/ghost/Slice-9.md","intent":"invented scope","risk":"high"},
+            {"path":"docs/plans/ghost/PLAN.md","intent":"invented root","risk":"high"}
+        ],
+        "test_hints":[
+            "cargo test -p bm_mcp --test jobs_ai_first_ux",
+            "cargo test -p bm_mcp --test jobs_ai_first_ux -- --nocapture"
+        ],
+        "risk_map":[
+            {"risk":"fake path drift","falsifier":"reject unbound change_hints paths"},
+            {"risk":"review noise","falsifier":"only CODE_REF-bound hints survive"}
+        ],
+        "open_questions":[],
+        "summary_for_builder": summary_text
+    });
+    let complete = server.request(json!({
+        "jsonrpc":"2.0","id":3,"method":"tools/call",
+        "params":{"name":"jobs","arguments":{"workspace":workspace,"op":"call","cmd":"jobs.complete","args":{
+            "job":scout_job,"runner_id":"runner-test","claim_revision":scout_claim_rev,"status":"DONE",
+            "summary":serde_json::to_string(&scout_pack).expect("scout summary"),
+            "refs":[format!("artifact://jobs/{}/scout_context_pack", scout_job),"CMD: scout path binding"]
+        }}}
+    }));
+    let complete_text = extract_tool_text(&complete);
+    assert_eq!(
+        complete_text.get("success").and_then(|v| v.as_bool()),
+        Some(false),
+        "jobs.complete must fail-closed on unbound change_hints path: {complete_text}"
+    );
+    let msg = complete_text
+        .get("error")
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("change_hints[].path") && msg.contains("bound"),
+        "error should explain CODE_REF/path binding violation; got: {complete_text}"
+    );
+}
+
+#[test]
+fn jobs_complete_accepts_directory_bound_change_hint_paths_in_scout_pack() {
+    let root = repo_root();
+    let workspace = root.to_string_lossy().to_string();
+    let mut server = Server::start_initialized_with_args(
+        "jobs_complete_accepts_directory_bound_change_hint_paths_in_scout_pack",
+        &["--agent-id", "manager"],
+    );
+    let objective = "Собери контекст с directory-level binding для change_hints.";
+    let (plan_id, slice_id) = setup_plan_and_slice(&mut server, &workspace, objective);
+
+    let dispatch = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": workspace,
+                "op": "call",
+                "cmd": "jobs.macro.dispatch.scout",
+                "args": {
+                    "task": plan_id.clone(),
+                    "anchor": "a:scout-path-binding-dir",
+                    "slice_id": slice_id.clone(),
+                    "objective": objective,
+                    "quality_profile": "standard",
+                    "novelty_policy": "warn"
+                }
+            }
+        }
+    }));
+    let dispatch_text = extract_tool_text(&dispatch);
+    let scout_job = dispatch_text
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("job_id"))
+        .and_then(|v| v.as_str())
+        .expect("scout job id")
+        .to_string();
+
+    let claim = server.request(json!({
+        "jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"jobs","arguments":{"workspace":root.to_string_lossy(),"op":"call","cmd":"jobs.claim","args":{"job":scout_job,"runner_id":"runner-test"}}}
+    }));
+    let claim_text = extract_tool_text(&claim);
+    let scout_claim_rev = claim_text
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("revision"))
+        .and_then(|v| v.as_i64())
+        .expect("scout claim revision");
+
+    let commands_doc =
+        std::fs::read(root.join("docs/contracts/V1_COMMANDS.md")).expect("read V1_COMMANDS.md");
+    let sha = sha256_hex(&commands_doc);
+    let code_ref_a = format!("code:docs/contracts/V1_COMMANDS.md#L1-L1@sha256:{sha}");
+    let code_ref_b = format!("code:docs/contracts/V1_COMMANDS.md#L2-L2@sha256:{sha}");
+    let code_ref_c = format!("code:docs/contracts/V1_COMMANDS.md#L3-L3@sha256:{sha}");
+    let summary_text = "Directory-level change hints are allowed only when they are still bound by concrete CODE_REF paths and remain within slice scope. \
+This preserves fail-closed guarantees while avoiding brittle false negatives when scouts intentionally scope by folder. \
+Builder still receives deterministic references and bounded context.".repeat(2);
+    let scout_pack = json!({
+        "objective":"Контекст для directory path-binding gate",
+        "scope":{"in":["docs/contracts/V1_COMMANDS.md"],"out":["crates/storage/*"]},
+        "anchors":[
+            {"id":"a:commands-contract", "rationale":"Командный контракт"},
+            {"id":"a:jobs-scout", "rationale":"Scout pipeline contract"},
+            {"id":"a:jobs-gate", "rationale":"Gate/apply contract"}
+        ],
+        "code_refs":[code_ref_a,code_ref_b,code_ref_c],
+        "change_hints":[
+            {"path":"docs/contracts/","intent":"sync scout path-binding note","risk":"medium"},
+            {"path":"docs/contracts/V1_COMMANDS.md","intent":"document exact fail-closed behavior","risk":"low"}
+        ],
+        "test_hints":[
+            "cargo test -p bm_mcp --test jobs_ai_first_ux jobs_complete_accepts_directory_bound_change_hint_paths_in_scout_pack",
+            "cargo test -p bm_mcp --test jobs_ai_first_ux jobs_complete_rejects_unbound_change_hint_paths_in_scout_pack"
+        ],
+        "risk_map":[
+            {"risk":"directory drift","falsifier":"directory path must be covered by concrete CODE_REF descendants"},
+            {"risk":"false negatives","falsifier":"accept folder-level hints only when bound"}
+        ],
+        "open_questions":[],
+        "summary_for_builder": summary_text
+    });
+    let complete = server.request(json!({
+        "jsonrpc":"2.0","id":3,"method":"tools/call",
+        "params":{"name":"jobs","arguments":{"workspace":workspace,"op":"call","cmd":"jobs.complete","args":{
+            "job":scout_job,"runner_id":"runner-test","claim_revision":scout_claim_rev,"status":"DONE",
+            "summary":serde_json::to_string(&scout_pack).expect("scout summary"),
+            "refs":[format!("artifact://jobs/{}/scout_context_pack", scout_job),"CMD: scout path binding directory"]
+        }}}
+    }));
+    let complete_text = extract_tool_text(&complete);
+    assert_eq!(
+        complete_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "jobs.complete must accept directory-bound change_hints path: {complete_text}"
+    );
+}
+
+#[test]
+fn jobs_complete_rejects_empty_checks_to_run_in_builder_diff_batch() {
+    let workspace = "ws_builder_empty_checks";
+    let mut server = Server::start_initialized_with_args(
+        "jobs_complete_rejects_empty_checks_to_run_in_builder_diff_batch",
+        &["--workspace", workspace],
+    );
+
+    let created = server.request(json!({
+        "jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"jobs","arguments":{"workspace":workspace,"op":"create","args":{
+            "title":"builder contract check",
+            "prompt":"return builder diff batch",
+            "expected_artifacts":["builder_diff_batch"]
+        }}}
+    }));
+    let created_text = extract_tool_text(&created);
+    assert_eq!(
+        created_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "jobs.create should succeed; got: {created_text}"
+    );
+    let job_id = created_text
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("job_id"))
+        .and_then(|v| v.as_str())
+        .expect("job_id")
+        .to_string();
+
+    let claim = server.request(json!({
+        "jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"jobs","arguments":{"workspace":workspace,"op":"call","cmd":"jobs.claim","args":{
+            "job":job_id.clone(),
+            "runner_id":"runner-test",
+            "lease_ttl_ms":60000
+        }}}
+    }));
+    let claim_text = extract_tool_text(&claim);
+    let claim_rev = claim_text
+        .get("result")
+        .and_then(|v| v.get("job"))
+        .and_then(|v| v.get("revision"))
+        .and_then(|v| v.as_i64())
+        .expect("claim revision");
+
+    let builder_batch = json!({
+        "slice_id":"SLC-EMPTY-CHECKS",
+        "changes":[
+            {"path":"README.md","intent":"tiny wording sync","diff_ref":"artifact://jobs/JOB-000000/diff/README","estimated_risk":"low"}
+        ],
+        "checks_to_run":[],
+        "rollback_plan":"git checkout -- README.md",
+        "proof_refs":["CMD: cargo test -q"],
+        "execution_evidence":{
+            "revision":claim_rev + 1,
+            "diff_scope":["README.md"],
+            "command_runs":[
+                {
+                    "cmd":"cargo test -q",
+                    "exit_code":0,
+                    "stdout_ref":"FILE: artifact://ci/stdout/empty-checks",
+                    "stderr_ref":"FILE: artifact://ci/stderr/empty-checks"
+                }
+            ],
+            "rollback_proof":{
+                "strategy":"git_revert_single_commit",
+                "target_revision":claim_rev,
+                "verification_cmd_ref":"CMD: git status --porcelain"
+            },
+            "semantic_guards":{
+                "must_should_may_delta":"none",
+                "contract_term_consistency":"verified"
+            }
+        }
+    });
+    let complete = server.request(json!({
+        "jsonrpc":"2.0","id":3,"method":"tools/call",
+        "params":{"name":"jobs","arguments":{"workspace":workspace,"op":"call","cmd":"jobs.complete","args":{
+            "job":job_id.clone(),
+            "runner_id":"runner-test",
+            "claim_revision":claim_rev,
+            "status":"DONE",
+            "summary":serde_json::to_string(&builder_batch).expect("builder summary"),
+            "refs":[format!("artifact://jobs/{}/builder_diff_batch",job_id),"CMD: cargo test -q"]
+        }}}
+    }));
+    let complete_text = extract_tool_text(&complete);
+    assert_eq!(
+        complete_text.get("success").and_then(|v| v.as_bool()),
+        Some(false),
+        "jobs.complete must fail when builder_diff_batch.checks_to_run is empty; got: {complete_text}"
+    );
+    let msg = complete_text
+        .get("error")
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("checks_to_run") && msg.contains("non-empty"),
+        "error should explain empty checks_to_run contract failure; got: {complete_text}"
+    );
+}
+
+#[test]
 fn jobs_pipeline_gate_and_apply_validate_contracts_and_gate() {
     let workspace = "ws_pipeline_gate_apply";
     let mut server = Server::start_initialized_with_args(
@@ -1415,7 +1731,7 @@ fn jobs_pipeline_apply_blocks_on_failed_validator_report() {
         "builder_ready_checklist": { "passed": true, "missing": [] },
         "validator_ready_checklist": { "passed": true, "missing": [] }
     });
-    let _ = server.request(json!({
+    let scout_complete = server.request(json!({
         "jsonrpc":"2.0","id":3,"method":"tools/call",
         "params":{"name":"jobs","arguments":{"workspace":workspace,"op":"call","cmd":"jobs.complete","args":{
             "job":scout_job,"runner_id":"runner-test","claim_revision":scout_rev,"status":"DONE",
@@ -1423,6 +1739,14 @@ fn jobs_pipeline_apply_blocks_on_failed_validator_report() {
             "refs":[format!("artifact://jobs/{}/scout_context_pack",scout_job),"CMD: scout"]
         }}}
     }));
+    assert_eq!(
+        extract_tool_text(&scout_complete)
+            .get("success")
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "scout complete failed: {}",
+        extract_tool_text(&scout_complete)
+    );
     let scout_open_after_complete = server.request(json!({
         "jsonrpc":"2.0","id":32,"method":"tools/call",
         "params":{"name":"jobs","arguments":{"workspace":workspace,"op":"open","args":{"job":scout_job,"include_meta":true,"include_events":false}}}
@@ -1919,7 +2243,7 @@ fn jobs_pipeline_gate_context_request_loop_is_bounded() {
             "suggested_scout_focus":["README.md rollout section"],
             "suggested_tests":["cargo test -q"]
         },
-        "checks_to_run":[],
+        "checks_to_run":["cargo test -q -p bm_mcp --test jobs_ai_first_ux jobs_pipeline_gate_context_request_loop_is_bounded"],
         "rollback_plan":"no-op: context request only",
         "proof_refs":["CMD: echo context-request"],
         "execution_evidence": {
@@ -2018,6 +2342,33 @@ fn jobs_pipeline_gate_context_request_loop_is_bounded() {
             .and_then(|v| v.as_str()),
         Some("rework"),
         "gate should force rework on context request within retry budget; got: {gate_text}"
+    );
+    assert_eq!(
+        gate_text
+            .get("result")
+            .and_then(|v| v.get("context_loop"))
+            .and_then(|v| v.get("builder_requested_context"))
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "context-loop metadata should mark builder context request; got: {gate_text}"
+    );
+    assert_eq!(
+        gate_text
+            .get("result")
+            .and_then(|v| v.get("context_loop"))
+            .and_then(|v| v.get("context_retry_count"))
+            .and_then(|v| v.as_u64()),
+        Some(0),
+        "gate should preserve initial retry count before replay action; got: {gate_text}"
+    );
+    assert_eq!(
+        gate_text
+            .get("result")
+            .and_then(|v| v.get("context_loop"))
+            .and_then(|v| v.get("context_retry_limit"))
+            .and_then(|v| v.as_u64()),
+        Some(2),
+        "gate should expose retry limit in context_loop metadata; got: {gate_text}"
     );
     assert_eq!(
         gate_text
@@ -2126,12 +2477,62 @@ fn jobs_pipeline_gate_context_request_loop_is_bounded() {
     }));
     let gate_exhausted_text = extract_tool_text(&gate_exhausted);
     assert_eq!(
+        gate_exhausted_text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "pipeline.gate exhausted path should still return success with reject decision; got: {gate_exhausted_text}"
+    );
+    assert_eq!(
         gate_exhausted_text
             .get("result")
             .and_then(|v| v.get("decision"))
             .and_then(|v| v.as_str()),
         Some("reject"),
         "gate must reject when context retry budget exhausted; got: {gate_exhausted_text}"
+    );
+    assert_eq!(
+        gate_exhausted_text
+            .get("result")
+            .and_then(|v| v.get("context_loop"))
+            .and_then(|v| v.get("builder_requested_context"))
+            .and_then(|v| v.as_bool()),
+        Some(true),
+        "context-loop metadata should persist builder request on exhausted path; got: {gate_exhausted_text}"
+    );
+    assert_eq!(
+        gate_exhausted_text
+            .get("result")
+            .and_then(|v| v.get("actions"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.get("cmd"))
+            .and_then(|v| v.as_str()),
+        Some("jobs.macro.dispatch.builder"),
+        "exhausted retry path should avoid auto-scout and route to builder rework; got: {gate_exhausted_text}"
+    );
+    let exhausted_reason = gate_exhausted_text
+        .get("result")
+        .and_then(|v| v.get("reasons"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.iter().find_map(|entry| entry.as_str()))
+        .unwrap_or_default();
+    assert!(
+        exhausted_reason.contains("validator recommendation="),
+        "gate should always include validator recommendation in reasons; got: {gate_exhausted_text}"
+    );
+    let has_retry_exhausted_reason = gate_exhausted_text
+        .get("result")
+        .and_then(|v| v.get("reasons"))
+        .and_then(|v| v.as_array())
+        .is_some_and(|arr| {
+            arr.iter().any(|entry| {
+                entry
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("retry budget exhausted"))
+            })
+        });
+    assert!(
+        has_retry_exhausted_reason,
+        "gate reasons should explicitly mention retry budget exhaustion; got: {gate_exhausted_text}"
     );
 }
 

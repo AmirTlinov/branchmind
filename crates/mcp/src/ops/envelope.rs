@@ -163,15 +163,18 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
         }
     };
     let Some(spec) = registry.find_by_cmd(&env.cmd) else {
+        let recovery = crate::ops::recovery::removed_knowledge_recovery(&env.cmd)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                "Use system op=cmd.list to discover cmds, then system op=schema.get for exact args."
+                    .to_string()
+            });
         return OpResponse::error(
             "error".to_string(),
             OpError {
                 code: "UNKNOWN_CMD".to_string(),
                 message: format!("Unknown cmd: {}", env.cmd),
-                recovery: Some(
-                    "Use system op=cmd.list to discover cmds, then system op=schema.get for exact args."
-                        .to_string(),
-                ),
+                recovery: Some(recovery),
             },
         )
         .into_value();
@@ -697,13 +700,16 @@ fn parse_envelope(
             if legacy_candidate != cmd && registry.find_by_cmd(&legacy_candidate).is_some() {
                 legacy_candidate
             } else {
+                let recovery = crate::ops::recovery::removed_knowledge_recovery(&cmd)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| {
+                        "Use system op=cmd.list (q/prefix) to discover cmds, then system op=schema.get for exact args. If cmd looks like an op alias, use op=<alias> and omit cmd."
+                            .to_string()
+                    });
                 return Err(OpError {
                     code: "UNKNOWN_CMD".to_string(),
                     message: format!("Unknown cmd: {cmd}"),
-                    recovery: Some(
-                        "Use system op=cmd.list (q/prefix) to discover cmds, then system op=schema.get for exact args. If cmd looks like an op alias, use op=<alias> and omit cmd."
-                            .to_string(),
-                    ),
+                    recovery: Some(recovery),
                 });
             }
         }
