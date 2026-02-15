@@ -27,7 +27,7 @@ mod types;
 mod vcs;
 
 use bm_core::ids::WorkspaceId;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -37,15 +37,6 @@ pub use error::StoreError;
 pub use types::*;
 
 use support::*;
-
-fn is_missing_column(err: &rusqlite::Error, column: &str) -> bool {
-    match err {
-        rusqlite::Error::SqliteFailure(_, Some(msg)) => {
-            msg.contains("no such column") && msg.contains(column)
-        }
-        _ => false,
-    }
-}
 
 fn is_missing_table(err: &rusqlite::Error, table: &str) -> bool {
     match err {
@@ -79,20 +70,6 @@ impl SqliteStore {
         let store = Self { storage_dir, conn };
         store.migrate()?;
         Ok(store)
-    }
-
-    /// Open an existing store in read-only mode.
-    ///
-    /// Notes:
-    /// - This does not create directories or run migrations.
-    /// - Intended for passive read-only consumers (e.g. offline inspection tooling reading
-    ///   other projects via the registry).
-    pub fn open_read_only(storage_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let storage_dir = storage_dir.as_ref().to_path_buf();
-        let db_path = storage_dir.join("branchmind_rust.db");
-        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
-        Ok(Self { storage_dir, conn })
     }
 
     pub fn storage_dir(&self) -> &Path {
@@ -145,23 +122,12 @@ impl SqliteStore {
     ) -> Result<Vec<WorkspaceRow>, StoreError> {
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
         let offset_i64 = i64::try_from(offset).unwrap_or(0);
-        let mut stmt = match self.conn.prepare(
+        let mut stmt = self.conn.prepare(
             "SELECT workspace, created_at_ms, project_guard \
              FROM workspaces \
              ORDER BY created_at_ms DESC, workspace ASC \
              LIMIT ?1 OFFSET ?2",
-        ) {
-            Ok(stmt) => stmt,
-            Err(err) if is_missing_column(&err, "project_guard") => {
-                // Backwards compatibility:
-                // - older stores (pre-migration) don't have `workspaces.project_guard`.
-                // - read-only consumers do not run migrations.
-                //
-                // We fall back to the legacy projection and treat `project_guard` as None.
-                return self.list_workspaces_legacy(limit_i64, offset_i64);
-            }
-            Err(err) => return Err(err.into()),
-        };
+        )?;
         let mut rows = stmt.query(params![limit_i64, offset_i64])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
@@ -300,29 +266,6 @@ impl SqliteStore {
         }
     }
 
-    fn list_workspaces_legacy(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<WorkspaceRow>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT workspace, created_at_ms \
-             FROM workspaces \
-             ORDER BY created_at_ms DESC, workspace ASC \
-             LIMIT ?1 OFFSET ?2",
-        )?;
-        let mut rows = stmt.query(params![limit, offset])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(WorkspaceRow {
-                workspace: row.get(0)?,
-                created_at_ms: row.get(1)?,
-                project_guard: None,
-            });
-        }
-        Ok(out)
-    }
-
     pub fn workspace_project_guard_get(
         &self,
         workspace: &WorkspaceId,
@@ -334,7 +277,6 @@ impl SqliteStore {
         ) {
             Ok(v) => Ok(Some(v).flatten()),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(err) if is_missing_column(&err, "project_guard") => Ok(None),
             Err(err) => Err(err.into()),
         }
     }
