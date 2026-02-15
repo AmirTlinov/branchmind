@@ -7,6 +7,11 @@
 /dist
 .agents/
 target/
+tool-output/
+
+# Python
+__pycache__/
+*.pyc
 
 # Tauri viewer app (Vite + React)
 /apps/viewer-tauri/node_modules/

@@ -6,6 +6,14 @@ use super::step_context::apply_step_context_to_card;
 use crate::*;
 use serde_json::{Value, json};
 
+fn title_has_counter_hypothesis_prefix(title: Option<&str>) -> bool {
+    title
+        .unwrap_or("")
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("counter-hypothesis:")
+}
+
 fn validate_edge_node_ids(field: &str, values: &[String]) -> Result<(), Value> {
     for (idx, raw) in values.iter().enumerate() {
         match bm_core::graph::GraphNodeId::try_new(raw.clone()) {
@@ -162,6 +170,25 @@ impl McpServer {
         }
         if let Err(resp) = apply_lane_context_to_card(args_obj, &mut parsed) {
             return resp;
+        }
+
+        // DX: strict reasoning gate (BM10) ignores cards tagged `counter` to avoid infinite
+        // regress ("counter for the counter-hypothesis"). Agents often write a counter-position
+        // by hand using the conventional title prefix but forget to set tags.
+        //
+        // Heuristic (deterministic, low-risk):
+        // - If the title starts with "Counter-hypothesis:" (case-insensitive), or
+        // - if the card blocks something and carries bm7 tag (common strict-gate hint),
+        // then auto-add the `counter` tag when missing.
+        let counter_intent = title_has_counter_hypothesis_prefix(parsed.title.as_deref())
+            || (!blocks.is_empty() && tags_has(&parsed.tags, "bm7"));
+        if counter_intent && !tags_has(&parsed.tags, "counter") {
+            parsed.tags.push("counter".to_string());
+            warnings.push(warning(
+                "COUNTER_TAG_AUTO_ADDED",
+                "counter tag auto-added",
+                "Detected a counter-position (Counter-hypothesis prefix or blocks+bm7). Tagging as `counter` prevents BM10 from requiring a counter for the counter-hypothesis.",
+            ));
         }
 
         let (branch, trace_doc, graph_doc) =

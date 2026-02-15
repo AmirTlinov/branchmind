@@ -4,15 +4,45 @@ mod bin_detect;
 mod defaults;
 mod executors;
 mod mcp_client;
+#[cfg(test)]
+mod patch_apply;
+#[cfg(test)]
+mod patch_types;
+mod pipeline_contract;
+mod prompt;
+mod runtime_helpers;
 
 use mcp_client::McpClient;
+use pipeline_contract::{has_done_proof_ref, validate_pipeline_summary_contract};
+use runtime_helpers::*;
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+const DEFAULT_JOBS_MODEL: &str = "gpt-5.3-codex";
+const SCOUT_SLICE_SLA_S: u64 = 300;
+const BUILDER_SLICE_SLA_S: u64 = 1200;
+const VALIDATOR_SLICE_SLA_S: u64 = 600;
+const SCOUT_HEARTBEAT_SLA_MS: u64 = 15_000;
+const BUILDER_HEARTBEAT_SLA_MS: u64 = 45_000;
+const VALIDATOR_HEARTBEAT_SLA_MS: u64 = 30_000;
+const MIN_SLICE_S: u64 = 30;
+const MIN_HEARTBEAT_MS: u64 = 10_000;
+const MAX_HEARTBEAT_MS: u64 = 300_000;
+
+#[derive(Debug, Clone, Copy)]
+struct SliceTiming {
+    slice_s: u64,
+    slice_grace_s: u64,
+    heartbeat_ms: u64,
+}
+
+#[cfg(test)]
+use pipeline_contract::has_non_job_ref;
 
 #[derive(Debug)]
 struct RunnerConfig {
@@ -169,9 +199,119 @@ fn job_meta_executor_model(job_meta: Option<&Value>) -> Option<&str> {
         .and_then(value_as_str)
 }
 
+fn job_meta_pipeline_role(job_meta: Option<&Value>) -> Option<&str> {
+    let role = job_meta
+        .and_then(|v| v.as_object())
+        .and_then(|m| m.get("pipeline_role").or_else(|| m.get("role")))
+        .and_then(value_as_str)?;
+    let role_norm = role.trim();
+    if role_norm.eq_ignore_ascii_case("scout")
+        || role_norm.eq_ignore_ascii_case("builder")
+        || role_norm.eq_ignore_ascii_case("validator")
+        || role_norm.eq_ignore_ascii_case("writer")
+    {
+        Some(role_norm)
+    } else {
+        None
+    }
+}
+
+fn role_requires_exec_mcp_isolation(role: Option<&str>) -> bool {
+    role.is_some_and(|r| {
+        r.eq_ignore_ascii_case("scout")
+            || r.eq_ignore_ascii_case("builder")
+            || r.eq_ignore_ascii_case("validator")
+            || r.eq_ignore_ascii_case("writer")
+    })
+}
+
+fn job_meta_input_mode(job_meta: Option<&Value>) -> Option<&str> {
+    let mode = job_meta
+        .and_then(|v| v.as_object())
+        .and_then(|m| m.get("input_mode"))
+        .and_then(value_as_str)?;
+    if mode.eq_ignore_ascii_case("strict") {
+        Some("strict")
+    } else if mode.eq_ignore_ascii_case("flex") {
+        Some("flex")
+    } else {
+        None
+    }
+}
+
+fn job_meta_u64(job_meta: Option<&Value>, key: &str) -> Option<u64> {
+    let value = job_meta
+        .and_then(|v| v.as_object())
+        .and_then(|m| m.get(key))?;
+    if let Some(v) = value.as_u64() {
+        return Some(v);
+    }
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
+fn role_slice_cap_s(role: Option<&str>) -> Option<u64> {
+    let role = role?;
+    if role.eq_ignore_ascii_case("scout") {
+        Some(SCOUT_SLICE_SLA_S)
+    } else if role.eq_ignore_ascii_case("builder") || role.eq_ignore_ascii_case("writer") {
+        Some(BUILDER_SLICE_SLA_S)
+    } else if role.eq_ignore_ascii_case("validator") {
+        Some(VALIDATOR_SLICE_SLA_S)
+    } else {
+        None
+    }
+}
+
+fn role_heartbeat_cap_ms(role: Option<&str>) -> Option<u64> {
+    let role = role?;
+    if role.eq_ignore_ascii_case("scout") {
+        Some(SCOUT_HEARTBEAT_SLA_MS)
+    } else if role.eq_ignore_ascii_case("builder") || role.eq_ignore_ascii_case("writer") {
+        Some(BUILDER_HEARTBEAT_SLA_MS)
+    } else if role.eq_ignore_ascii_case("validator") {
+        Some(VALIDATOR_HEARTBEAT_SLA_MS)
+    } else {
+        None
+    }
+}
+
+fn resolve_slice_timing(
+    cfg: &RunnerConfig,
+    job_meta: Option<&Value>,
+    pipeline_role: Option<&str>,
+) -> SliceTiming {
+    let base_slice = role_slice_cap_s(pipeline_role)
+        .map(|cap| cfg.slice_s.min(cap))
+        .unwrap_or(cfg.slice_s);
+    let raw_slice = job_meta_u64(job_meta, "slice_s").unwrap_or(base_slice);
+    let slice_s = raw_slice.max(MIN_SLICE_S);
+
+    let base_grace = cfg.slice_grace_s.min(slice_s);
+    let raw_grace = job_meta_u64(job_meta, "slice_grace_s").unwrap_or(base_grace);
+    let slice_grace_s = raw_grace.min(slice_s);
+
+    let role_heartbeat = role_heartbeat_cap_ms(pipeline_role).unwrap_or(cfg.heartbeat_ms);
+    let base_heartbeat = cfg
+        .heartbeat_ms
+        .min(role_heartbeat)
+        .min(slice_s.saturating_mul(1000).max(MIN_HEARTBEAT_MS));
+    let raw_heartbeat = job_meta_u64(job_meta, "heartbeat_ms").unwrap_or(base_heartbeat);
+    let heartbeat_ms = raw_heartbeat.clamp(MIN_HEARTBEAT_MS, MAX_HEARTBEAT_MS);
+
+    SliceTiming {
+        slice_s,
+        slice_grace_s,
+        heartbeat_ms,
+    }
+}
+
 fn normalize_executor_profile(raw: Option<&str>) -> &'static str {
     let Some(v) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-        return "fast";
+        return "xhigh";
     };
     if v.eq_ignore_ascii_case("fast") {
         "fast"
@@ -180,7 +320,7 @@ fn normalize_executor_profile(raw: Option<&str>) -> &'static str {
     } else if v.eq_ignore_ascii_case("audit") {
         "audit"
     } else {
-        "fast"
+        "xhigh"
     }
 }
 
@@ -234,11 +374,15 @@ fn resolve_job_executor_plan(
         }
     };
 
-    let model = if kind == executors::ExecutorKind::ClaudeCode {
-        job_meta_executor_model(job_meta).map(|v| v.to_string())
-    } else {
-        None
-    };
+    let model = job_meta_executor_model(job_meta)
+        .map(|v| v.to_string())
+        .or_else(|| {
+            if matches!(kind, executors::ExecutorKind::Codex) {
+                Some(DEFAULT_JOBS_MODEL.to_string())
+            } else {
+                None
+            }
+        });
 
     Ok((kind, profile, model))
 }
@@ -268,7 +412,10 @@ fn send_runner_heartbeat(
         execs.push("claude_code");
     }
     args.insert("executors".to_string(), json!(execs));
-    args.insert("profiles".to_string(), json!(["fast", "deep", "audit"]));
+    args.insert(
+        "profiles".to_string(),
+        json!(["fast", "deep", "audit", "xhigh"]),
+    );
     args.insert(
         "supports_artifacts".to_string(),
         json!(["report", "diff", "patch", "bench", "docs_update"]),
@@ -294,167 +441,81 @@ fn send_runner_heartbeat(
     );
 }
 
-fn has_non_job_proof_ref(job_id: &str, refs: &[String]) -> bool {
-    refs.iter().any(|raw| {
-        let r = raw.trim();
-        if r.is_empty() {
-            return false;
-        }
-        if r == job_id {
-            return false;
-        }
-        // `JOB-*` (including `JOB-*@seq`) is navigation, not proof.
-        if r.starts_with("JOB-") {
-            return false;
-        }
-        // Anchors are meaning pointers; they do not prove completion.
-        if r.starts_with("a:") {
-            return false;
-        }
-        true
-    })
+struct CompleteJobRequest<'a> {
+    job_id: &'a str,
+    claim_revision: i64,
+    status: &'a str,
+    summary: &'a str,
+    refs: &'a [String],
+    meta: Value,
 }
 
-fn push_unique_ref(out: &mut Vec<String>, value: String, seen: &mut HashSet<String>) {
-    let v = value.trim();
-    if v.is_empty() {
-        return;
-    }
-    if seen.insert(v.to_string()) {
-        out.push(v.to_string());
-    }
-}
-
-fn canonicalize_ref(raw: &str) -> Option<String> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return None;
-    }
-
-    // Keep these prefixes copy/paste friendly and stable.
-    let lower = s.to_ascii_lowercase();
-    if lower.starts_with("cmd:") {
-        return Some(format!("CMD:{}", &s[4..]));
-    }
-    if lower.starts_with("link:") {
-        return Some(format!("LINK:{}", &s[5..]));
-    }
-    if lower.starts_with("card-") {
-        return Some(format!("CARD-{}", &s[5..]));
-    }
-    if lower.starts_with("task-") {
-        return Some(format!("TASK-{}", &s[5..]));
-    }
-    if lower.starts_with("notes@") {
-        return Some(format!("notes@{}", &s[6..]));
-    }
-
-    Some(s.to_string())
-}
-
-fn salvage_proof_refs_from_text(text: &str) -> Vec<String> {
-    // Goal: reduce false proof-gate CONTINUE when the delegated agent put proof-like refs
-    // into summary/messages instead of top-level refs[].
-    //
-    // Strategy:
-    // 1) Prefer full-line extraction for `CMD:` / `LINK:` (they contain spaces).
-    // 2) Token extraction for CARD-/TASK-/notes@ references embedded in prose.
-    let mut out = Vec::<String>::new();
-    let mut seen = HashSet::<String>::new();
-
-    for line in text.lines() {
-        let l = line.trim();
-        if l.is_empty() {
-            continue;
-        }
-        let lower = l.to_ascii_lowercase();
-        if let Some(norm) = lower
-            .find("cmd:")
-            .and_then(|idx| canonicalize_ref(&l[idx..]))
-        {
-            push_unique_ref(&mut out, norm, &mut seen);
-        }
-        if let Some(norm) = lower
-            .find("link:")
-            .and_then(|idx| canonicalize_ref(&l[idx..]))
-        {
-            push_unique_ref(&mut out, norm, &mut seen);
-        }
-
-        // Some agents write proof as markdown bullets without CMD:/LINK: prefixes.
-        // We salvage only when the bullet strongly looks like a shell command
-        // (avoid turning prose into fake proof).
-        let mut bullet = l;
-        if let Some(rest) = bullet.strip_prefix("- ") {
-            bullet = rest.trim();
-        } else if let Some(rest) = bullet.strip_prefix("* ") {
-            bullet = rest.trim();
-        } else if let Some(rest) = bullet.strip_prefix("• ") {
-            bullet = rest.trim();
-        }
-        if let Some(rest) = bullet.strip_prefix("$ ") {
-            bullet = rest.trim();
-        } else if let Some(rest) = bullet.strip_prefix("> ") {
-            bullet = rest.trim();
-        }
-        if !bullet.is_empty() {
-            let b = bullet.to_ascii_lowercase();
-            let looks_like_cmd = [
-                "cargo ",
-                "cargo",
-                "pytest",
-                "go test",
-                "npm ",
-                "pnpm ",
-                "yarn ",
-                "bun ",
-                "make ",
-                "just ",
-                "git ",
-                "rg ",
-                "python ",
-                "python3 ",
-                "node ",
-                "deno ",
-                "docker ",
-                "kubectl ",
-                "helm ",
-                "terraform ",
-            ]
-            .into_iter()
-            .any(|p| b == p || b.starts_with(p));
-            if looks_like_cmd {
-                push_unique_ref(&mut out, format!("CMD: {bullet}"), &mut seen);
+fn complete_job_with_retry(
+    mcp: &mut McpClient,
+    cfg: &RunnerConfig,
+    req: CompleteJobRequest<'_>,
+) -> Result<(), String> {
+    const COMPLETE_ATTEMPTS: usize = 3;
+    let mut last_err: Option<String> = None;
+    for attempt in 0..COMPLETE_ATTEMPTS {
+        match mcp.call_tool(
+            "jobs",
+            json!({
+                "workspace": cfg.workspace,
+                "op": "call",
+                "cmd": "jobs.complete",
+                "args": {
+                    "job": req.job_id,
+                    "runner_id": cfg.runner_id,
+                    "claim_revision": req.claim_revision,
+                    "status": req.status,
+                    "summary": req.summary,
+                    "refs": req.refs,
+                    "meta": req.meta.clone()
+                }
+            }),
+        ) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                last_err = Some(err);
+                if attempt + 1 < COMPLETE_ATTEMPTS {
+                    let backoff_ms = 150 * (attempt as u64 + 1);
+                    sleep(Duration::from_millis(backoff_ms));
+                }
             }
         }
     }
 
-    // Tokenize on common separators; keep it cheap and dependency-free.
-    for raw in text.split(|c: char| {
-        c.is_whitespace()
-            || matches!(
-                c,
-                ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '"' | '\''
-            )
-    }) {
-        let token =
-            raw.trim_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '`'));
-        if token.is_empty() {
-            continue;
-        }
-        let lower = token.to_ascii_lowercase();
-        if lower.starts_with("http://") || lower.starts_with("https://") {
-            push_unique_ref(&mut out, format!("LINK: {token}"), &mut seen);
-            continue;
-        }
-        if (lower.starts_with("card-") || lower.starts_with("task-") || lower.starts_with("notes@"))
-            && let Some(norm) = canonicalize_ref(token)
-        {
-            push_unique_ref(&mut out, norm, &mut seen);
-        }
-    }
-
-    out
+    let err = last_err.unwrap_or_else(|| "jobs.complete failed".to_string());
+    let _ = mcp.call_tool(
+        "jobs",
+        json!({
+            "workspace": cfg.workspace,
+            "op": "call",
+            "cmd": "jobs.report",
+            "args": {
+                "job": req.job_id,
+                "runner_id": cfg.runner_id,
+                "claim_revision": req.claim_revision,
+                "lease_ttl_ms": job_claim_lease_ttl_ms(cfg),
+                "kind": "error",
+                "message": format!(
+                    "runner: jobs.complete failed after {COMPLETE_ATTEMPTS} attempts (status={}): {err}",
+                    req.status
+                ),
+                "percent": 0,
+                "refs": [req.job_id],
+                "meta": {
+                    "runner": cfg.runner_id,
+                    "step": {
+                        "command": "jobs.complete",
+                        "error": err
+                    }
+                }
+            }
+        }),
+    );
+    Err("jobs.complete failed".to_string())
 }
 
 fn default_storage_dir() -> PathBuf {
@@ -669,152 +730,7 @@ fn parse_args() -> Result<RunnerConfig, String> {
     })
 }
 
-fn value_as_str(v: &Value) -> Option<&str> {
-    v.as_str().map(|s| s.trim()).filter(|s| !s.is_empty())
-}
-
-fn value_as_i64(v: &Value) -> Option<i64> {
-    v.as_i64()
-}
-
-fn sanitize_single_line(text: &str) -> String {
-    text.chars()
-        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-        .collect::<String>()
-}
-
-fn truncate_for_prompt(text: &str, max_chars: usize) -> String {
-    let sanitized = sanitize_single_line(text).trim().to_string();
-    if sanitized.chars().count() <= max_chars {
-        return sanitized;
-    }
-    let mut out = String::new();
-    for (i, ch) in sanitized.chars().enumerate() {
-        if i >= max_chars.saturating_sub(1) {
-            break;
-        }
-        out.push(ch);
-    }
-    out.push('…');
-    out
-}
-
-fn render_job_thread(opened: &Value) -> String {
-    const MAX_EVENTS: usize = 12;
-    const MAX_MESSAGE_CHARS: usize = 160;
-    const MAX_REFS: usize = 3;
-
-    let Some(events) = opened.get("events").and_then(|v| v.as_array()) else {
-        return String::new();
-    };
-
-    // events are newest-first; filter, then show oldest->newest for readability.
-    let mut picked: Vec<&Value> = Vec::new();
-    for ev in events {
-        let kind = ev.get("kind").and_then(value_as_str).unwrap_or("");
-        if kind.eq_ignore_ascii_case("heartbeat") {
-            continue;
-        }
-        let msg = ev.get("message").and_then(value_as_str).unwrap_or("");
-        if msg.to_ascii_lowercase().starts_with("runner:") {
-            continue;
-        }
-        picked.push(ev);
-        if picked.len() >= MAX_EVENTS {
-            break;
-        }
-    }
-    picked.reverse();
-
-    let mut lines: Vec<String> = Vec::new();
-    for ev in picked {
-        let kind = ev.get("kind").and_then(value_as_str).unwrap_or("event");
-        let message = truncate_for_prompt(
-            ev.get("message").and_then(value_as_str).unwrap_or("-"),
-            MAX_MESSAGE_CHARS,
-        );
-
-        let mut refs: Vec<String> = ev
-            .get("refs")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
-                    .filter(|s| !s.is_empty())
-                    .take(MAX_REFS)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        refs.retain(|r| !r.starts_with("JOB-"));
-
-        if refs.is_empty() {
-            lines.push(format!("- {kind}: {message}"));
-        } else {
-            lines.push(format!("- {kind}: {message} (refs: {})", refs.join(", ")));
-        }
-    }
-
-    if lines.is_empty() {
-        "(no messages)".to_string()
-    } else {
-        lines.join("\n")
-    }
-}
-
-fn build_subagent_prompt(
-    cfg: &RunnerConfig,
-    job_id: &str,
-    job_prompt: &str,
-    slice_context: &str,
-    skill_pack: &str,
-) -> String {
-    let skill_section = if skill_pack.trim().is_empty() {
-        String::new()
-    } else {
-        format!("SKILL PACK (bounded):\n{skill_pack}\n\n")
-    };
-
-    format!(
-        "You are a delegated coding agent.\n\
-You MUST return a single JSON object that matches the provided output schema.\n\
-Do not include extra keys.\n\
-Keep summary short.\n\
-Put stable BranchMind refs into refs[] (TASK-*, JOB-*, CARD-*, notes@seq, a:*).\n\
-Proof gate: status=\"DONE\" requires at least one non-job ref (e.g., CARD-* / TASK-* / notes@seq / LINK:/CMD:).\n\
-Always include events[] in the final JSON (use [] if none).\n\
-Each events[] item MUST include all keys: kind, message, percent, refs (use percent=0 if unknown; refs=[] if none).\n\
-\n\
-EXAMPLE OUTPUT (valid JSON):\n\
-{{\"status\":\"DONE\",\"summary\":\"...\",\"refs\":[\"CMD: cargo test -q\",\"CARD-123\",\"JOB-001\"],\"events\":[{{\"kind\":\"progress\",\"message\":\"...\",\"percent\":10,\"refs\":[\"JOB-001\"]}}]}}\n\
-IMPORTANT: Put proof refs (CMD:/LINK:/CARD-/TASK-/notes@seq) into refs[] (or events[].refs). Do not bury them only in summary.\n\
-\n\
-{skill_section}\
-FEEDBACK LOOP (low-noise):\n\
-- workspace: {workspace}\n\
-- job: {job}\n\
-If the MCP tool `jobs` is available, send 1–3 short updates while you work (cmd=jobs.report):\n\
-- kind: progress|checkpoint|question\n\
-- message: short, no logs\n\
-- percent: integer (0 if unknown)\n\
-- refs: stable ids (CARD-*/TASK-*/notes@seq/a:*)\n\
-If you cannot call tools, emit the same updates in the final JSON field `events`.\n\
-\n\
-MANAGER CONTROL:\n\
-- The manager may send messages via `jobs` (cmd=jobs.message).\n\
-- Read the JOB THREAD and follow the latest manager instruction.\n\
-\n\
-TIME-SLICE RULE:\n\
-If you cannot fully finish within this slice, return status=\"CONTINUE\" with (a) what you did and (b) the next best action.\n\
-\n\
-JOB SPEC:\n{job_prompt}\n\n\
-{slice_context}\n",
-        workspace = cfg.workspace,
-        job = job_id,
-        job_prompt = job_prompt,
-        slice_context = slice_context,
-        skill_section = skill_section
-    )
-}
+use prompt::{build_subagent_prompt, render_job_thread, sanitize_single_line};
 
 fn first_job_from_list(list: &Value) -> Option<Value> {
     list.get("jobs")
@@ -907,15 +823,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     send_runner_heartbeat(&mut mcp, &cfg, "idle", None);
 
     let tmp_dir = std::env::temp_dir().join(format!("bm_runner_{}", std::process::id()));
-    let schema_path = executors::output_schema::write_job_output_schema_file(&tmp_dir)
+    let schema_path_default =
+        executors::output_schema::write_job_output_schema_file_for_role(&tmp_dir, None)
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
+    let schema_path_scout =
+        executors::output_schema::write_job_output_schema_file_for_role(&tmp_dir, Some("scout"))
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
+    let schema_path_builder =
+        executors::output_schema::write_job_output_schema_file_for_role(&tmp_dir, Some("builder"))
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
+    let schema_path_validator = executors::output_schema::write_job_output_schema_file_for_role(
+        &tmp_dir,
+        Some("validator"),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(2);
+    });
+    let schema_path_writer =
+        executors::output_schema::write_job_output_schema_file_for_role(&tmp_dir, Some("writer"))
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
+
+    let schema_json_default = executors::output_schema::job_output_schema_json_arg_for_role(None)
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             std::process::exit(2);
         });
-    let schema_json = executors::output_schema::job_output_schema_json_arg().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(2);
-    });
+    let schema_json_scout =
+        executors::output_schema::job_output_schema_json_arg_for_role(Some("scout"))
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
+    let schema_json_builder =
+        executors::output_schema::job_output_schema_json_arg_for_role(Some("builder"))
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
+    let schema_json_validator =
+        executors::output_schema::job_output_schema_json_arg_for_role(Some("validator"))
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
+    let schema_json_writer =
+        executors::output_schema::job_output_schema_json_arg_for_role(Some("writer"))
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(2);
+            });
 
     loop {
         // Prefer queued jobs. If none, attempt to reclaim a stale RUNNING job.
@@ -1036,6 +1005,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // We own the job lease now; mark runner as live immediately (no ambiguity in inbox).
         send_runner_heartbeat(&mut mcp, &cfg, "live", Some(job_id));
 
+        // Dry-run is a pure smoke test: claim → checkpoint → complete.
+        //
+        // It must *not* depend on external executors (codex/claude) being installed, because CI
+        // runners (and some developer environments) intentionally don't have them.
+        if cfg.dry_run {
+            let _ = mcp.call_tool(
+                "jobs",
+                json!({
+                    "workspace": cfg.workspace,
+                    "op": "call",
+                    "cmd": "jobs.report",
+                    "args": {
+                        "job": job_id,
+                        "runner_id": cfg.runner_id,
+                        "claim_revision": claim_revision,
+                        "lease_ttl_ms": job_claim_lease_ttl_ms(&cfg),
+                        "kind": "checkpoint",
+                        "message": "dry-run: claimed and completing immediately",
+                        "percent": 0,
+                        "refs": [ job_id ],
+                        "meta": { "dry_run": true, "step": { "command": "dry_run", "result": "dry-run: claimed and completing immediately" } }
+                    }
+                }),
+            );
+            let refs = vec![job_id.to_string()];
+            let _ = complete_job_with_retry(
+                &mut mcp,
+                &cfg,
+                CompleteJobRequest {
+                    job_id,
+                    claim_revision,
+                    status: "DONE",
+                    summary: "dry-run complete",
+                    refs: &refs,
+                    meta: json!({ "dry_run": true }),
+                },
+            );
+            last_runner_beat_ms = now_ms();
+            send_runner_heartbeat(&mut mcp, &cfg, "idle", None);
+            if cfg.once {
+                break;
+            }
+            continue;
+        }
+
         let open_args = json!({
             "job": job_id,
             "include_prompt": true,
@@ -1079,27 +1093,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string();
         let job_row = open.get("job").cloned().unwrap_or(Value::Null);
         let job_meta = open.get("meta");
+        let job_priority = job_row
+            .get("priority")
+            .and_then(value_as_str)
+            .unwrap_or("MEDIUM")
+            .to_string();
+        let base_meta = job_meta
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let pipeline_role = job_meta_pipeline_role(job_meta);
+        let builder_input_only = pipeline_role
+            .is_some_and(|role| role.eq_ignore_ascii_case("builder"))
+            && job_meta_input_mode(job_meta)
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("strict"));
+        let disable_mcp_for_exec = role_requires_exec_mcp_isolation(pipeline_role);
+        let slice_timing = resolve_slice_timing(&cfg, job_meta, pipeline_role);
 
         let (executor_kind, executor_profile, executor_model) =
             match resolve_job_executor_plan(job_meta, &cfg) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = mcp.call_tool(
-                        "jobs",
-                        json!({
-                            "workspace": cfg.workspace,
-                            "op": "call",
-                            "cmd": "jobs.complete",
-                            "args": {
-                                "job": job_id,
-                                "runner_id": cfg.runner_id,
-                                "claim_revision": claim_revision,
-                                "status": "FAILED",
-                                "summary": format!("runner: unsupported executor: {err}"),
-                                "refs": [ job_id ],
-                                "meta": { "runner": cfg.runner_id }
-                            }
-                        }),
+                    let summary = format!("runner: unsupported executor: {err}");
+                    let refs = vec![job_id.to_string()];
+                    let _ = complete_job_with_retry(
+                        &mut mcp,
+                        &cfg,
+                        CompleteJobRequest {
+                            job_id,
+                            claim_revision,
+                            status: "FAILED",
+                            summary: &summary,
+                            refs: &refs,
+                            meta: json!({ "runner": cfg.runner_id }),
+                        },
                     );
 
                     last_runner_beat_ms = now_ms();
@@ -1166,51 +1193,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             String::new()
         };
 
-        if cfg.dry_run {
-            let _ = mcp.call_tool(
-                "jobs",
-                json!({
-                    "workspace": cfg.workspace,
-                    "op": "call",
-                    "cmd": "jobs.report",
-                    "args": {
-                        "job": job_id,
-                        "runner_id": cfg.runner_id,
-                        "claim_revision": claim_revision,
-                        "lease_ttl_ms": job_claim_lease_ttl_ms(&cfg),
-                        "kind": "checkpoint",
-                        "message": "dry-run: claimed and completing immediately",
-                        "percent": 0,
-                        "refs": [ job_id ],
-                        "meta": { "dry_run": true }
-                    }
-                }),
-            );
-            let _ = mcp.call_tool(
-                "jobs",
-                json!({
-                    "workspace": cfg.workspace,
-                    "op": "call",
-                    "cmd": "jobs.complete",
-                    "args": {
-                        "job": job_id,
-                        "runner_id": cfg.runner_id,
-                        "claim_revision": claim_revision,
-                        "status": "DONE",
-                        "summary": "dry-run complete",
-                        "refs": [ job_id ],
-                        "meta": { "dry_run": true }
-                    }
-                }),
-            );
-            last_runner_beat_ms = now_ms();
-            send_runner_heartbeat(&mut mcp, &cfg, "idle", None);
-            if cfg.once {
-                break;
-            }
-            continue;
-        }
-
         let job_started_ms = now_ms();
         let max_runtime_ms = (cfg.max_runtime_s as i64).saturating_mul(1000);
 
@@ -1218,30 +1200,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut failures: u32 = 0;
         let mut last_summary: Option<String> = None;
         let mut last_refs: Vec<String> = Vec::new();
+        let mut continue_loops: u32 = 0;
+        let continue_limit: Option<u32> = pipeline_role
+            .map(|role| role.trim().to_ascii_lowercase())
+            .map(|role| {
+                if role == "builder" {
+                    let retry_limit = base_meta
+                        .get("context_retry_limit")
+                        .or_else(|| base_meta.get("max_context_requests"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(2)
+                        .clamp(0, 8) as u32;
+                    // Initial slice + bounded context retries.
+                    retry_limit.saturating_add(1)
+                } else {
+                    // Pipeline roles should not spin in unbounded CONTINUE loops.
+                    2
+                }
+            });
 
         'job_loop: loop {
             let now = now_ms();
             if now.saturating_sub(job_started_ms) >= max_runtime_ms {
-                let _ = mcp.call_tool(
-                    "jobs",
-                    json!({
-                        "workspace": cfg.workspace,
-                        "op": "call",
-                        "cmd": "jobs.complete",
-                        "args": {
-                            "job": job_id,
-                            "runner_id": cfg.runner_id,
-                            "claim_revision": claim_revision,
-                            "status": "FAILED",
-                            "summary": "runner: max runtime exceeded",
-                            "refs": [ job_id ],
-                            "meta": {
-                                "runner": cfg.runner_id,
-                                "slice_index": slice_index,
-                                "max_runtime_s": cfg.max_runtime_s
-                            }
-                        }
-                    }),
+                let refs = vec![job_id.to_string()];
+                let _ = complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "FAILED",
+                        summary: "runner: max runtime exceeded",
+                        refs: &refs,
+                        meta: json!({
+                            "runner": cfg.runner_id,
+                            "slice_index": slice_index,
+                            "max_runtime_s": cfg.max_runtime_s
+                        }),
+                    },
                 );
                 break 'job_loop;
             }
@@ -1261,8 +1257,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }),
                 ) {
-                    Ok(Value::String(s)) => s,
-                    Ok(other) => other.to_string(),
+                    Ok(Value::String(s)) => normalize_task_snapshot_lines(&s),
+                    Ok(other) => normalize_task_snapshot_lines(&other.to_string()),
                     Err(_) => String::new(),
                 }
             } else {
@@ -1304,8 +1300,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             };
 
-            let full_prompt =
-                build_subagent_prompt(&cfg, job_id, &prompt, &slice_context, &skill_pack);
+            let full_prompt = build_subagent_prompt(
+                &cfg,
+                job_id,
+                &prompt,
+                &slice_context,
+                &skill_pack,
+                pipeline_role,
+                job_meta,
+            );
 
             let _ = mcp.call_tool(
                 "jobs",
@@ -1322,14 +1325,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "message": format!("runner: slice {} started{}", slice_index, if is_reclaim { " (reclaim)" } else { "" }),
                         "percent": 0,
                         "refs": [ job_id ],
-                        "meta": {
+                        "meta": merged_meta(&base_meta, json!({
                             "runner": cfg.runner_id,
                             "slice_index": slice_index,
                             "reclaim": is_reclaim,
-                            "slice_s": cfg.slice_s,
-                            "slice_grace_s": cfg.slice_grace_s,
-                            "heartbeat_ms": cfg.heartbeat_ms
-                        }
+                            "slice_s": slice_timing.slice_s,
+                            "slice_grace_s": slice_timing.slice_grace_s,
+                            "heartbeat_ms": slice_timing.heartbeat_ms,
+                            "step": {
+                                "command": "slice.start",
+                                "result": format!("runner: slice {} started{}", slice_index, if is_reclaim { " (reclaim)" } else { "" })
+                            }
+                        }))
                     }
                 }),
             );
@@ -1337,17 +1344,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let out_path = tmp_dir.join(format!("job_{job_id}_slice_{slice_index}.json"));
             let stderr_path = tmp_dir.join(format!("job_{job_id}_slice_{slice_index}.stderr"));
             let executor = executor_kind.as_str();
+            let (schema_path_for_exec, schema_json_for_exec) = match pipeline_role {
+                Some(role) if role.eq_ignore_ascii_case("scout") => {
+                    (&schema_path_scout, &schema_json_scout)
+                }
+                Some(role) if role.eq_ignore_ascii_case("builder") => {
+                    (&schema_path_builder, &schema_json_builder)
+                }
+                Some(role) if role.eq_ignore_ascii_case("validator") => {
+                    (&schema_path_validator, &schema_json_validator)
+                }
+                Some(role) if role.eq_ignore_ascii_case("writer") => {
+                    (&schema_path_writer, &schema_json_writer)
+                }
+                _ => (&schema_path_default, &schema_json_default),
+            };
             let child_res = match executor_kind {
                 executors::ExecutorKind::Codex => executors::codex::spawn_exec(
                     &cfg,
-                    &schema_path,
-                    &out_path,
-                    &stderr_path,
-                    &full_prompt,
+                    executors::codex::SpawnExecRequest {
+                        schema_path: schema_path_for_exec,
+                        out_path: &out_path,
+                        stderr_path: &stderr_path,
+                        prompt: &full_prompt,
+                        executor_profile,
+                        model: executor_model.as_deref(),
+                        disable_mcp: disable_mcp_for_exec,
+                    },
                 ),
                 executors::ExecutorKind::ClaudeCode => executors::claude_code::spawn_exec(
                     &cfg,
-                    &schema_json,
+                    schema_json_for_exec,
                     &out_path,
                     &stderr_path,
                     &full_prompt,
@@ -1374,41 +1401,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "runner: spawn failed (executor={executor}, failures={failures}): {err}"
                                 ),
                                 "percent": 0,
-                                "refs": [ job_id ],
-                                "meta": {
-                                    "runner": cfg.runner_id,
-                                    "slice_index": slice_index,
-                                    "failures": failures,
-                                    "executor": executor,
-                                    "executor_profile": executor_profile
-                                }
+                                "refs": [ job_id ]
                             }
                         }),
                     );
                     if failures >= cfg.max_failures {
-                        let _ = mcp.call_tool(
-                            "jobs",
-                            json!({
-                                "workspace": cfg.workspace,
-                                "op": "call",
-                                "cmd": "jobs.complete",
-                                "args": {
-                                    "job": job_id,
-                                    "runner_id": cfg.runner_id,
-                                    "claim_revision": claim_revision,
-                                    "status": "FAILED",
-                                    "summary": format!(
-                                        "runner: spawn failures exceeded (executor={executor})"
-                                    ),
-                                    "refs": [ job_id ],
-                                    "meta": {
-                                        "runner": cfg.runner_id,
-                                        "failures": failures,
-                                        "executor": executor,
-                                        "executor_profile": executor_profile
-                                    }
-                                }
-                            }),
+                        let summary =
+                            format!("runner: spawn failures exceeded (executor={executor})");
+                        let refs = vec![job_id.to_string()];
+                        let _ = complete_job_with_retry(
+                            &mut mcp,
+                            &cfg,
+                            CompleteJobRequest {
+                                job_id,
+                                claim_revision,
+                                status: "FAILED",
+                                summary: &summary,
+                                refs: &refs,
+                                meta: json!({
+                                    "runner": cfg.runner_id,
+                                    "failures": failures,
+                                    "executor": executor,
+                                    "executor_profile": executor_profile
+                                }),
+                            },
                         );
                         break 'job_loop;
                     }
@@ -1418,9 +1434,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let slice_started_ms = now_ms();
-            let slice_soft_ms = (cfg.slice_s as i64).saturating_mul(1000);
-            let slice_hard_ms =
-                slice_soft_ms.saturating_add((cfg.slice_grace_s as i64).saturating_mul(1000));
+            let slice_soft_ms = (slice_timing.slice_s as i64).saturating_mul(1000);
+            let slice_hard_ms = slice_soft_ms
+                .saturating_add((slice_timing.slice_grace_s as i64).saturating_mul(1000));
             let mut last_beat_ms = slice_started_ms;
             let mut killed = false;
             let mut aborted = false;
@@ -1439,7 +1455,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 let now = now_ms();
-                if now.saturating_sub(last_beat_ms) >= cfg.heartbeat_ms as i64 {
+                if now.saturating_sub(last_beat_ms) >= slice_timing.heartbeat_ms as i64 {
                     last_beat_ms = now;
                     send_runner_heartbeat(&mut mcp, &cfg, "live", Some(job_id));
                     let beat = mcp.call_tool(
@@ -1456,12 +1472,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "kind": "heartbeat",
                                 "message": format!("runner: heartbeat (slice {})", slice_index),
                                 "percent": 0,
-                                "refs": [ job_id ],
-                                "meta": {
-                                    "runner": cfg.runner_id,
-                                    "slice_index": slice_index,
-                                    "uptime_s": now.saturating_sub(job_started_ms) / 1000
-                                }
+                                "refs": [ job_id ]
                             }
                         }),
                     );
@@ -1504,7 +1515,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 failures = failures.saturating_add(1);
                 let stderr_snip = read_stderr_snippet(&stderr_path, 0, 400);
                 let exit = format_exit_status(status);
-                let exit_meta = exit.clone();
                 let _ = mcp.call_tool(
                     "jobs",
                     json!({
@@ -1521,34 +1531,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "runner: {executor} exec failed (exit={exit}, killed={killed}, failures={failures}): {stderr_snip}"
                             ),
                             "percent": 0,
-                            "refs": [ job_id ],
-                            "meta": {
-                                "runner": cfg.runner_id,
-                                "slice_index": slice_index,
-                                "killed": killed,
-                                "failures": failures,
-                                "exit": exit_meta
-                            }
+                            "refs": [ job_id ]
                         }
                     }),
                 );
                 if failures >= cfg.max_failures {
-                    let _ = mcp.call_tool(
-                        "jobs",
-                        json!({
-                            "workspace": cfg.workspace,
-                            "op": "call",
-                            "cmd": "jobs.complete",
-                            "args": {
-                                "job": job_id,
-                                "runner_id": cfg.runner_id,
-                                "claim_revision": claim_revision,
-                                "status": "FAILED",
-                                "summary": format!("runner: {executor} exec failures exceeded"),
-                                "refs": [ job_id ],
-                                "meta": { "runner": cfg.runner_id, "failures": failures }
-                            }
-                        }),
+                    let summary = format!("runner: {executor} exec failures exceeded");
+                    let refs = vec![job_id.to_string()];
+                    let _ = complete_job_with_retry(
+                        &mut mcp,
+                        &cfg,
+                        CompleteJobRequest {
+                            job_id,
+                            claim_revision,
+                            status: "FAILED",
+                            summary: &summary,
+                            refs: &refs,
+                            meta: json!({ "runner": cfg.runner_id, "failures": failures }),
+                        },
                     );
                     break 'job_loop;
                 }
@@ -1571,7 +1571,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .as_ref()
                         .map(format_exit_status)
                         .unwrap_or_else(|| "-".to_string());
-                    let exit_meta = exit.clone();
                     let _ = mcp.call_tool(
                         "jobs",
                         json!({
@@ -1586,28 +1585,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "kind": "error",
                                 "message": format!("runner: {executor} output unreadable (exit={exit}, killed={killed}, failures={failures}): {err}; stderr: {stderr_snip}"),
                                 "percent": 0,
-                                "refs": [ job_id ],
-                                "meta": { "runner": cfg.runner_id, "slice_index": slice_index, "killed": killed, "failures": failures, "exit": exit_meta }
+                                "refs": [ job_id ]
                             }
                         }),
                     );
                     if failures >= cfg.max_failures {
-                        let _ = mcp.call_tool(
-                            "jobs",
-                            json!({
-                                "workspace": cfg.workspace,
-                                "op": "call",
-                                "cmd": "jobs.complete",
-                                "args": {
-                                    "job": job_id,
-                                    "runner_id": cfg.runner_id,
-                                    "claim_revision": claim_revision,
-                                    "status": "FAILED",
-                                    "summary": "runner: output failures exceeded",
-                                    "refs": [ job_id ],
-                                    "meta": { "runner": cfg.runner_id, "failures": failures }
-                                }
-                            }),
+                        let refs = vec![job_id.to_string()];
+                        let _ = complete_job_with_retry(
+                            &mut mcp,
+                            &cfg,
+                            CompleteJobRequest {
+                                job_id,
+                                claim_revision,
+                                status: "FAILED",
+                                summary: "runner: output failures exceeded",
+                                refs: &refs,
+                                meta: json!({ "runner": cfg.runner_id, "failures": failures }),
+                            },
                         );
                         break 'job_loop;
                     }
@@ -1617,11 +1611,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let status = v.get("status").and_then(value_as_str).unwrap_or("FAILED");
-            let agent_summary = v
-                .get("summary")
-                .and_then(value_as_str)
-                .unwrap_or("-")
-                .to_string();
+            let mut agent_summary = summary_value_to_text(v.get("summary"));
+            if status.eq_ignore_ascii_case("DONE")
+                && pipeline_role.is_some_and(|role| role.eq_ignore_ascii_case("builder"))
+            {
+                agent_summary = normalize_builder_summary_revision(&agent_summary, claim_revision);
+            }
+            if status.eq_ignore_ascii_case("DONE")
+                && pipeline_role.is_some_and(|role| role.eq_ignore_ascii_case("scout"))
+            {
+                let max_context_refs = base_meta
+                    .get("max_context_refs")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v.clamp(8, 64) as usize)
+                    .unwrap_or(24);
+                agent_summary = clamp_scout_summary_code_refs(&agent_summary, max_context_refs);
+            }
             let mut refs = v
                 .get("refs")
                 .and_then(|v| v.as_array())
@@ -1641,6 +1646,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !refs.iter().any(|r| r == job_id) {
                 refs.push(job_id.to_string());
             }
+            if status.eq_ignore_ascii_case("DONE") && builder_input_only {
+                let tool_calls = detect_tool_calls_from_stderr(&stderr_path, 12);
+                if !tool_calls.is_empty() {
+                    let slice_id_hint = base_meta.get("slice_id").and_then(value_as_str);
+                    agent_summary = build_builder_input_only_context_request_summary(
+                        slice_id_hint,
+                        claim_revision,
+                        &tool_calls,
+                        &stderr_path,
+                    );
+                    let stderr_ref = format!("FILE:{}", stderr_path.display());
+                    if !refs.iter().any(|r| r == &stderr_ref) {
+                        refs.push(stderr_ref);
+                    }
+                    let guard_ref = "CMD: builder input-only guard triggered context_request";
+                    if !refs.iter().any(|r| r == guard_ref) {
+                        refs.push(guard_ref.to_string());
+                    }
+                }
+            }
 
             // Optional structured feedback events (delegated agent -> manager).
             // These are low-noise breadcrumbs intended for supervision and navigation.
@@ -1652,6 +1677,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .and_then(value_as_str)
                         .unwrap_or("progress")
                         .to_string();
+                    let kind_norm = kind.trim().to_ascii_lowercase();
                     let message = ev
                         .get("message")
                         .and_then(value_as_str)
@@ -1699,6 +1725,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(p) = percent {
                         report_args.insert("percent".to_string(), json!(p));
                     }
+                    // Strict schema requires meta.step for progress/checkpoint. Keep job meta stable by
+                    // merging the base job meta with a small step envelope.
+                    if matches!(kind_norm.as_str(), "progress" | "checkpoint") {
+                        report_args.insert(
+                            "meta".to_string(),
+                            merged_meta(
+                                &base_meta,
+                                json!({
+                                    "runner": cfg.runner_id,
+                                    "slice_index": slice_index,
+                                    "agent_event": true,
+                                    "step": {
+                                        "command": format!("agent.{kind_norm}"),
+                                        "result": message.clone()
+                                    }
+                                }),
+                            ),
+                        );
+                    }
                     let _ = mcp.call_tool(
                         "jobs",
                         json!({
@@ -1717,6 +1762,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            if status.eq_ignore_ascii_case("DONE")
+                && let Some(role) = pipeline_role.map(|v| v.trim().to_ascii_lowercase())
+            {
+                let artifact_ref = match role.as_str() {
+                    "scout" => Some(format!("artifact://jobs/{job_id}/scout_context_pack")),
+                    "builder" => Some(format!("artifact://jobs/{job_id}/builder_diff_batch")),
+                    "validator" => Some(format!("artifact://jobs/{job_id}/validator_report")),
+                    _ => None,
+                };
+                if let Some(artifact_ref) = artifact_ref
+                    && !refs.iter().any(|r| r == &artifact_ref)
+                {
+                    refs.push(artifact_ref);
+                }
+            }
+
             failures = 0;
             let mut prior_summary = agent_summary.clone();
             last_refs = refs.clone();
@@ -1725,58 +1786,145 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut checkpoint_summary = agent_summary.clone();
             let mut proof_gate_triggered = false;
 
-            // Quality gate: never accept DONE without at least one stable non-job proof ref.
-            if status.eq_ignore_ascii_case("DONE") && !has_non_job_proof_ref(job_id, &refs) {
-                effective_status = "CONTINUE";
-                proof_gate_triggered = true;
-                checkpoint_summary = "proof gate: add CMD:/LINK:/CARD-/TASK-/notes@seq to refs[] (or emit them in events.refs)".to_string();
+            if status.eq_ignore_ascii_case("DONE")
+                && let Some(role) = pipeline_role
+                && let Err(contract_err) = validate_pipeline_summary_contract(role, &agent_summary)
+            {
+                checkpoint_summary = format!("contract gate ({role}): {contract_err}");
                 prior_summary = format!("{agent_summary}\n\n{checkpoint_summary}");
+                // Pipeline roles are fail-closed by contract: invalid summary must stop immediately.
+                effective_status = "FAILED";
+            }
+
+            // Quality gate: never accept DONE without at least one stable non-job proof ref.
+            if status.eq_ignore_ascii_case("DONE")
+                && !has_done_proof_ref(job_id, &job_priority, &refs)
+            {
+                checkpoint_summary = if job_priority.eq_ignore_ascii_case("HIGH") {
+                    "proof gate (HIGH): add CMD:/LINK:/FILE: to refs[] (or events.refs)".to_string()
+                } else {
+                    "proof gate: add non-job proof refs (CMD:/LINK:/FILE:/CARD-/TASK-/notes@seq) to refs[] (or events.refs)".to_string()
+                };
+                prior_summary = format!("{agent_summary}\n\n{checkpoint_summary}");
+                if pipeline_role.is_some() {
+                    // Pipeline jobs are fail-closed by default: missing proof is terminal.
+                    effective_status = "FAILED";
+                } else {
+                    effective_status = "CONTINUE";
+                    proof_gate_triggered = true;
+                }
             }
 
             last_summary = Some(prior_summary);
 
             if effective_status.eq_ignore_ascii_case("DONE") {
-                let _ = mcp.call_tool(
-                    "jobs",
-                    json!({
-                        "workspace": cfg.workspace,
-                        "op": "call",
-                        "cmd": "jobs.complete",
-                        "args": {
-                            "job": job_id,
-                            "runner_id": cfg.runner_id,
-                            "claim_revision": claim_revision,
-                            "status": "DONE",
-                            "summary": agent_summary,
-                            "refs": refs,
-                            "meta": { "runner": cfg.runner_id, "slice_index": slice_index }
-                        }
-                    }),
-                );
+                if complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "DONE",
+                        summary: &agent_summary,
+                        refs: &refs,
+                        meta: json!({ "runner": cfg.runner_id, "slice_index": slice_index }),
+                    },
+                )
+                .is_err()
+                {
+                    // Fail-safe: do not leave terminal-complete jobs stuck in RUNNING.
+                    let _ = mcp.call_tool(
+                        "jobs",
+                        json!({
+                            "workspace": cfg.workspace,
+                            "op": "call",
+                            "cmd": "jobs.cancel",
+                            "args": {
+                                "job": job_id,
+                                "force_running": true,
+                                "reason": "runner fallback: jobs.complete failed repeatedly after DONE"
+                            }
+                        }),
+                    );
+                }
                 break 'job_loop;
             }
             if effective_status.eq_ignore_ascii_case("FAILED") {
-                let _ = mcp.call_tool(
-                    "jobs",
-                    json!({
-                        "workspace": cfg.workspace,
-                        "op": "call",
-                        "cmd": "jobs.complete",
-                        "args": {
-                            "job": job_id,
-                            "runner_id": cfg.runner_id,
-                            "claim_revision": claim_revision,
-                            "status": "FAILED",
-                            "summary": agent_summary,
-                            "refs": refs,
-                            "meta": { "runner": cfg.runner_id, "slice_index": slice_index }
-                        }
-                    }),
-                );
+                if complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "FAILED",
+                        summary: &agent_summary,
+                        refs: &refs,
+                        meta: json!({ "runner": cfg.runner_id, "slice_index": slice_index }),
+                    },
+                )
+                .is_err()
+                {
+                    let _ = mcp.call_tool(
+                        "jobs",
+                        json!({
+                            "workspace": cfg.workspace,
+                            "op": "call",
+                            "cmd": "jobs.cancel",
+                            "args": {
+                                "job": job_id,
+                                "force_running": true,
+                                "reason": "runner fallback: jobs.complete failed repeatedly after FAILED"
+                            }
+                        }),
+                    );
+                }
                 break 'job_loop;
             }
 
             // CONTINUE: persist progress via events and run another slice.
+            continue_loops = continue_loops.saturating_add(1);
+            if let Some(limit) = continue_limit
+                && continue_loops > limit
+            {
+                let exhausted = format!(
+                    "runner: CONTINUE retry budget exhausted (loops={continue_loops}, limit={limit}); last checkpoint: {checkpoint_summary}"
+                );
+                if complete_job_with_retry(
+                    &mut mcp,
+                    &cfg,
+                    CompleteJobRequest {
+                        job_id,
+                        claim_revision,
+                        status: "FAILED",
+                        summary: &exhausted,
+                        refs: &refs,
+                        meta: json!({
+                            "runner": cfg.runner_id,
+                            "slice_index": slice_index,
+                            "continue_loops": continue_loops,
+                            "continue_limit": limit,
+                            "proof_gate": proof_gate_triggered
+                        }),
+                    },
+                )
+                .is_err()
+                {
+                    let _ = mcp.call_tool(
+                        "jobs",
+                        json!({
+                            "workspace": cfg.workspace,
+                            "op": "call",
+                            "cmd": "jobs.cancel",
+                            "args": {
+                                "job": job_id,
+                                "force_running": true,
+                                "reason": "runner fallback: CONTINUE retry budget exhausted and jobs.complete failed"
+                            }
+                        }),
+                    );
+                }
+                break 'job_loop;
+            }
             let _ = mcp.call_tool(
                 "jobs",
                 json!({
@@ -1796,12 +1944,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                         "percent": 0,
                         "refs": refs,
-                        "meta": {
+                        "meta": merged_meta(&base_meta, json!({
                             "runner": cfg.runner_id,
                             "slice_index": slice_index,
                             "proof_gate": effective_status.eq_ignore_ascii_case("CONTINUE") && status.eq_ignore_ascii_case("DONE"),
-                            "slice_ms": now_ms().saturating_sub(slice_started_ms)
-                        }
+                            "slice_ms": now_ms().saturating_sub(slice_started_ms),
+                            "step": {
+                                "command": if proof_gate_triggered { "proof_gate" } else { "checkpoint" },
+                                "result": checkpoint_summary.clone()
+                            }
+                        }))
                     }
                 }),
             );

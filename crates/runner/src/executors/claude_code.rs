@@ -7,6 +7,28 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
+fn append_exec_args(cmd: &mut Command, repo_root: &Path, schema_json: &str, model: Option<&str>) {
+    cmd.arg("-p")
+        .arg("--output-format")
+        .arg("json")
+        .arg("--json-schema")
+        .arg(schema_json)
+        .arg("--no-session-persistence")
+        // Flagship DX: avoid interactive permission prompts (runner must never hang).
+        .arg("--dangerously-skip-permissions")
+        // Keep tool execution rooted in the repo.
+        .arg("--add-dir")
+        .arg(repo_root.to_string_lossy().to_string())
+        // Deterministic runner mode: do not load user/global MCP/plugin servers.
+        .arg("--strict-mcp-config")
+        .arg("--mcp-config")
+        .arg("{\"mcpServers\":{}}");
+
+    if let Some(model) = model {
+        cmd.arg("--model").arg(model);
+    }
+}
+
 pub(crate) fn spawn_exec(
     cfg: &RunnerConfig,
     schema_json: &str,
@@ -28,21 +50,7 @@ pub(crate) fn spawn_exec(
         .map_err(|e| format!("create claude stderr capture failed: {e}"))?;
 
     let mut cmd = Command::new(claude_bin);
-    cmd.arg("-p")
-        .arg("--output-format")
-        .arg("json")
-        .arg("--json-schema")
-        .arg(schema_json)
-        .arg("--no-session-persistence")
-        // Flagship DX: avoid interactive permission prompts (runner must never hang).
-        .arg("--dangerously-skip-permissions")
-        // Keep tool execution rooted in the repo.
-        .arg("--add-dir")
-        .arg(cfg.repo_root.to_string_lossy().to_string());
-
-    if let Some(model) = model {
-        cmd.arg("--model").arg(model);
-    }
+    append_exec_args(&mut cmd, &cfg.repo_root, schema_json, model);
 
     // `claude` does not accept a `--cwd` flag (as of 2.x); set the process working directory
     // directly to keep file operations deterministic and within the repo.
@@ -71,6 +79,24 @@ pub(crate) fn read_output(out_path: &Path) -> Result<Value, String> {
         std::fs::read_to_string(out_path).map_err(|e| format!("read claude output failed: {e}"))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("parse claude json failed: {e}"))?;
+
+    // Claude Code may return a wrapper error object when it fails to satisfy the provided
+    // JSON schema after internal retries (e.g. `error_max_structured_output_retries`).
+    // Treat this as a hard executor error so the runner can fail the slice deterministically,
+    // instead of attempting to validate/store an invalid payload.
+    if value.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
+        let subtype = value
+            .get("subtype")
+            .and_then(|v| v.as_str())
+            .unwrap_or("claude_error");
+        let first_error = value
+            .get("errors")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        return Err(format!("claude_code: {subtype}: {first_error}"));
+    }
 
     // Claude Code `--output-format json` returns a wrapper object with metadata and the schema-
     // validated payload nested under `structured_output`.
@@ -169,5 +195,25 @@ printf '%s\n' '{{"type":"result","structured_output":{{"ok":true}}}}'
             .read_to_string(&mut got)
             .unwrap();
         assert_eq!(got, prompt);
+    }
+
+    #[test]
+    fn claude_code_exec_args_enforce_strict_mcp_config() {
+        let mut cmd = Command::new("claude");
+        append_exec_args(&mut cmd, Path::new("/tmp/repo"), "{}", Some("haiku"));
+        let args = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(
+            args.iter().any(|a| a == "--strict-mcp-config"),
+            "expected --strict-mcp-config in runner claude args: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--mcp-config" && pair[1] == "{\"mcpServers\":{}}"),
+            "expected empty strict mcp config in runner claude args: {args:?}"
+        );
     }
 }

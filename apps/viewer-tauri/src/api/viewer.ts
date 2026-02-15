@@ -1,5 +1,8 @@
 import { invokeTauri } from "./tauri";
 import type {
+  ArchitectureHotspotDto,
+  ArchitectureLensDto,
+  ArchitectureProvenanceDto,
   AnchorsListDto,
   DocEntriesSinceDto,
   DocEntriesSinceInput,
@@ -200,5 +203,55 @@ export const viewerApi = {
       kind: args.kind,
       status: args.status,
       limit: args.limit,
+    }),
+
+  architectureLensGet: (args: {
+    storage_dir: string;
+    workspace: string;
+    input: {
+      scope?: { kind?: string; id?: string };
+      mode?: string;
+      include_draft?: boolean;
+      time_window?: string;
+      limit?: number;
+    };
+  }) =>
+    invokeTauri<ArchitectureLensDto>("architecture_lens_get", {
+      storageDir: args.storage_dir,
+      workspace: args.workspace,
+      input: args.input,
+    }),
+
+  architectureProvenanceGet: (args: {
+    storage_dir: string;
+    workspace: string;
+    input: {
+      scope?: { kind?: string; id?: string };
+      node_id: string;
+      include_draft?: boolean;
+      time_window?: string;
+      limit?: number;
+    };
+  }) =>
+    invokeTauri<ArchitectureProvenanceDto>("architecture_provenance_get", {
+      storageDir: args.storage_dir,
+      workspace: args.workspace,
+      input: args.input,
+    }),
+
+  architectureHotspotsGet: (args: {
+    storage_dir: string;
+    workspace: string;
+    input: {
+      scope?: { kind?: string; id?: string };
+      include_draft?: boolean;
+      time_window?: string;
+      limit?: number;
+    };
+  }) =>
+    invokeTauri<ArchitectureHotspotDto[]>("architecture_hotspots_get", {
+      storageDir: args.storage_dir,
+      workspace: args.workspace,
+      input: args.input,
     }),
 };

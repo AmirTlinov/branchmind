@@ -2,6 +2,7 @@
 
 use crate::*;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 impl McpServer {
     pub(crate) fn tool_branchmind_anchors_list(&mut self, args: Value) -> Value {
@@ -56,10 +57,32 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
 
-        let anchors_json = list
-            .anchors
+        let anchors = list.anchors;
+        let binding_hits = match self.store.anchor_bindings_list_for_anchors_any(
+            &workspace,
+            anchors.iter().map(|a| a.id.clone()).collect(),
+        ) {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let mut bindings_by_anchor = BTreeMap::<String, Vec<Value>>::new();
+        for hit in binding_hits {
+            bindings_by_anchor
+                .entry(hit.anchor_id.clone())
+                .or_default()
+                .push(json!({
+                    "kind": hit.kind,
+                    "repo_rel": hit.repo_rel,
+                    "created_at_ms": hit.created_at_ms,
+                    "updated_at_ms": hit.updated_at_ms
+                }));
+        }
+
+        let anchors_json = anchors
             .into_iter()
             .map(|a| {
+                let bindings = bindings_by_anchor.remove(&a.id).unwrap_or_default();
                 json!({
                     "id": a.id,
                     "title": a.title,
@@ -67,6 +90,7 @@ impl McpServer {
                     "status": a.status,
                     "description": a.description,
                     "refs": a.refs,
+                    "bindings": bindings,
                     "aliases": a.aliases,
                     "parent_id": a.parent_id,
                     "depends_on": a.depends_on,

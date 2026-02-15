@@ -1,0 +1,691 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import re
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+TOKEN_RE = re.compile(r"^[A-Z][A-Z0-9_/-]*$")
+TOKEN_REF_RE = re.compile(r"\[([^\[\]]+)\]")
+WIKI_LINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
+MD_LINK_RE = re.compile(r"\[([^\[\]]+)\]\(([^)]+)\)")
+CONTRACT_FILE_RE = re.compile(r"^(?P<stem>.+)_v(?P<ver>[0-9]+)\.md$")
+
+
+@dataclass(frozen=True)
+class DocBlocks:
+    legend: str
+    content: str
+
+
+def _strip_inline_code(text: str) -> str:
+    parts = text.split("`")
+    if len(parts) < 3:
+        return text
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            out.append(part)
+    return "".join(out)
+
+
+def _wiki_base(inner: str) -> str:
+    base = inner.strip()
+    base = base.split("#", 1)[0].split("^", 1)[0].strip()
+    if "|" in base:
+        base = base.split("|", 1)[0].strip()
+    return base
+
+
+def _normalize_rel_path(rel: str) -> str:
+    # Best-effort normalization for repo-relative paths.
+    # - Collapses './' and '../'
+    # - Never escapes above repo root (drops leading '..' segments)
+    parts: list[str] = []
+    for raw in rel.replace("\\", "/").split("/"):
+        seg = raw.strip()
+        if not seg or seg == ".":
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(seg)
+    return "/".join(parts)
+
+
+def _extract_doc_links(md: str) -> list[str]:
+    """Extract doc-to-doc link targets from Markdown.
+
+    Supports:
+    - Obsidian wiki-links: [[path/to/doc.md]] / [[doc.md|Alias]] / [[doc.md#Heading]]
+    - Markdown links: [label](path/to/doc.md)
+    """
+    targets: list[str] = []
+    in_fence = False
+    for raw in md.splitlines():
+        line = raw.rstrip("\n")
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        line = _strip_inline_code(line)
+
+        for inner in WIKI_LINK_RE.findall(line):
+            base = _wiki_base(inner)
+            if TOKEN_RE.match(base):
+                continue
+            if base.lower().endswith(".md"):
+                targets.append(base)
+
+        for m in MD_LINK_RE.finditer(line):
+            start = m.start()
+            if start > 0 and line[start - 1] == "!":
+                # image
+                continue
+            url = m.group(2).strip()
+            url = url.split("#", 1)[0].strip()
+            if not url:
+                continue
+            if "://" in url:
+                continue
+            if url.lower().endswith(".md"):
+                targets.append(url)
+
+    # Keep deterministic order while preserving duplicates elimination.
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in targets:
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def _parse_blocks(md: str) -> DocBlocks:
+    lines = md.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i >= len(lines) or lines[i].strip() != "[LEGEND]":
+        raise ValueError("first non-empty line must be [LEGEND]")
+
+    legend_start = i + 1
+    content_header_idx = None
+    in_fence = False
+    for j in range(legend_start, len(lines)):
+        line = lines[j]
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.strip() == "[CONTENT]":
+            content_header_idx = j
+            break
+
+    if content_header_idx is None:
+        raise ValueError("missing [CONTENT] header")
+
+    # Disallow multiple [CONTENT] headers (outside fences).
+    in_fence = False
+    for j in range(content_header_idx + 1, len(lines)):
+        line = lines[j]
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.strip() == "[CONTENT]":
+            raise ValueError("multiple [CONTENT] headers found; use exactly one")
+
+    legend = "\n".join(lines[legend_start:content_header_idx]).strip("\n")
+    content = "\n".join(lines[content_header_idx + 1 :]).strip("\n")
+    return DocBlocks(legend=legend, content=content)
+
+
+def _parse_legend_tokens(legend_block: str) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    for raw in legend_block.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"legend line must be 'TOKEN = Meaning' (got: {raw!r})")
+        left, right = line.split("=", 1)
+        token = left.strip()
+        meaning = right.strip()
+        if not token:
+            raise ValueError(f"empty token in legend line: {raw!r}")
+        if not TOKEN_RE.match(token):
+            raise ValueError(f"invalid token name: {token!r} (expected uppercase TOKEN like FOO_BAR)")
+        if token in tokens:
+            raise ValueError(f"duplicate token in legend: {token}")
+        tokens[token] = meaning
+    return tokens
+
+
+def _extract_token_refs(content_block: str) -> set[str]:
+    refs: set[str] = set()
+    in_fence = False
+    for raw in content_block.splitlines():
+        line = raw.rstrip("\n")
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        line = _strip_inline_code(line)
+        for m in TOKEN_REF_RE.finditer(line):
+            start = m.start()
+            end = m.end()
+            if start > 0 and line[start - 1] == "!":
+                continue
+
+            k = end
+            while k < len(line) and line[k].isspace():
+                k += 1
+            if k < len(line) and line[k] == "(":
+                continue
+
+            inner = m.group(1).strip()
+            is_wiki = start > 0 and line[start - 1] == "[" and end < len(line) and line[end] == "]"
+
+            if is_wiki:
+                base = inner.split("#", 1)[0].split("^", 1)[0].strip()
+                if "|" in base:
+                    base = base.split("|", 1)[0].strip()
+                if TOKEN_RE.match(base):
+                    refs.add(base)
+                continue
+
+            candidate = inner
+            if "|" in candidate:
+                token, src = candidate.split("|", 1)
+                token = token.strip()
+                src = src.strip()
+                if src != "LEGEND.md":
+                    continue
+                candidate = token
+            if TOKEN_RE.match(candidate):
+                refs.add(candidate)
+    return refs
+
+
+def _should_skip_dir(name: str) -> bool:
+    return name in {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".next",
+        ".cache",
+        "__pycache__",
+    }
+
+
+def _iter_markdown_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in sorted(root.rglob("*.md")):
+        if any(_should_skip_dir(p) for p in path.parts):
+            continue
+        files.append(path)
+    return files
+
+
+def _is_repo_root_freeform(path: Path, root: Path) -> bool:
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False
+    if rel.parent != Path("."):
+        return False
+    return rel.name in {"AGENTS.md", "README.md"}
+
+
+def _doc_kind(rel: Path) -> str:
+    if rel.parent == Path(".") and rel.name in {"AGENTS.md", "README.md"}:
+        return "repo-root"
+
+    # Generated graph artifacts (Obsidian-friendly)
+    if len(rel.parts) >= 2 and rel.parts[0] == "docs" and rel.parts[1] == "tokens":
+        if rel.name == "INDEX.md":
+            return "tokens-index"
+        return "token-page"
+    if len(rel.parts) >= 2 and rel.parts[0] == "docs" and rel.name == "GRAPH.md":
+        return "graph-hub"
+    if len(rel.parts) >= 2 and rel.parts[0] == "docs" and rel.name == "GRAPH_DOCS.md":
+        return "graph-docs"
+
+    if len(rel.parts) >= 3 and rel.parts[0] == "docs" and rel.parts[1] == "contracts":
+        if CONTRACT_FILE_RE.match(rel.name):
+            return "contract"
+        return "contracts-meta"
+    if rel.name == "LEGEND.md":
+        return "legend"
+    if rel.name in {"MAP.md", "PHILOSOPHY.md", "GOALS.md", "ARCHITECTURE.md"}:
+        return "context"
+    if rel.parts and rel.parts[0] == "docs":
+        return "doc"
+    return "doc"
+
+
+def _sorted_dict(d: dict[str, str]) -> dict[str, str]:
+    return {k: d[k] for k in sorted(d.keys())}
+
+
+GENERATED_NOTICE = "GENERATED by ./tools/context (do not edit by hand)."
+
+
+def _render_generated_context_doc(content_md: str) -> str:
+    content_md = content_md.rstrip() + "\n"
+    return "[LEGEND]\n# " + GENERATED_NOTICE + "\n\n[CONTENT]\n" + content_md
+
+
+def _write_if_changed(path: Path, text: str) -> bool:
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except Exception:
+        existing = None
+    if existing == text:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return True
+
+
+def main() -> int:
+    root = _repo_root()
+    legend_path = root / "LEGEND.md"
+    if not legend_path.exists():
+        print("ERROR: missing LEGEND.md", file=sys.stderr)
+        return 2
+
+    errors: list[str] = []
+    try:
+        global_blocks = _parse_blocks(legend_path.read_text(encoding="utf-8"))
+        global_tokens = _parse_legend_tokens(global_blocks.legend)
+    except Exception as e:
+        print(f"ERROR: LEGEND.md is invalid: {e}", file=sys.stderr)
+        return 2
+
+    md_files = _iter_markdown_files(root)
+    docs: list[dict[str, str]] = []
+    local_tokens_by_doc: dict[str, dict[str, str]] = {}
+    refs_by_doc: dict[str, list[str]] = {}
+    doc_links_raw_by_doc: dict[str, list[str]] = {}
+
+    for path in md_files:
+        rel = path.relative_to(root)
+        rel_str = str(rel)
+        kind = _doc_kind(rel)
+        docs.append({"path": rel_str, "kind": kind})
+
+        # Generated graph artifacts are derived views; keep the index focused on source docs
+        # (and avoid creating self-referential token cycles).
+        if kind in {"token-page", "tokens-index", "graph-hub", "graph-docs"}:
+            local_tokens_by_doc[rel_str] = {}
+            refs_by_doc[rel_str] = []
+            doc_links_raw_by_doc[rel_str] = []
+            continue
+
+        # Repo-root docs are intentionally freeform; include them in the doc graph, but do not
+        # parse tokens/blocks.
+        if _is_repo_root_freeform(path, root):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                text = ""
+            local_tokens_by_doc[rel_str] = {}
+            refs_by_doc[rel_str] = []
+            doc_links_raw_by_doc[rel_str] = _extract_doc_links(text)
+            continue
+
+        try:
+            blocks = _parse_blocks(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            errors.append(f"{rel_str}: {e}")
+            continue
+
+        try:
+            local_tokens = _parse_legend_tokens(blocks.legend)
+        except Exception as e:
+            errors.append(f"{rel_str}: invalid [LEGEND]: {e}")
+            continue
+
+        if path == legend_path:
+            local_tokens = {}
+
+        local_tokens_by_doc[rel_str] = _sorted_dict(local_tokens)
+        refs_by_doc[rel_str] = sorted(_extract_token_refs(blocks.content))
+        doc_links_raw_by_doc[rel_str] = _extract_doc_links(blocks.content)
+
+    if errors:
+        print("== context index errors ==", file=sys.stderr)
+        for e in errors:
+            print(f"- {e}", file=sys.stderr)
+        print(f"\nFAIL: context index ({len(errors)} error(s)).", file=sys.stderr)
+        return 2
+
+    # Build reverse index for quick navigation.
+    reverse_index: dict[str, dict[str, object]] = {}
+
+    for token, meaning in global_tokens.items():
+        reverse_index[token] = {
+            "meaning": meaning,
+            "defined_in": "LEGEND.md",
+            "used_in": [],
+        }
+
+    for doc, local_tokens in local_tokens_by_doc.items():
+        for token, meaning in local_tokens.items():
+            reverse_index[token] = {
+                "meaning": meaning,
+                "defined_in": doc,
+                "used_in": [],
+            }
+
+    for doc, refs in refs_by_doc.items():
+        for token in refs:
+            if token not in reverse_index:
+                # Gate should catch this; keep index robust anyway.
+                reverse_index[token] = {"meaning": "", "defined_in": "", "used_in": []}
+            used_in = reverse_index[token].get("used_in")
+            if isinstance(used_in, list):
+                used_in.append(doc)
+
+    for token in list(reverse_index.keys()):
+        used_in = reverse_index[token].get("used_in")
+        if isinstance(used_in, list):
+            reverse_index[token]["used_in"] = sorted(set(str(x) for x in used_in))
+
+    out_dir = root / "ai"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "context_index.json"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    payload = {
+        "version": 3,
+        "generated_at_utc": now,
+        "docs": sorted(docs, key=lambda d: (d.get("kind", ""), d.get("path", ""))),
+        "tokens_global": _sorted_dict(global_tokens),
+        "tokens_local": {k: local_tokens_by_doc[k] for k in sorted(local_tokens_by_doc.keys())},
+        "refs": {k: refs_by_doc[k] for k in sorted(refs_by_doc.keys())},
+        "reverse_index": {k: reverse_index[k] for k in sorted(reverse_index.keys())},
+        "doc_links_raw": {k: doc_links_raw_by_doc[k] for k in sorted(doc_links_raw_by_doc.keys())},
+        "generated_artifacts": {
+            "graph_hub": "docs/GRAPH.md",
+            "graph_docs_hub": "docs/GRAPH_DOCS.md",
+            "tokens_dir": "docs/tokens/",
+            "token_index": "docs/tokens/INDEX.md",
+        },
+    }
+    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    # Generate Obsidian-friendly graph artifacts (deterministic, derived views).
+    tokens_dir = root / "docs" / "tokens"
+    tokens_dir.mkdir(parents=True, exist_ok=True)
+    token_index_path = tokens_dir / "INDEX.md"
+    graph_hub_path = root / "docs" / "GRAPH.md"
+    graph_docs_hub_path = root / "docs" / "GRAPH_DOCS.md"
+
+    # Token index (global tokens only).
+    token_index_lines: list[str] = []
+    token_index_lines += ["# Token index", ""]
+    token_index_lines += [
+        "This index is generated from `LEGEND.md` (global tokens only).",
+        "Open this repository as an Obsidian vault to navigate the token graph via `[[TOKEN]]` links.",
+        "",
+        "## Tokens",
+    ]
+    for token in sorted(global_tokens.keys()):
+        meaning = global_tokens.get(token, "").strip()
+        if meaning:
+            token_index_lines.append(f"- [[{token}]] — {meaning}")
+        else:
+            token_index_lines.append(f"- [[{token}]]")
+    token_index_text = _render_generated_context_doc("\n".join(token_index_lines))
+    changed_token_index = _write_if_changed(token_index_path, token_index_text)
+
+    # Token pages (global tokens only).
+    token_pages_changed = 0
+    token_pages_written = 0
+    desired_token_files: set[str] = {"INDEX.md"}
+    for token in sorted(global_tokens.keys()):
+        desired_token_files.add(f"{token}.md")
+
+        meaning = global_tokens.get(token, "").strip()
+        used_in = reverse_index.get(token, {}).get("used_in", [])
+        used_docs = [str(x) for x in used_in] if isinstance(used_in, list) else []
+
+        lines: list[str] = []
+        lines += [f"# {token}", ""]
+        if meaning:
+            lines += [f"Meaning: {meaning}", ""]
+        lines += ["Defined in: [[LEGEND.md]]", ""]
+        lines += [f"Used in ({len(used_docs)}):"]
+        if used_docs:
+            for doc_path in used_docs:
+                lines.append(f"- [[{doc_path}]]")
+        else:
+            lines.append("- (none)")
+
+        token_text = _render_generated_context_doc("\n".join(lines))
+        token_path = tokens_dir / f"{token}.md"
+        token_pages_written += 1
+        if _write_if_changed(token_path, token_text):
+            token_pages_changed += 1
+
+    # Delete stale token pages (tokens were removed/renamed).
+    stale_deleted = 0
+    for path in sorted(tokens_dir.glob("*.md")):
+        if path.name not in desired_token_files:
+            try:
+                path.unlink()
+                stale_deleted += 1
+            except OSError:
+                pass
+
+    # Graph hub.
+    top_tokens = sorted(
+        global_tokens.keys(),
+        key=lambda t: (-len(reverse_index.get(t, {}).get("used_in", []) or []), t),
+    )[:20]
+    contract_docs = sorted([d["path"] for d in docs if d.get("kind") == "contract"])
+
+    graph_lines: list[str] = []
+    graph_lines += ["# Graph hub", ""]
+    graph_lines += [
+        "Generated by `./tools/context`.",
+        "Tip: open this repository as an Obsidian vault for instant navigation.",
+        "Doc graph: [[docs/GRAPH_DOCS.md]] (doc-to-doc hubs, orphans, and link health).",
+        "",
+        "## Start",
+        "- [[MAP.md]]",
+        "- [[docs/AGENT_PLAYBOOK.md]]",
+        "- [[docs/DOC_STYLE.md]]",
+        "- [[LEGEND.md]]",
+        "- [[docs/GRAPH_DOCS.md]]",
+        "",
+        "## Tokens",
+        f"- [[docs/tokens/INDEX.md]] (all global tokens)",
+        "",
+        "Most used (global):",
+    ]
+    for token in top_tokens:
+        used_in = reverse_index.get(token, {}).get("used_in", [])
+        used_docs = [str(x) for x in used_in] if isinstance(used_in, list) else []
+        graph_lines.append(f"- [[{token}]] (used in {len(used_docs)})")
+
+    graph_lines += ["", "## Contracts", ""]
+    if contract_docs:
+        for c in contract_docs:
+            graph_lines.append(f"- [[{c}]]")
+    else:
+        graph_lines.append("- (none)")
+
+    graph_text = _render_generated_context_doc("\n".join(graph_lines))
+    changed_graph_hub = _write_if_changed(graph_hub_path, graph_text)
+
+    # Doc graph hub (doc-to-doc links).
+    # Focus on "source docs" (exclude generated artifacts like token pages and hubs).
+    generated_kinds = {"token-page", "tokens-index", "graph-hub", "graph-docs"}
+    doc_nodes = sorted([d["path"] for d in docs if d.get("kind") not in generated_kinds])
+    kind_by_path: dict[str, str] = {d["path"]: str(d.get("kind", "doc")) for d in docs}
+
+    planned_generated_paths: set[str] = {
+        "docs/GRAPH.md",
+        "docs/GRAPH_DOCS.md",
+        "docs/tokens/INDEX.md",
+    }
+    planned_generated_paths |= {f"docs/tokens/{t}.md" for t in global_tokens.keys()}
+
+    # Ensure same-run generation does not look like "broken links" in the docs graph.
+    kind_by_path.setdefault("docs/GRAPH.md", "graph-hub")
+    kind_by_path.setdefault("docs/GRAPH_DOCS.md", "graph-docs")
+    kind_by_path.setdefault("docs/tokens/INDEX.md", "tokens-index")
+    for t in global_tokens.keys():
+        kind_by_path.setdefault(f"docs/tokens/{t}.md", "token-page")
+
+    all_md_paths = sorted(set(d["path"] for d in docs) | planned_generated_paths)
+    all_md_set = set(all_md_paths)
+
+    by_name: dict[str, list[str]] = {}
+    for p in all_md_paths:
+        name = Path(p).name
+        by_name.setdefault(name, []).append(p)
+    for k in list(by_name.keys()):
+        by_name[k] = sorted(by_name[k])
+
+    unresolved: dict[str, list[str]] = {}
+    outlinks: dict[str, set[str]] = {p: set() for p in doc_nodes}
+
+    def _resolve_target(src: str, raw: str) -> str | None:
+        raw_norm = raw.replace("\\", "/").strip()
+        if not raw_norm:
+            return None
+
+        # Try repo-relative first (for explicit paths), then doc-relative, then filename resolution.
+        candidates: list[str] = []
+        if "/" in raw_norm and not raw_norm.startswith("./") and not raw_norm.startswith("../"):
+            candidates.append(_normalize_rel_path(raw_norm))
+
+        src_dir = Path(src).parent.as_posix()
+        if src_dir == ".":
+            src_dir = ""
+        if raw_norm.startswith("./") or raw_norm.startswith("../") or ("/" not in raw_norm):
+            rel_candidate = _normalize_rel_path(f"{src_dir}/{raw_norm}" if src_dir else raw_norm)
+            candidates.append(rel_candidate)
+
+        # Filename-based resolution (only if no slashes).
+        if "/" not in raw_norm:
+            matches = by_name.get(raw_norm, [])
+            if len(matches) == 1:
+                candidates.append(matches[0])
+
+        for c in candidates:
+            if c in all_md_set:
+                return c
+        return None
+
+    for src in doc_nodes:
+        raw_targets = doc_links_raw_by_doc.get(src, [])
+        for raw in raw_targets:
+            resolved = _resolve_target(src, raw)
+            if not resolved:
+                unresolved.setdefault(src, []).append(raw)
+                continue
+            # Keep the doc graph focused: only connect to non-generated docs.
+            kind = kind_by_path.get(resolved, "doc")
+            if kind in generated_kinds:
+                continue
+            outlinks[src].add(resolved)
+
+    indeg: dict[str, int] = {p: 0 for p in doc_nodes}
+    outdeg: dict[str, int] = {p: len(outlinks[p]) for p in doc_nodes}
+    for src, tgts in outlinks.items():
+        for t in tgts:
+            if t in indeg:
+                indeg[t] += 1
+
+    hubs = sorted(doc_nodes, key=lambda p: (-indeg.get(p, 0), p))[:20]
+    connectors = sorted(doc_nodes, key=lambda p: (-outdeg.get(p, 0), p))[:20]
+    orphans = sorted([p for p in doc_nodes if indeg.get(p, 0) == 0 and outdeg.get(p, 0) == 0])
+
+    docs_lines: list[str] = []
+    docs_lines += ["# Docs graph hub", ""]
+    docs_lines += [
+        "Generated by `./tools/context`.",
+        "This page summarizes doc-to-doc connectivity (wiki-links + Markdown links).",
+        "Tip: open this repository as an Obsidian vault for instant graph navigation.",
+        "",
+        "## Start",
+        "- [[README.md]]",
+        "- [[MAP.md]]",
+        "- [[docs/AGENT_PLAYBOOK.md]]",
+        "- [[docs/DOC_STYLE.md]]",
+        "- [[LEGEND.md]]",
+        "- [[docs/GRAPH.md]] (token + contract hub)",
+        "",
+    ]
+    docs_lines += ["## Hubs (most referenced docs)", ""]
+    for p in hubs:
+        docs_lines.append(f"- [[{p}]] (in: {indeg.get(p,0)}, out: {outdeg.get(p,0)})")
+
+    docs_lines += ["", "## Connectors (most outgoing doc links)", ""]
+    for p in connectors:
+        docs_lines.append(f"- [[{p}]] (out: {outdeg.get(p,0)}, in: {indeg.get(p,0)})")
+
+    docs_lines += ["", f"## Orphans (no source doc-to-doc links) — {len(orphans)}", ""]
+    if orphans:
+        for p in orphans[:80]:
+            docs_lines.append(f"- [[{p}]]")
+        if len(orphans) > 80:
+            docs_lines.append(f"- ... ({len(orphans) - 80} more)")
+    else:
+        docs_lines.append("- (none)")
+
+    broken = {k: v for k, v in unresolved.items() if v}
+    if broken:
+        docs_lines += ["", "## Unresolved doc links", ""]
+        for src in sorted(broken.keys()):
+            uniq = []
+            seen = set()
+            for x in broken[src]:
+                if x in seen:
+                    continue
+                seen.add(x)
+                uniq.append(x)
+            preview = ", ".join(uniq[:8])
+            more = f" (+{len(uniq)-8} more)" if len(uniq) > 8 else ""
+            docs_lines.append(f"- [[{src}]]: {preview}{more}")
+
+    docs_text = _render_generated_context_doc("\n".join(docs_lines))
+    changed_graph_docs_hub = _write_if_changed(graph_docs_hub_path, docs_text)
+
+    print(f"Wrote: {out_path}")
+    if changed_graph_hub:
+        print(f"Wrote: {graph_hub_path}")
+    if changed_graph_docs_hub:
+        print(f"Wrote: {graph_docs_hub_path}")
+    if changed_token_index:
+        print(f"Wrote: {token_index_path}")
+    print(f"Wrote: {tokens_dir} ({token_pages_written} token page(s), {token_pages_changed} changed, {stale_deleted} stale deleted)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -267,3 +267,107 @@ pub struct AnchorsListDto {
     pub anchors: Vec<AnchorDto>,
     pub has_more: bool,
 }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureScopeDto {
+    pub kind: String,
+    pub id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureSummaryDto {
+    pub anchors_total: usize,
+    pub tasks_total: usize,
+    pub knowledge_total: usize,
+    pub reasoning_nodes_total: usize,
+    pub blocked_total: usize,
+    pub evidence_total: usize,
+    pub hypothesis_total: usize,
+    pub proven_ratio: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureClusterDto {
+    pub id: String,
+    pub label: String,
+    pub layer: String,
+    pub node_count: usize,
+    pub risk_count: usize,
+    pub proven_ratio: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureNodeDto {
+    pub id: String,
+    pub label: String,
+    pub node_type: String,
+    pub layer: String,
+    pub status: Option<String>,
+    pub tags: Vec<String>,
+    pub cluster_id: String,
+    pub risk_score: f64,
+    pub evidence_score: f64,
+    pub last_ts_ms: i64,
+    pub refs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureEdgeDto {
+    pub from: String,
+    pub to: String,
+    pub rel: String,
+    pub weight: usize,
+    pub risk: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureRiskDto {
+    pub id: String,
+    pub severity: String,
+    pub title: String,
+    pub reason: String,
+    pub node_id: Option<String>,
+    pub refs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureHotspotDto {
+    pub id: String,
+    pub label: String,
+    pub node_type: String,
+    pub degree: usize,
+    pub risk_score: f64,
+    pub evidence_score: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureLensDto {
+    pub scope: ArchitectureScopeDto,
+    pub mode: String,
+    pub include_draft: bool,
+    pub time_window: String,
+    pub generated_at_ms: i64,
+    pub summary: ArchitectureSummaryDto,
+    pub clusters: Vec<ArchitectureClusterDto>,
+    pub nodes: Vec<ArchitectureNodeDto>,
+    pub edges: Vec<ArchitectureEdgeDto>,
+    pub risks: Vec<ArchitectureRiskDto>,
+    pub hotspots: Vec<ArchitectureHotspotDto>,
+    pub next_actions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureProvenanceRecordDto {
+    pub kind: String,
+    pub id: String,
+    pub label: Option<String>,
+    pub note: Option<String>,
+    pub ts_ms: Option<i64>,
+    pub refs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ArchitectureProvenanceDto {
+    pub node_id: String,
+    pub records: Vec<ArchitectureProvenanceRecordDto>,
+}

@@ -161,36 +161,6 @@ pub(super) fn definitions() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "think_add_knowledge",
-            "description": "Create a knowledge card (wrapper over think_card). Visibility defaults to v:draft unless explicitly set.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workspace": { "type": "string" },
-                    "target": { "type": "string" },
-                    "branch": { "type": "string" },
-                    "trace_doc": { "type": "string" },
-                    "graph_doc": { "type": "string" },
-                    "step": { "type": "string" },
-                    "anchor": { "type": "string", "description": "Anchor slug or a:<slug> (adds tag)." },
-                    "key": { "type": "string", "description": "Knowledge key slug (adds k:<slug> tag)." },
-                    "key_mode": { "type": "string", "enum": ["explicit", "auto"] },
-                    "lint_mode": { "type": "string", "enum": ["manual", "auto"] },
-                    "agent_id": { "type": "string" },
-                    "card": {
-                        "anyOf": [
-                            { "type": "object" },
-                            { "type": "string" }
-                        ]
-                    },
-                    "supports": { "type": "array", "items": { "type": "string" } },
-                    "blocks": { "type": "array", "items": { "type": "string" } },
-                    "verbosity": { "type": "string", "enum": ["full", "compact"] }
-                },
-                "required": ["workspace", "card"]
-            }
-        }),
-        json!({
             "name": "think_add_frame",
             "description": "Create a frame card (wrapper over think_card).",
             "inputSchema": {

@@ -52,6 +52,18 @@ pub(crate) fn core_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "workspace_list",
+            "description": "List known workspaces (includes bound path when available).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer" },
+                    "offset": { "type": "integer" }
+                },
+                "required": []
+            }
+        }),
+        json!({
             "name": "open",
             "description": "Open a single artifact by stable id/reference (CARD-..., <doc>@<seq>, a:<anchor>, runner:<id>, TASK-..., PLAN-..., JOB-...).",
             "inputSchema": {
@@ -61,6 +73,7 @@ pub(crate) fn core_definitions() -> Vec<Value> {
                     "id": { "type": "string" },
                     "limit": { "type": "integer" },
                     "include_drafts": { "type": "boolean" },
+                    "include_content": { "type": "boolean" },
                     "max_chars": { "type": "integer" },
                     "verbosity": {
                         "type": "string",

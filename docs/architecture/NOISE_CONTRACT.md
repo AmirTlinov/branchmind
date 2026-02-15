@@ -32,7 +32,7 @@ This document fixes the non-negotiable **anti-noise invariants** and the **test 
   - state line must include `ref=<id>` (stable navigation handle; survives truncation)
 - **Progressive disclosure**: **3 lines max**
   - state line
-  - `tools/list toolset=...`
+  - `system op=schema.get args={cmd:"..."}`
   - the hidden action (copy/paste-ready args)
 - **Budget warnings**: **≤ 4 lines**
   - warnings must be `WARNING: BUDGET_*`, never `ERROR: BUDGET_*`

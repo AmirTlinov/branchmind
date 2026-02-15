@@ -22,6 +22,10 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             "decompose" => "tasks.plan.decompose".to_string(),
             "evidence_capture" => "tasks.evidence.capture".to_string(),
             "close_step" => "tasks.step.close".to_string(),
+            "slices_propose_next" => "tasks.slices.propose_next".to_string(),
+            "slices_apply" => "tasks.slices.apply".to_string(),
+            "slice_open" => "tasks.slice.open".to_string(),
+            "slice_validate" => "tasks.slice.validate".to_string(),
             _ => format!("tasks.{}", name_to_cmd_segments(suffix)),
         };
         let mut op_aliases = Vec::<String>::new();
@@ -33,6 +37,9 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
             "decompose" => op_aliases.push("plan.decompose".to_string()),
             "evidence_capture" => op_aliases.push("evidence.capture".to_string()),
             "close_step" => op_aliases.push("step.close".to_string()),
+            "planfs_init" => op_aliases.push("planfs.init".to_string()),
+            "planfs_export" => op_aliases.push("planfs.export".to_string()),
+            "planfs_import" => op_aliases.push("planfs.import".to_string()),
             "search" => {
                 op_aliases.push("search".to_string());
                 tier = Tier::Gold;
@@ -60,7 +67,18 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
 
         let doc_ref_anchor = if matches!(
             suffix,
-            "create" | "decompose" | "evidence_capture" | "close_step" | "search"
+            "create"
+                | "decompose"
+                | "evidence_capture"
+                | "close_step"
+                | "search"
+                | "planfs_init"
+                | "planfs_export"
+                | "planfs_import"
+                | "slices_propose_next"
+                | "slices_apply"
+                | "slice_open"
+                | "slice_validate"
         ) {
             format!("#{cmd}")
         } else {
@@ -121,6 +139,39 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         handler_name: None,
         handler: Some(handle_execute_next),
     });
+
+    // v1: tasks.exec.summary (one-command preset: exec summary + critical regressions)
+    specs.push(CommandSpec {
+        cmd: "tasks.exec.summary".to_string(),
+        domain_tool: ToolName::TasksOps,
+        tier: Tier::Gold,
+        stability: Stability::Stable,
+        doc_ref: DocRef {
+            path: "docs/contracts/V1_COMMANDS.md".to_string(),
+            anchor: "#tasks.exec.summary".to_string(),
+        },
+        safety: Safety {
+            destructive: false,
+            confirm_level: ConfirmLevel::None,
+            idempotent: true,
+        },
+        budget: BudgetPolicy::standard(),
+        schema: SchemaSource::Custom {
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string" },
+                    "plan": { "type": "string" },
+                    "target": { "type": "string" }
+                },
+                "required": []
+            }),
+            example_minimal_args: json!({}),
+        },
+        op_aliases: vec!["exec.summary".to_string()],
+        handler_name: None,
+        handler: Some(handle_exec_summary),
+    });
 }
 
 fn handle_execute_next(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
@@ -163,4 +214,13 @@ fn handle_execute_next(server: &mut crate::McpServer, env: &Envelope) -> OpRespo
     resp.refs = report.refs;
     resp.actions = report.actions;
     resp
+}
+
+fn handle_exec_summary(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
+    crate::ops::build_tasks_exec_summary(
+        server,
+        env.cmd.clone(),
+        env.workspace.as_deref(),
+        env.args.clone(),
+    )
 }

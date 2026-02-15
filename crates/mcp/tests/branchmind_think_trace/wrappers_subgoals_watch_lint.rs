@@ -262,18 +262,6 @@ fn branchmind_think_wrappers_subgoals_watch_lint_smoke() {
         "think_watch pagination.count must match entries length"
     );
 
-    let lint = server.request(json!({
-        "jsonrpc": "2.0",
-        "id": 22,
-        "method": "tools/call",
-        "params": { "name": "think", "arguments": { "op": "call", "cmd": "think.knowledge.lint", "args": { "workspace": "ws_think_wrap" } } }
-    }));
-    let lint_text = extract_tool_text(&lint);
-    assert_eq!(
-        lint_text.get("success").and_then(|v| v.as_bool()),
-        Some(true)
-    );
-
     // Keep at least one of the ids used to avoid “dead store” refactors.
     assert!(!hypo1_id.is_empty());
     assert!(!hypo2_id.is_empty());

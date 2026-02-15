@@ -45,8 +45,11 @@ impl McpServer {
             .get("doc_kind")
             .and_then(|v| v.as_str())
             .unwrap_or("trace");
-        if doc_kind != "trace" && doc_kind != "notes" {
-            return ai_error("INVALID_INPUT", "doc_kind must be 'trace' or 'notes'");
+        if doc_kind != "trace" && doc_kind != "notes" && doc_kind != "plan_spec" {
+            return ai_error(
+                "INVALID_INPUT",
+                "doc_kind must be 'trace', 'notes', or 'plan_spec'",
+            );
         }
 
         let cursor = match optional_i64(args_obj, "cursor") {
@@ -83,7 +86,13 @@ impl McpServer {
                 let doc = match doc_kind {
                     "trace" => reasoning.trace_doc,
                     "notes" => reasoning.notes_doc,
-                    _ => return ai_error("INVALID_INPUT", "doc_kind must be 'trace' or 'notes'"),
+                    "plan_spec" => super::plan_spec::plan_spec_doc_for_target(&target_id),
+                    _ => {
+                        return ai_error(
+                            "INVALID_INPUT",
+                            "doc_kind must be 'trace', 'notes', or 'plan_spec'",
+                        );
+                    }
                 };
                 (reasoning.branch, doc)
             }
@@ -97,6 +106,7 @@ impl McpServer {
                 };
                 let doc = doc.unwrap_or_else(|| match doc_kind {
                     "notes" => DEFAULT_NOTES_DOC.to_string(),
+                    "plan_spec" => "plan_spec".to_string(),
                     _ => DEFAULT_TRACE_DOC.to_string(),
                 });
                 (branch, doc)
@@ -119,6 +129,29 @@ impl McpServer {
         } else {
             Value::Null
         };
+        let plan_spec = if doc_kind == "plan_spec" {
+            match super::plan_spec::load_latest_plan_spec(
+                &mut self.store,
+                &workspace,
+                &branch,
+                &doc,
+            ) {
+                Ok(Some((entry, value))) => json!({
+                    "doc_kind": "plan_spec",
+                    "entry": {
+                        "seq": entry.seq,
+                        "ts_ms": entry.ts_ms,
+                        "branch": entry.branch,
+                        "doc": entry.doc
+                    },
+                    "value": value
+                }),
+                Ok(None) => Value::Null,
+                Err(resp) => return resp,
+            }
+        } else {
+            Value::Null
+        };
 
         let mut result = json!({
             "workspace": workspace.as_str(),
@@ -126,6 +159,7 @@ impl McpServer {
             "doc": doc,
             "entries": entries,
             "sequential": sequential,
+            "plan_spec": plan_spec,
             "pagination": {
                 "cursor": cursor,
                 "next_cursor": slice.next_cursor,
@@ -194,6 +228,9 @@ impl McpServer {
                     }
                     if json_len_chars(value) > limit {
                         changed |= drop_fields_at(value, &[], &["sequential"]);
+                    }
+                    if json_len_chars(value) > limit {
+                        changed |= drop_fields_at(value, &[], &["plan_spec"]);
                     }
                     if json_len_chars(value) > limit
                         && ensure_minimal_list_at(value, &["entries"], entries_count, "entries")

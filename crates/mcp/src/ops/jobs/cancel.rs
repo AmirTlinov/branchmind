@@ -65,6 +65,49 @@ fn optional_string_array(
     }
 }
 
+fn optional_bool(
+    args_obj: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<bool>, OpError> {
+    let Some(v) = args_obj.get(key) else {
+        return Ok(None);
+    };
+    match v {
+        Value::Null => Ok(None),
+        Value::Bool(b) => Ok(Some(*b)),
+        _ => Err(OpError {
+            code: "INVALID_INPUT".to_string(),
+            message: format!("{key}: expected bool"),
+            recovery: Some(format!("Provide args.{key} as true/false (or omit it)")),
+        }),
+    }
+}
+
+fn optional_i64(
+    args_obj: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<i64>, OpError> {
+    let Some(v) = args_obj.get(key) else {
+        return Ok(None);
+    };
+    match v {
+        Value::Null => Ok(None),
+        Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| OpError {
+                code: "INVALID_INPUT".to_string(),
+                message: format!("{key}: expected integer"),
+                recovery: Some(format!("Provide args.{key} as an integer (or omit it)")),
+            })
+            .map(Some),
+        _ => Err(OpError {
+            code: "INVALID_INPUT".to_string(),
+            message: format!("{key}: expected integer"),
+            recovery: Some(format!("Provide args.{key} as an integer (or omit it)")),
+        }),
+    }
+}
+
 pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) -> OpResponse {
     let Some(ws) = env.workspace.as_deref() else {
         return OpResponse::error(
@@ -103,6 +146,44 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
         );
     };
 
+    if server.jobs_unknown_args_fail_closed_enabled {
+        // NOTE: parse_envelope injects `workspace` into env.args for storage-layer convenience.
+        // Treat it as an implicit envelope key for strict unknown-args guards.
+        const IMPLICIT_ENVELOPE_KEYS: &[&str] =
+            &["workspace", "context_budget", "limit", "max_chars"];
+        let allowed = [
+            "job",
+            "reason",
+            "refs",
+            "meta",
+            "force_running",
+            "expected_revision",
+        ];
+        let mut unknown = args_obj
+            .keys()
+            .filter(|k| {
+                !allowed.iter().any(|a| a == &k.as_str())
+                    && !IMPLICIT_ENVELOPE_KEYS.iter().any(|ik| ik == &k.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        unknown.sort();
+        unknown.dedup();
+        if !unknown.is_empty() {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: format!("unknown args: {}", unknown.join(", ")),
+                    recovery: Some(
+                        "Remove unknown args or inspect schema via system op=schema.get (cmd=jobs.cancel)."
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+    }
+
     let job_id = match require_string(args_obj, "job") {
         Ok(v) => v,
         Err(err) => return OpResponse::error(env.cmd.clone(), err),
@@ -112,6 +193,14 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
         Err(err) => return OpResponse::error(env.cmd.clone(), err),
     };
     let mut refs = match optional_string_array(args_obj, "refs") {
+        Ok(v) => v,
+        Err(err) => return OpResponse::error(env.cmd.clone(), err),
+    };
+    let force_running = match optional_bool(args_obj, "force_running") {
+        Ok(v) => v.unwrap_or(false),
+        Err(err) => return OpResponse::error(env.cmd.clone(), err),
+    };
+    let expected_revision = match optional_i64(args_obj, "expected_revision") {
         Ok(v) => v,
         Err(err) => return OpResponse::error(env.cmd.clone(), err),
     };
@@ -167,6 +256,92 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
     match job.status.as_str() {
         "QUEUED" => {}
         "RUNNING" => {
+            if force_running {
+                let canceled = match server.store.job_cancel(
+                    &workspace,
+                    bm_storage::JobCancelRequest {
+                        id: job_id.clone(),
+                        reason,
+                        refs,
+                        meta_json,
+                        force_running: true,
+                        expected_revision,
+                    },
+                ) {
+                    Ok(v) => v,
+                    Err(crate::StoreError::UnknownId) => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "UNKNOWN_ID".to_string(),
+                                message: "Unknown job id".to_string(),
+                                recovery: Some(
+                                    "Call jobs op=radar to list jobs, then retry.".to_string(),
+                                ),
+                            },
+                        );
+                    }
+                    Err(crate::StoreError::RevisionMismatch { expected, actual }) => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "CONFLICT".to_string(),
+                                message: format!(
+                                    "job revision mismatch (expected_revision={expected}, actual_revision={actual})"
+                                ),
+                                recovery: Some(
+                                    "Refresh the job (jobs.open) and retry with an updated expected_revision (or omit it)."
+                                        .to_string(),
+                                ),
+                            },
+                        );
+                    }
+                    Err(crate::StoreError::JobAlreadyTerminal { job_id, status }) => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "CONFLICT".to_string(),
+                                message: format!(
+                                    "job already terminal (job_id={job_id}, status={status})"
+                                ),
+                                recovery: Some(
+                                    "Open the job to inspect prior completion.".to_string(),
+                                ),
+                            },
+                        );
+                    }
+                    Err(crate::StoreError::InvalidInput(msg)) => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "INVALID_INPUT".to_string(),
+                                message: msg.to_string(),
+                                recovery: None,
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        return OpResponse::error(
+                            env.cmd.clone(),
+                            OpError {
+                                code: "STORE_ERROR".to_string(),
+                                message: crate::format_store_error(err),
+                                recovery: None,
+                            },
+                        );
+                    }
+                };
+
+                return OpResponse::success(
+                    env.cmd.clone(),
+                    json!({
+                        "workspace": workspace.as_str(),
+                        "job": job_row_to_json(canceled.job),
+                        "event": job_event_to_json(canceled.event)
+                    }),
+                );
+            }
+
             let mut resp = OpResponse::error(
                 env.cmd.clone(),
                 OpError {
@@ -292,6 +467,8 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
             reason,
             refs,
             meta_json,
+            force_running: false,
+            expected_revision,
         },
     ) {
         Ok(v) => v,
@@ -331,6 +508,21 @@ pub(super) fn handle_jobs_cancel(server: &mut crate::McpServer, env: &Envelope) 
                 risk: "Низкий".to_string(),
             });
             return resp;
+        }
+        Err(crate::StoreError::RevisionMismatch { expected, actual }) => {
+            return OpResponse::error(
+                env.cmd.clone(),
+                OpError {
+                    code: "CONFLICT".to_string(),
+                    message: format!(
+                        "job revision mismatch (expected_revision={expected}, actual_revision={actual})"
+                    ),
+                    recovery: Some(
+                        "Refresh the job (jobs.open) and retry with an updated expected_revision (or omit it)."
+                            .to_string(),
+                    ),
+                },
+            );
         }
         Err(crate::StoreError::JobNotCancelable { job_id, status }) => {
             let mut resp = OpResponse::error(

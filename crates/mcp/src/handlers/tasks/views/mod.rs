@@ -6,6 +6,7 @@ mod context;
 mod delta;
 mod focus;
 mod plan;
+mod planfs;
 mod radar;
 mod resume;
 mod search;

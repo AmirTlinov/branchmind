@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 // - deterministic (stable ordering),
 // - bounded in behavior (does not scan graph content; only uses the anchor_links index).
 pub(super) fn apply(conn: &Connection) -> Result<(), StoreError> {
-    // Fast path: nothing to do.
+    // Fast path for missing anchors backfill: nothing to do.
     let has_missing: Option<()> = conn
         .query_row(
             r#"
@@ -30,11 +30,12 @@ pub(super) fn apply(conn: &Connection) -> Result<(), StoreError> {
             |_| Ok(()),
         )
         .optional()?;
-    if has_missing.is_none() {
-        return Ok(());
+    if has_missing.is_some() {
+        backfill_missing_anchors_from_links(conn)?;
     }
 
-    backfill_missing_anchors_from_links(conn)
+    backfill_anchor_bindings_from_refs(conn)?;
+    Ok(())
 }
 
 fn backfill_missing_anchors_from_links(conn: &Connection) -> Result<(), StoreError> {
@@ -93,6 +94,74 @@ fn backfill_missing_anchors_from_links(conn: &Connection) -> Result<(), StoreErr
             ],
         )?;
     }
+    Ok(())
+}
+
+fn backfill_anchor_bindings_from_refs(conn: &Connection) -> Result<(), StoreError> {
+    // Idempotent: insert missing bindings derived from anchor.refs_json path refs.
+    let has_missing: Option<()> = conn
+        .query_row(
+            r#"
+            SELECT 1
+            FROM anchors a
+            WHERE a.refs_json LIKE '%path:%'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM anchor_bindings b
+                WHERE b.workspace=a.workspace
+                  AND b.anchor_id=a.id
+                  AND b.kind='path'
+              )
+            LIMIT 1
+            "#,
+            [],
+            |_| Ok(()),
+        )
+        .optional()?;
+    if has_missing.is_none() {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT workspace, id, refs_json, created_at_ms, updated_at_ms
+        FROM anchors
+        ORDER BY workspace ASC, id ASC
+        "#,
+    )?;
+    let mut rows = stmt.query([])?;
+
+    let mut insert = conn.prepare(
+        r#"
+        INSERT OR IGNORE INTO anchor_bindings(workspace, anchor_id, kind, repo_rel, created_at_ms, updated_at_ms)
+        VALUES (?1, ?2, 'path', ?3, ?4, ?5)
+        "#,
+    )?;
+
+    while let Some(row) = rows.next()? {
+        let workspace: String = row.get(0)?;
+        let anchor_id: String = row.get(1)?;
+        let refs_json: Option<String> = row.get(2)?;
+        let created_at_ms: i64 = row.get(3)?;
+        let updated_at_ms: i64 = row.get(4)?;
+
+        let refs = crate::store::anchors::decode_json_string_list(refs_json)?;
+        for r in refs {
+            let repo_rel = match crate::store::anchors::repo_rel_from_path_ref(&r) {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(_) => continue,
+            };
+            insert.execute(params![
+                workspace.as_str(),
+                anchor_id.as_str(),
+                repo_rel.as_str(),
+                created_at_ms,
+                updated_at_ms
+            ])?;
+        }
+    }
+
     Ok(())
 }
 

@@ -24,5 +24,5 @@ rebuilt/replaced, already running MCP server processes will automatically upgrad
 
 Default:
 
-- Hot reload is **disabled by default** for stability in long-lived sessions.
-- Enable explicitly when developing locally (stdio/shared/daemon).
+- In `--shared` proxy mode, hot reload is **enabled by default** (DX: avoids stale daemons after rebuilds).
+- In `--daemon` mode (and plain stdio), hot reload is **disabled by default** for stability.

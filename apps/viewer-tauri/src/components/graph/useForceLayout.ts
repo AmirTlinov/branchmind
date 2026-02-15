@@ -7,6 +7,9 @@ const SETTLE_DAMPING = 0.86;
 const AMBIENT_ALPHA = 0.02;
 const MIN_NODE_SPACING = 160;
 const IDEAL_EDGE_DIST = 280;
+const ACTIVE_TARGET_FRAME_MS = 16;
+const IDLE_TARGET_FRAME_MS = 28;
+const MAX_REPULSION_NEIGHBORS = 180;
 
 export interface SimNode extends GraphNodeDto {
   label: string;
@@ -47,17 +50,21 @@ export function useForceLayout({
 }): {
   simNodes: SimNode[];
   nodeVersion: number;
-  draggingNodeId: React.MutableRefObject<string | null>;
-  alphaRef: React.MutableRefObject<number>;
+  draggingNodeId: React.RefObject<string | null>;
+  alphaRef: React.RefObject<number>;
   bumpAlpha: (value?: number) => void;
 } {
   const simNodesRef = useRef<SimNode[]>([]);
   const alphaRef = useRef(0.5);
   const draggingNodeId = useRef<string | null>(null);
+  const lastTickTsRef = useRef(0);
   const [nodeVersion, setNodeVersion] = useState(0);
 
   const edgesRef = useRef(edges);
   edgesRef.current = edges;
+
+  const onFrameRef = useRef(onFrame);
+  onFrameRef.current = onFrame;
 
   const adjacency = useMemo(() => {
     const m = new Map<string, GraphEdgeDto[]>();
@@ -99,8 +106,16 @@ export function useForceLayout({
     setNodeVersion((v) => v + 1);
   }, [nodes]);
 
-  useAnimationFrame((_t, delta) => {
-    const dt = Math.min(delta, 40) / 16;
+  useAnimationFrame((t) => {
+    const dragging = !!draggingNodeId.current;
+    const targetFrameMs = dragging ? ACTIVE_TARGET_FRAME_MS : IDLE_TARGET_FRAME_MS;
+    if (lastTickTsRef.current !== 0 && t - lastTickTsRef.current < targetFrameMs) {
+      return;
+    }
+    const stepMs =
+      lastTickTsRef.current === 0 ? targetFrameMs : Math.min(t - lastTickTsRef.current, 48);
+    lastTickTsRef.current = t;
+    const dt = stepMs / 16;
     const simNodes = simNodesRef.current;
     if (simNodes.length === 0) return;
 
@@ -111,7 +126,9 @@ export function useForceLayout({
     const isIdle = alpha <= AMBIENT_ALPHA + 0.0005 && !draggingNodeId.current;
 
     // When the system is fully settled, skip the O(n^2) force computations.
-    // We still call `onFrame` so edges keep redrawing during viewport pan/zoom.
+    // NOTE: GraphCanvas now has its own rAF loop that redraws edges on viewport
+    // pan/zoom (and on simulation movement), so `onFrame` is no longer needed
+    // in the hard-idle path.
     let maxSpeed = 0;
     for (const n of simNodes) {
       maxSpeed = Math.max(maxSpeed, Math.abs(n.vx) + Math.abs(n.vy));
@@ -125,13 +142,18 @@ export function useForceLayout({
           n.vy = 0;
         }
       }
-      onFrame?.(simNodes, edgesRef.current);
       return;
     }
 
     const map = isIdle ? null : new Map(simNodes.map((n) => [n.id, n] as const));
 
-    for (let i = 0; i < simNodes.length; i++) {
+    const nodeCount = simNodes.length;
+    const repulsionStep =
+      nodeCount > MAX_REPULSION_NEIGHBORS
+        ? Math.ceil(nodeCount / MAX_REPULSION_NEIGHBORS)
+        : 1;
+
+    for (let i = 0; i < nodeCount; i++) {
       const node = simNodes[i];
 
       if (draggingNodeId.current === node.id) {
@@ -144,8 +166,8 @@ export function useForceLayout({
       let fy = 0;
 
       // Repulsion
-      for (let j = 0; j < simNodes.length; j++) {
-        if (i === j) continue;
+      for (let offset = 1; offset < nodeCount; offset += repulsionStep) {
+        const j = (i + offset) % nodeCount;
         const other = simNodes[j];
         const dx = node._x - other._x;
         const dy = node._y - other._y;
@@ -196,7 +218,7 @@ export function useForceLayout({
       node.y.set(node._y);
     }
 
-    onFrame?.(simNodes, edgesRef.current);
+    onFrameRef.current?.(simNodes, edgesRef.current);
   });
 
   const bumpAlpha = useCallback((value = 0.1) => {

@@ -759,8 +759,6 @@ impl McpServer {
             close_args_obj.insert("checkpoints".to_string(), Value::String("gate".to_string()));
         }
 
-        let mut strict_override_applied = false;
-
         // Strict reasoning gate (opt-in via task.reasoning_mode).
         // This is a "soft-hard" gate: it blocks closing the step unless minimum reasoning
         // discipline is present (tests + counter-position), but it provides portal-first
@@ -789,18 +787,16 @@ impl McpServer {
                     warnings: Some(&mut warnings),
                     note_event: Some(&mut note_event),
                 };
-                strict_override_applied = match enforce_strict_reasoning_gate(ctx) {
-                    Ok(v) => v,
-                    Err(resp) => return resp,
-                };
+                if let Err(resp) = enforce_strict_reasoning_gate(ctx) {
+                    return resp;
+                }
             }
         }
 
-        let close = if strict_override_applied {
-            self.close_step_internal(Value::Object(close_args_obj), false)
-        } else {
-            self.tool_tasks_close_step(Value::Object(close_args_obj))
-        };
+        // strict gate is already evaluated above with macro-call semantics (pre-defaults).
+        // Avoid re-running it inside tool_tasks_close_step to prevent double-gating on
+        // auto-injected checkpoints defaults.
+        let close = self.close_step_internal(Value::Object(close_args_obj), false);
         if !close
             .get("success")
             .and_then(|v| v.as_bool())

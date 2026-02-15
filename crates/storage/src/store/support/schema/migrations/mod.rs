@@ -2,6 +2,7 @@
 
 mod anchors;
 mod jobs;
+mod knowledge;
 mod plans;
 mod steps;
 mod tasks;
@@ -17,6 +18,7 @@ pub(super) fn apply(conn: &Connection) -> Result<(), StoreError> {
     tasks::apply(conn)?;
     steps::apply(conn)?;
     jobs::apply(conn)?;
+    knowledge::apply(conn)?;
     anchors::apply(conn)?;
     Ok(())
 }

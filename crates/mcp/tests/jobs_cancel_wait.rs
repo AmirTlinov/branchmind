@@ -278,3 +278,218 @@ fn jobs_wait_timeout_zero_returns_done_true_for_terminal() {
         Some("DONE")
     );
 }
+
+#[test]
+fn jobs_wait_rejects_timeout_above_transport_safe_cap() {
+    let mut server =
+        Server::start_initialized("jobs_wait_rejects_timeout_above_transport_safe_cap");
+    let ws = "ws_jobs_wait_timeout_cap";
+    let job_id = create_job(&mut server, ws);
+
+    let resp = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "wait",
+                "args": { "job": job_id, "timeout_ms": 56_000, "poll_ms": 1_000 }
+            }
+        }
+    }));
+    let text = extract_tool_text(&resp);
+    assert_eq!(text.get("success").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(
+        text.get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_INPUT")
+    );
+    let recovery = text
+        .get("error")
+        .and_then(|v| v.get("recovery"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(
+        recovery.contains("<= 25000"),
+        "expected transport-safe timeout hint in recovery, got: {recovery}"
+    );
+}
+
+#[test]
+fn jobs_wait_stream_accepts_max_events_without_limit_conflict() {
+    let mut server =
+        Server::start_initialized("jobs_wait_stream_accepts_max_events_without_limit_conflict");
+    let ws = "ws_jobs_wait_max_events";
+    let job_id = create_job(&mut server, ws);
+
+    let resp = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "wait",
+                "args": {
+                    "job": job_id,
+                    "mode": "stream",
+                    "max_events": 5,
+                    "timeout_ms": 0
+                }
+            }
+        }
+    }));
+
+    let text = extract_tool_text(&resp);
+    assert_eq!(
+        text.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "jobs.wait with max_events should not fail from injected limit conflict; got: {text}"
+    );
+    assert_eq!(
+        text.get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        None,
+        "jobs.wait with max_events should not produce INVALID_INPUT; got: {text}"
+    );
+}
+
+#[test]
+fn jobs_radar_does_not_emit_live_missing_active_job_for_live_idle_runner() {
+    let mut server = Server::start_initialized(
+        "jobs_radar_does_not_emit_live_missing_active_job_for_live_idle_runner",
+    );
+    let ws = "ws_jobs_radar_live_idle";
+    let job_id = create_job(&mut server, ws);
+
+    let claim = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "claim",
+                "args": {
+                    "job": job_id,
+                    "runner_id": "runner:diag-live-idle"
+                }
+            }
+        }
+    }));
+    let claim_text = extract_tool_text(&claim);
+    assert_eq!(
+        claim_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let cancel = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "cancel",
+                "args": {
+                    "job": claim_text.get("result").and_then(|v| v.get("job")).and_then(|v| v.get("job_id")).and_then(|v| v.as_str()).expect("job id"),
+                    "force_running": true
+                }
+            }
+        }
+    }));
+    let cancel_text = extract_tool_text(&cancel);
+    assert_eq!(
+        cancel_text.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let _heartbeat = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "runner.heartbeat",
+                "args": {
+                    "runner_id": "runner:diag-live-idle",
+                    "status": "live"
+                }
+            }
+        }
+    }));
+
+    let radar = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "radar",
+                "args": {}
+            }
+        }
+    }));
+    let radar_text = extract_tool_text(&radar);
+    let issues = radar_text
+        .get("result")
+        .and_then(|v| v.get("runner_diagnostics"))
+        .and_then(|v| v.get("issues"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        issues
+            .iter()
+            .all(|it| it.get("kind").and_then(|v| v.as_str()) != Some("live_missing_active_job")),
+        "live runner without active job should not raise false-positive diagnostic when no RUNNING job exists: {issues:?}"
+    );
+}
+
+#[test]
+fn jobs_macro_rotate_stalled_reports_arg_coercion_warning() {
+    let mut server =
+        Server::start_initialized("jobs_macro_rotate_stalled_reports_arg_coercion_warning");
+    let ws = "ws_jobs_rotate_coerce";
+
+    let resp = server.request_raw(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "jobs",
+            "arguments": {
+                "workspace": ws,
+                "op": "macro.rotate.stalled",
+                "args": {
+                    "stall_after_s": 0,
+                    "dry_run": true
+                }
+            }
+        }
+    }));
+    let text = extract_tool_text(&resp);
+    assert_eq!(text.get("success").and_then(|v| v.as_bool()), Some(true));
+    let warnings = text
+        .get("warnings")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.get("code").and_then(|v| v.as_str()) == Some("ARG_COERCED")),
+        "expected ARG_COERCED warning when stall_after_s is out of range; got: {warnings:?}"
+    );
+}

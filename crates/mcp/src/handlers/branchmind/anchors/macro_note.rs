@@ -3,6 +3,7 @@
 use super::{ANCHORS_GRAPH_DOC, ANCHORS_TRACE_DOC};
 use crate::*;
 use serde_json::{Value, json};
+use std::path::Path;
 
 fn normalize_visibility_tag(raw: Option<String>, card_type: &str) -> Result<String, Value> {
     let default = match card_type.trim().to_ascii_lowercase().as_str() {
@@ -141,6 +142,18 @@ impl McpServer {
             Ok(v) => v,
             Err(resp) => return resp,
         };
+        let bind_paths = match optional_string_array(args_obj, "bind_paths") {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
+        let bind_kind = match optional_string(args_obj, "bind_kind") {
+            Ok(v) => v.unwrap_or_else(|| "path".to_string()),
+            Err(resp) => return resp,
+        };
+        let bind_kind = bind_kind.trim().to_ascii_lowercase();
+        if bind_paths.is_some() && bind_kind != "path" {
+            return ai_error("INVALID_INPUT", "bind_kind must be 'path'");
+        }
         let aliases_override = match optional_string_array(args_obj, "aliases") {
             Ok(v) => v,
             Err(resp) => return resp,
@@ -167,7 +180,7 @@ impl McpServer {
             Err(resp) => return resp,
         };
 
-        let (title, kind, description, refs, aliases, parent_id, depends_on, status) =
+        let (title, kind, description, mut refs, aliases, parent_id, depends_on, status) =
             match existing {
                 Some(existing) => {
                     let title = title
@@ -243,6 +256,21 @@ impl McpServer {
                 }
             };
 
+        if let Some(paths) = bind_paths {
+            let repo_root = match self.store.workspace_path_primary_get(&workspace) {
+                Ok(v) => v,
+                Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+            };
+            let repo_root = repo_root.as_deref().map(Path::new);
+            for raw in paths {
+                let repo_rel = match repo_rel_from_path_input(&raw, repo_root) {
+                    Ok(v) => v,
+                    Err(resp) => return resp,
+                };
+                refs.push(format!("path:{repo_rel}"));
+            }
+        }
+
         let upsert = match self.store.anchor_upsert(
             &workspace,
             bm_storage::AnchorUpsertRequest {
@@ -261,6 +289,26 @@ impl McpServer {
             Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
+
+        let bindings = match self
+            .store
+            .anchor_bindings_list_for_anchor(&workspace, upsert.anchor.id.as_str())
+        {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let bindings_json = bindings
+            .into_iter()
+            .map(|b| {
+                json!({
+                    "kind": b.kind,
+                    "repo_rel": b.repo_rel,
+                    "created_at_ms": b.created_at_ms,
+                    "updated_at_ms": b.updated_at_ms
+                })
+            })
+            .collect::<Vec<_>>();
 
         // Resolve optional step context (and choose the target scope when possible).
         let mut step_tag: Option<String> = None;
@@ -378,6 +426,7 @@ impl McpServer {
                 "status": upsert.anchor.status,
                 "description": upsert.anchor.description,
                 "refs": upsert.anchor.refs,
+                "bindings": bindings_json,
                 "aliases": upsert.anchor.aliases,
                 "parent_id": upsert.anchor.parent_id,
                 "depends_on": upsert.anchor.depends_on,

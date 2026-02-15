@@ -57,7 +57,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "workspace",
             "description": "Workspace operations (v1).",
-            "inputSchema": ops_schema(&["use", "reset"])
+            "inputSchema": ops_schema(&["use", "reset", "list"])
         }),
         json!({
             "name": "tasks",
@@ -74,17 +74,30 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "jobs",
             "description": "Delegation jobs operations (v1).",
-            "inputSchema": ops_schema(&["create", "list", "radar", "open", "runner.start"])
+            "inputSchema": ops_schema(&[
+                "create",
+                "list",
+                "radar",
+                "open",
+                "runner.start",
+                "wait",
+                "cancel",
+                "control.center",
+                "macro.rotate.stalled",
+                "macro.respond.inbox",
+                "macro.dispatch.slice",
+                "macro.enforce.proof",
+                "macro.sync.team",
+                "mesh.publish",
+                "mesh.pull",
+                "mesh.ack",
+                "mesh.link"
+            ])
         }),
         json!({
             "name": "think",
-            "description": "Reasoning/knowledge operations (v1).",
+            "description": "Reasoning operations (v1).",
             "inputSchema": ops_schema(&[
-                "knowledge.upsert",
-                "knowledge.query",
-                "knowledge.search",
-                "knowledge.recall",
-                "knowledge.lint",
                 "reasoning.seed",
                 "reasoning.pipeline",
                 "idea.branch.create",
@@ -109,7 +122,16 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "system",
             "description": "System operations (v1).",
-            "inputSchema": ops_schema(&["schema.get", "ops.summary", "cmd.list", "migration.lookup"])
+            "inputSchema": ops_schema(&[
+                "tools.list",
+                "quickstart",
+                "tutorial",
+                "schema.list",
+                "schema.get",
+                "cmd.list",
+                "ops.summary",
+                "migration.lookup"
+            ])
         }),
     ]
 }

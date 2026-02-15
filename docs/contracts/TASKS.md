@@ -119,6 +119,13 @@ Parity tool set (v0.2 target):
 - Templates: `tasks_templates_list`, `tasks_scaffold`
 - Utilities: `tasks_storage`
 
+PlanFS bridge (v1):
+
+- `tasks.planfs.init` — materialize task plan into physical files under `docs/plans/<slug>/`.
+- `tasks.planfs.export` — deterministic re-render from task graph (or `from_plan_spec=true`) into `PLAN.md` + `Slice-*.md`.
+- `tasks.planfs.import` — strict fail-closed import from files back into task steps.
+- `tasks.planfs.init/export` persist canonical `plan_spec.v1` snapshot for branch/diff/merge workflows.
+
 For full intent surfaces and semantics, use this project’s contracts as the source of truth (do not import legacy behavior blindly).
 
 ## Core lifecycle (v0.2)
@@ -597,11 +604,6 @@ Semantics:
     через `macro_anchor_note` (создать/привязать anchor к задаче),
   - для `plan`: если у плана есть `ACTIVE` задачи без anchor‑связей, добавляет `ACTIVE_TASKS_MISSING_ANCHOR`
     и предлагает ограниченный набор one‑shot патчей (по нескольким задачам), чтобы быстро закрыть KPI.
-- Делает **knowledge hygiene** (semi-strict, no hard gates):
-  - если `task` привязан к anchor‑ам, но для них нет knowledge (по индексу `(anchor,key)`),
-    добавляет `KNOWLEDGE_EMPTY_FOR_ANCHOR` и предлагает copy/paste `actions[]`:
-    - `action:task:knowledge:recall` → `think op=knowledge.recall` (bounded),
-    - `action:task:knowledge:seed` → `think op=knowledge.upsert` (anchor+key → latest).
 - Для `plan`-таргета включает anti‑kasha проверки Active Horizon:
   - если `ACTIVE` задач больше 3, добавляет предупреждение `ACTIVE_LIMIT_EXCEEDED`,
   - предлагает безопасные патчи “припарковать” часть задач обратно в `TODO` (через `tasks_complete`),
@@ -774,7 +776,7 @@ Semantics:
 
 List **active** jobs with a low-noise “attention” hint and the latest meaningful update.
 
-Input: `{ workspace, status?, task?, anchor?, limit?, runners_limit?, runners_status?, offline_limit?, stale_after_s?, reply_job?, reply_message?, reply_refs?, max_chars?, fmt? }`
+Input: `{ workspace, status?, task?, anchor?, limit?, runners_limit?, runners_status?, include_offline?, offline_limit?, stale_after_s?, reply_job?, reply_message?, reply_refs?, max_chars?, fmt? }`
 
 Output: `{ runner_status, runner_leases, runner_leases_offline?, runner_diagnostics?, jobs, count, has_more, truncated }`
 
@@ -944,6 +946,8 @@ Semantics:
 - `kind` allows runners to separate `heartbeat` vs `progress` vs `checkpoint` in a low-noise way (bounded event log).
 - `kind=proof_gate` is reserved for runner quality gates (e.g. “DONE requires proof refs”). It is **attention-worthy** but does not imply `needs_manager`.
 - `kind=heartbeat` is *coalesced* by default (long-running runners should not create unbounded heartbeat spam).
+- **Strict progress schema (v2 guardrail):** for `kind=progress` and `kind=checkpoint`, the server requires `meta.step.command` and one of `meta.step.result` or `meta.step.error`.
+  Calls missing this shape are rejected with `INVALID_INPUT` (fail-closed).
 - The server rejects reports when `(runner_id, claim_revision)` does not match the current job row (prevents “zombie runner” writes after reclaim).
 - Each report renews the claim lease: `job.claim_expires_at_ms = now_ms + lease_ttl_ms`.
 
@@ -962,6 +966,10 @@ Semantics:
 - DX salvage: if `refs` is empty and `status=DONE`, the server may **conservatively salvage** stable proof-like references from `summary`
   (e.g. `CMD:` / `LINK:` lines or strong command-looking bullets) to reduce accidental proof-gate loops. This does not override explicit `refs`.
 - Navigation: the server ensures the job id (`JOB-*`) is present in the completion event refs when possible (bounded).
+- **HIGH priority DONE proof gate (v2 guardrail):** when job `priority=HIGH` and `status=DONE`, completion is blocked unless:
+  - the job has at least one prior `checkpoint` event, and
+  - `refs` includes at least one proof receipt: `LINK:` / `CMD:` / `FILE:`.
+  On failure the server returns `PRECONDITION_FAILED` with recovery actions (open + report a checkpoint).
 - The server rejects completion when `(runner_id, claim_revision)` does not match the current job row (prevents double-completion after reclaim).
 
 ### `tasks_jobs_requeue`
@@ -1022,6 +1030,9 @@ Semantics:
 - If the target task has `reasoning_mode="strict"`, the macro may fail with `error.code="REASONING_REQUIRED"` when the
   reasoning engine signals missing discipline for the current step (e.g. `BM4_HYPOTHESIS_NO_TEST`, `BM10_NO_COUNTER_EDGES`).
   The response should include portal-first recovery suggestions (typically `think_card`).
+- Additional strict gate for explicit `checkpoints="gate"`: the macro requires a minimal structured sequential-trace trail
+  (`think.trace.sequential.step`) before close. This is fail-closed and returns `REASONING_REQUIRED` when missing.
+  Recommended shape is step-scoped metadata (`meta.step_id` + `meta.step_tag`) with non-sensitive checkpoint text.
 - To avoid dead-ends, callers may pass `override={ reason, risk }` to bypass the strict reasoning gate for this close attempt.
   The server must record a durable note (reason + risk + missing signals) and emit `WARNING: STRICT_OVERRIDE_APPLIED`.
   `override` does **not** bypass checkpoint or proof requirements.

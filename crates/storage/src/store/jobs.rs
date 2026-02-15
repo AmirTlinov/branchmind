@@ -2,14 +2,21 @@
 
 use super::*;
 use bm_core::ids::WorkspaceId;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, params, params_from_iter};
 use serde_json::{Map as JsonMap, Value as JsonValue};
+
+mod artifacts;
 
 const MAX_JOB_TITLE_LEN: usize = 200;
 const MAX_JOB_PROMPT_LEN: usize = 50_000;
 const MAX_JOB_KIND_LEN: usize = 64;
 const MAX_JOB_RUNNER_LEN: usize = 128;
-const MAX_JOB_SUMMARY_LEN: usize = 800;
+// Pipeline summaries can carry strict contract artifacts (scout/builder/validator JSON).
+// Keep this comfortably above typical flagship packs to avoid JSON truncation drift.
+const MAX_JOB_SUMMARY_LEN: usize = 128_000;
+const MAX_JOB_ARTIFACT_LEN: usize = 512_000;
+const MAX_ARTIFACTS_PER_JOB: usize = 8;
+const MAX_ARTIFACT_KEY_LEN: usize = 128;
 const MAX_JOB_CLAIM_TTL_MS: u64 = 300_000; // 5 minutes
 const MIN_JOB_CLAIM_TTL_MS: u64 = 1_000; // 1 second
 const MAX_EVENT_KIND_LEN: usize = 32;
@@ -666,38 +673,55 @@ impl SqliteStore {
             jobs.truncate(scan_limit);
         }
 
-        let mut rows = Vec::<JobRadarRow>::new();
-        {
-            let mut stmt = tx.prepare(
+        // Batch query: fetch up to MAX_RADAR_SCAN_EVENTS per job in a single SQL
+        // call instead of N separate queries (N+1 → 2 total).
+        let mut events_by_job = std::collections::HashMap::<String, Vec<JobEventRow>>::new();
+        if !jobs.is_empty() {
+            let placeholders: String = jobs
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 3))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
                 r#"
-                SELECT seq, ts_ms, kind, message, percent, refs_json, meta_json
-                FROM job_events
-                WHERE workspace=?1 AND job_id=?2
-                ORDER BY seq DESC
-                LIMIT ?3
+                SELECT job_id, seq, ts_ms, kind, message, percent, refs_json, meta_json
+                FROM (
+                    SELECT job_id, seq, ts_ms, kind, message, percent, refs_json, meta_json,
+                           ROW_NUMBER() OVER (PARTITION BY job_id ORDER BY seq DESC) AS rn
+                    FROM job_events
+                    WHERE workspace = ?1 AND job_id IN ({placeholders})
+                )
+                WHERE rn <= ?2
+                ORDER BY job_id, seq DESC
                 "#,
-            )?;
-
-            for job in jobs {
-                let job_id = job.id.clone();
-                let mut events = Vec::<JobEventRow>::new();
-                let mut ev_rows = stmt.query(params![
-                    workspace.as_str(),
-                    job_id.as_str(),
-                    MAX_RADAR_SCAN_EVENTS as i64
-                ])?;
-                while let Some(row) = ev_rows.next()? {
-                    let seq: i64 = row.get(0)?;
-                    let ts_ms: i64 = row.get(1)?;
-                    let kind: String = row.get(2)?;
-                    let message: String = row.get(3)?;
-                    let percent: Option<i64> = row.get(4)?;
-                    let refs_json: Option<String> = row.get(5)?;
-                    let meta_json: Option<String> = row.get(6)?;
-                    let refs = super::anchors::decode_json_string_list(refs_json)?;
-                    events.push(JobEventRow {
+            );
+            let mut sql_params = Vec::<rusqlite::types::Value>::new();
+            sql_params.push(rusqlite::types::Value::Text(workspace.as_str().to_string()));
+            sql_params.push(rusqlite::types::Value::Integer(
+                MAX_RADAR_SCAN_EVENTS as i64,
+            ));
+            for job in &jobs {
+                sql_params.push(rusqlite::types::Value::Text(job.id.clone()));
+            }
+            let mut stmt = tx.prepare(&sql)?;
+            let mut ev_rows = stmt.query(params_from_iter(sql_params))?;
+            while let Some(row) = ev_rows.next()? {
+                let job_id: String = row.get(0)?;
+                let seq: i64 = row.get(1)?;
+                let ts_ms: i64 = row.get(2)?;
+                let kind: String = row.get(3)?;
+                let message: String = row.get(4)?;
+                let percent: Option<i64> = row.get(5)?;
+                let refs_json: Option<String> = row.get(6)?;
+                let meta_json: Option<String> = row.get(7)?;
+                let refs = super::anchors::decode_json_string_list(refs_json)?;
+                events_by_job
+                    .entry(job_id.clone())
+                    .or_default()
+                    .push(JobEventRow {
                         seq,
-                        job_id: job_id.clone(),
+                        job_id,
                         ts_ms,
                         kind,
                         message,
@@ -705,35 +729,44 @@ impl SqliteStore {
                         refs,
                         meta_json,
                     });
-                }
-
-                let last_question_seq = events.iter().find(|e| e.kind == "question").map(|e| e.seq);
-                let last_manager_seq = events.iter().find(|e| e.kind == "manager").map(|e| e.seq);
-                let last_manager_proof_seq = events
-                    .iter()
-                    .find(|e| e.kind == "manager" && !e.refs.is_empty())
-                    .map(|e| e.seq);
-                let last_error_seq = events.iter().find(|e| e.kind == "error").map(|e| e.seq);
-                let last_proof_gate_seq = events
-                    .iter()
-                    .find(|e| e.kind == "proof_gate")
-                    .map(|e| e.seq);
-                let last_checkpoint_seq = events
-                    .iter()
-                    .find(|e| e.kind == "checkpoint")
-                    .map(|e| e.seq);
-
-                rows.push(JobRadarRow {
-                    job,
-                    last_event: pick_last_meaningful_job_event(&events),
-                    last_question_seq,
-                    last_manager_seq,
-                    last_manager_proof_seq,
-                    last_error_seq,
-                    last_proof_gate_seq,
-                    last_checkpoint_seq,
-                });
             }
+        }
+
+        let mut rows = Vec::<JobRadarRow>::new();
+        for job in jobs {
+            let events = events_by_job.remove(&job.id).unwrap_or_default();
+
+            let last_question_seq = events.iter().find(|e| e.kind == "question").map(|e| e.seq);
+            let last_manager_seq = events.iter().find(|e| e.kind == "manager").map(|e| e.seq);
+            let last_manager_proof_seq = events
+                .iter()
+                .find(|e| e.kind == "manager" && !e.refs.is_empty())
+                .map(|e| e.seq);
+            let last_error_seq = events.iter().find(|e| e.kind == "error").map(|e| e.seq);
+            let last_proof_gate_seq = events
+                .iter()
+                .find(|e| e.kind == "proof_gate")
+                .map(|e| e.seq);
+            let last_checkpoint_seq = events
+                .iter()
+                .find(|e| e.kind == "checkpoint")
+                .map(|e| e.seq);
+            let last_checkpoint_ts_ms = events
+                .iter()
+                .find(|e| e.kind == "checkpoint")
+                .map(|e| e.ts_ms);
+
+            rows.push(JobRadarRow {
+                job,
+                last_event: pick_last_meaningful_job_event(&events),
+                last_question_seq,
+                last_manager_seq,
+                last_manager_proof_seq,
+                last_error_seq,
+                last_proof_gate_seq,
+                last_checkpoint_seq,
+                last_checkpoint_ts_ms,
+            });
         }
 
         // Deterministic attention-first ordering for the manager inbox.
@@ -1110,6 +1143,43 @@ impl SqliteStore {
             events,
             has_more,
         })
+    }
+
+    pub fn job_checkpoint_exists(
+        &mut self,
+        workspace: &WorkspaceId,
+        request: JobCheckpointExistsRequest,
+    ) -> Result<bool, StoreError> {
+        let id = normalize_job_id(&request.id)?;
+
+        // Fail closed on unknown ids to keep higher-level guardrails deterministic.
+        let exists: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM jobs WHERE workspace=?1 AND id=?2",
+                params![workspace.as_str(), id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(StoreError::UnknownId);
+        }
+
+        let has_checkpoint: Option<i64> = self
+            .conn
+            .query_row(
+                r#"
+                SELECT 1
+                FROM job_events
+                WHERE workspace=?1 AND job_id=?2 AND kind='checkpoint'
+                LIMIT 1
+                "#,
+                params![workspace.as_str(), id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(has_checkpoint.is_some())
     }
 
     pub fn job_claim(
@@ -1564,6 +1634,18 @@ impl SqliteStore {
             },
         )?;
 
+        // Self-heal: a completed job must never keep a runner "stuck" via runner_leases.active_job_id.
+        // Clear any active lease that still points at this job (covers both the completing runner and
+        // any inconsistent multi-runner scenarios).
+        tx.execute(
+            r#"
+            UPDATE runner_leases
+            SET active_job_id=NULL, updated_at_ms=?3
+            WHERE workspace=?1 AND active_job_id=?2
+            "#,
+            params![workspace.as_str(), id.as_str(), now_ms],
+        )?;
+
         let job: JobRow = tx.query_row(
             r#"
             SELECT revision, status, title, kind, priority, task_id, anchor_id, runner, claim_expires_at_ms, summary, created_at_ms, updated_at_ms, completed_at_ms
@@ -1588,23 +1670,39 @@ impl SqliteStore {
         let summary = normalize_job_summary(request.reason.clone())?;
         let refs = normalize_event_refs(request.refs)?;
         let meta_json = request.meta_json.clone();
+        let force_running = request.force_running;
+        let expected_revision = request.expected_revision;
 
         let tx = self.conn.transaction()?;
 
-        let current: Option<(i64, String)> = tx
+        let current: Option<(i64, String, Option<String>)> = tx
             .query_row(
-                "SELECT revision, status FROM jobs WHERE workspace=?1 AND id=?2",
+                "SELECT revision, status, runner FROM jobs WHERE workspace=?1 AND id=?2",
                 params![workspace.as_str(), id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let Some((revision, status)) = current else {
+        let Some((revision, status, runner)) = current else {
             return Err(StoreError::UnknownId);
         };
         if matches!(status.as_str(), "DONE" | "FAILED" | "CANCELED") {
             return Err(StoreError::JobAlreadyTerminal { job_id: id, status });
         }
-        if status != "QUEUED" {
+        if let Some(expected) = expected_revision {
+            if expected < 0 {
+                return Err(StoreError::InvalidInput("expected_revision must be >= 0"));
+            }
+            if revision != expected {
+                return Err(StoreError::RevisionMismatch {
+                    expected,
+                    actual: revision,
+                });
+            }
+        }
+        if status == "RUNNING" && !force_running {
+            return Err(StoreError::JobNotCancelable { job_id: id, status });
+        }
+        if status != "QUEUED" && status != "RUNNING" {
             return Err(StoreError::JobNotCancelable { job_id: id, status });
         }
 
@@ -1613,8 +1711,10 @@ impl SqliteStore {
             tx.execute(
                 r#"
                 UPDATE jobs
-                SET revision=?3, status='CANCELED', runner=NULL, claim_expires_at_ms=NULL, summary=?4, meta_json=?5, updated_at_ms=?6, completed_at_ms=?7
-                WHERE workspace=?1 AND id=?2 AND status='QUEUED' AND revision=?8
+                SET revision=?3, status='CANCELED',
+                    runner=CASE WHEN status='QUEUED' THEN NULL ELSE runner END,
+                    claim_expires_at_ms=NULL, summary=?4, meta_json=?5, updated_at_ms=?6, completed_at_ms=?7
+                WHERE workspace=?1 AND id=?2 AND (status='QUEUED' OR status='RUNNING') AND revision=?8
                 "#,
                 params![
                     workspace.as_str(),
@@ -1631,8 +1731,10 @@ impl SqliteStore {
             tx.execute(
                 r#"
                 UPDATE jobs
-                SET revision=?3, status='CANCELED', runner=NULL, claim_expires_at_ms=NULL, summary=?4, updated_at_ms=?5, completed_at_ms=?6
-                WHERE workspace=?1 AND id=?2 AND status='QUEUED' AND revision=?7
+                SET revision=?3, status='CANCELED',
+                    runner=CASE WHEN status='QUEUED' THEN NULL ELSE runner END,
+                    claim_expires_at_ms=NULL, summary=?4, updated_at_ms=?5, completed_at_ms=?6
+                WHERE workspace=?1 AND id=?2 AND (status='QUEUED' OR status='RUNNING') AND revision=?7
                 "#,
                 params![
                     workspace.as_str(),
@@ -1643,6 +1745,19 @@ impl SqliteStore {
                     now_ms,
                     revision
                 ],
+            )?;
+        }
+
+        // When a RUNNING job is force-canceled, clear any runner lease that still points at it.
+        // (Even when runner_id is missing, active_job_id is enough to self-heal deterministically.)
+        if status == "RUNNING" || runner.is_some() {
+            tx.execute(
+                r#"
+                UPDATE runner_leases
+                SET active_job_id=NULL, updated_at_ms=?3
+                WHERE workspace=?1 AND active_job_id=?2
+                "#,
+                params![workspace.as_str(), id.as_str(), now_ms],
             )?;
         }
 

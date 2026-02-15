@@ -14,7 +14,7 @@ pub(crate) fn require_workspace(
         Ok(w) => Ok(w),
         Err(_) => Err(ai_error(
             "INVALID_INPUT",
-            "workspace: expected WorkspaceId; fix: workspace=\"my-workspace\"",
+            "workspace: expected WorkspaceId (e.g. \"money1\"). Tip: you may also pass an absolute path (e.g. \"/home/me/repo\") and it will be mapped to an id.",
         )),
     }
 }

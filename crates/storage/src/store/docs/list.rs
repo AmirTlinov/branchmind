@@ -34,6 +34,7 @@ impl SqliteStore {
                     "notes" => DocumentKind::Notes,
                     "trace" => DocumentKind::Trace,
                     "graph" => DocumentKind::Graph,
+                    "plan_spec" => DocumentKind::PlanSpec,
                     _ => DocumentKind::Notes,
                 };
                 docs.push(DocumentRow {

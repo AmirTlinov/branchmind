@@ -2,11 +2,13 @@
 //! Thinking tools (cards, context, packs) (split-friendly module root).
 
 mod add;
+mod atlas;
 mod cards;
 mod context;
 mod frontier;
 mod lane_context;
 mod lint;
+mod macro_counter;
 mod manage;
 mod next;
 mod pack;

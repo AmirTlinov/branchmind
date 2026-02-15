@@ -38,6 +38,9 @@ fn compact_status_result(result: &Value) -> Value {
     if let Some(workspace) = result.get("workspace") {
         out.insert("workspace".to_string(), workspace.clone());
     }
+    if let Some(bound_path) = result.get("workspace_bound_path") {
+        out.insert("workspace_bound_path".to_string(), bound_path.clone());
+    }
     if let Some(toolset) = result.get("toolset") {
         out.insert("toolset".to_string(), toolset.clone());
     }
@@ -132,6 +135,10 @@ impl McpServer {
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
         let project_guard_stored = match self.store.workspace_project_guard_get(&workspace) {
+            Ok(v) => v,
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let workspace_bound_path = match self.store.workspace_path_primary_get(&workspace) {
             Ok(v) => v,
             Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
         };
@@ -260,6 +267,7 @@ impl McpServer {
                 "build_fingerprint": build_fingerprint()
             },
             "workspace": workspace.as_str(),
+            "workspace_bound_path": workspace_bound_path,
             "schema_version": "v0",
             "workspace_exists": workspace_exists,
             "checkout": checkout,
@@ -411,8 +419,14 @@ mod tests {
                     response_verbosity: crate::ResponseVerbosity::Full,
                     dx_mode,
                     ux_proof_v2_enabled: true,
-                    knowledge_autolint_enabled: true,
-                    note_promote_enabled: true,
+                    jobs_unknown_args_fail_closed_enabled: true,
+                    jobs_strict_progress_schema_enabled: true,
+                    jobs_high_done_proof_gate_enabled: true,
+                    jobs_wait_stream_v2_enabled: true,
+                    jobs_mesh_v1_enabled: true,
+                    slice_plans_v1_enabled: true,
+                    jobs_slice_first_fail_closed_enabled: true,
+                    slice_budgets_enforced_enabled: true,
                     default_workspace: Some("demo".to_string()),
                     workspace_explicit: false,
                     workspace_allowlist: None,

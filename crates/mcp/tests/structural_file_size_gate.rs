@@ -6,10 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_LINES: usize = 2000;
-const ALLOWLIST: &[&str] = &[
-    "crates/mcp/src/support/line_protocol/mod.rs",
-    "crates/mcp/src/support/reasoning_engine.rs",
-];
+const ALLOWLIST: &[&str] = &[];
 
 #[test]
 fn rust_source_files_stay_under_max_lines() {

@@ -25,8 +25,14 @@ pub(crate) struct SharedProxyConfig {
     pub(crate) response_verbosity: ResponseVerbosity,
     pub(crate) dx_mode: bool,
     pub(crate) ux_proof_v2_enabled: bool,
-    pub(crate) knowledge_autolint_enabled: bool,
-    pub(crate) note_promote_enabled: bool,
+    pub(crate) jobs_unknown_args_fail_closed_enabled: bool,
+    pub(crate) jobs_strict_progress_schema_enabled: bool,
+    pub(crate) jobs_high_done_proof_gate_enabled: bool,
+    pub(crate) jobs_wait_stream_v2_enabled: bool,
+    pub(crate) jobs_mesh_v1_enabled: bool,
+    pub(crate) slice_plans_v1_enabled: bool,
+    pub(crate) jobs_slice_first_fail_closed_enabled: bool,
+    pub(crate) slice_budgets_enforced_enabled: bool,
     pub(crate) default_workspace: Option<String>,
     pub(crate) workspace_explicit: bool,
     pub(crate) workspace_allowlist: Option<Vec<String>>,
@@ -271,10 +277,18 @@ fn handle_client_body(
         },
     };
 
-    if expects_response
+    let retry_on_project_guard = expects_response
         && resp_body.as_ref().and_then(|body| parse_error_code(body)) == Some(-32002)
+        && matches!(
+            method.as_deref(),
+            Some("tools/call" | "tools/list" | "initialize")
+        );
+    let retry_on_unknown_cmd = expects_response
         && matches!(method.as_deref(), Some("tools/call"))
-    {
+        && resp_body
+            .as_ref()
+            .is_some_and(|body| is_tools_call_unknown_cmd_envelope_error(body));
+    if retry_on_project_guard || retry_on_unknown_cmd {
         *daemon = None;
         let _ = std::fs::remove_file(&config.socket_path);
         resp_body = match forward_body_with_reconnect(
@@ -342,8 +356,14 @@ fn ensure_local_server<'a>(
                 response_verbosity: config.response_verbosity,
                 dx_mode: config.dx_mode,
                 ux_proof_v2_enabled: config.ux_proof_v2_enabled,
-                knowledge_autolint_enabled: config.knowledge_autolint_enabled,
-                note_promote_enabled: config.note_promote_enabled,
+                jobs_unknown_args_fail_closed_enabled: config.jobs_unknown_args_fail_closed_enabled,
+                jobs_strict_progress_schema_enabled: config.jobs_strict_progress_schema_enabled,
+                jobs_high_done_proof_gate_enabled: config.jobs_high_done_proof_gate_enabled,
+                jobs_wait_stream_v2_enabled: config.jobs_wait_stream_v2_enabled,
+                jobs_mesh_v1_enabled: config.jobs_mesh_v1_enabled,
+                slice_plans_v1_enabled: config.slice_plans_v1_enabled,
+                jobs_slice_first_fail_closed_enabled: config.jobs_slice_first_fail_closed_enabled,
+                slice_budgets_enforced_enabled: config.slice_budgets_enforced_enabled,
                 default_workspace: config.default_workspace.clone(),
                 workspace_explicit: config.workspace_explicit,
                 workspace_allowlist: config.workspace_allowlist.clone(),
@@ -591,6 +611,27 @@ fn parse_error_code(body: &[u8]) -> Option<i64> {
         .get("error")
         .and_then(|v| v.get("code"))
         .and_then(|v| v.as_i64())
+}
+
+fn is_tools_call_unknown_cmd_envelope_error(body: &[u8]) -> bool {
+    let value = match serde_json::from_slice::<Value>(body) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let Some(content) = value
+        .get("result")
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_array())
+    else {
+        return false;
+    };
+    content.iter().any(|item| {
+        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        text.contains("\"code\":\"UNKNOWN_CMD\"")
+            || text.contains("\"code\": \"UNKNOWN_CMD\"")
+            || text.contains("\"code\":\"UNKNOWN_OP\"")
+            || text.contains("\"code\": \"UNKNOWN_OP\"")
+    })
 }
 
 fn extract_request_method(body: &[u8]) -> Option<String> {
@@ -859,6 +900,57 @@ fn daemon_is_compatible(
         }
     }
 
+    // DX: stale-daemon avoidance for local rebuilds where git HEAD doesn't change.
+    //
+    // We only enforce an exact build fingerprint match when both the proxy and daemon were
+    // launched from the same explicit path-like argv[0] (absolute/relative). This avoids churn
+    // when different MCP clients run the same build from different locations.
+    if let (Some(local_launch), Some(daemon_launch)) = (
+        normalize_exec_hint(
+            &std::env::args_os()
+                .next()
+                .map(|v| v.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        ),
+        info.get("argv0")
+            .and_then(|v| v.as_str())
+            .and_then(normalize_exec_hint),
+    ) && local_launch == daemon_launch
+    {
+        let daemon_fp = info
+            .get("fingerprint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+        let local_fp = crate::build_fingerprint();
+        if let Some(daemon_fp) = daemon_fp
+            && daemon_fp != local_fp
+        {
+            return Ok(false);
+        }
+    }
+    // Backward-compat: older daemons (pre-exec-hints) don't expose argv0/exe_path, so we can't
+    // safely scope the fingerprint check to “same launch path”. In that case, treat a build
+    // fingerprint mismatch as stale and allow takeover by the current binary.
+    let daemon_exec_hints_supported = info
+        .get("argv0")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if !daemon_exec_hints_supported {
+        let daemon_fp = info
+            .get("fingerprint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+        let local_fp = crate::build_fingerprint();
+        if let Some(daemon_fp) = daemon_fp
+            && daemon_fp != local_fp
+        {
+            return Ok(false);
+        }
+    }
+
     let daemon_storage_dir = info
         .get("storage_dir")
         .and_then(|v| v.as_str())
@@ -961,6 +1053,21 @@ fn allowlist_equivalent(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> boo
     }
 }
 
+fn normalize_exec_hint(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Only treat explicit path-like argv0 values as eligible for strict fingerprint checks.
+    // Plain program names (e.g. "bm_mcp") can resolve differently under different PATHs.
+    if !raw.contains(std::path::MAIN_SEPARATOR) {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    let canon = std::fs::canonicalize(&path).unwrap_or(path);
+    Some(canon.to_string_lossy().to_string())
+}
+
 fn probe_daemon_info(
     stream: &UnixStream,
 ) -> Result<serde_json::Map<String, Value>, Box<dyn std::error::Error>> {
@@ -1040,4 +1147,35 @@ fn try_shutdown_daemon(stream: &UnixStream) -> Result<(), Box<dyn std::error::Er
     });
     let _ = send_internal_request(stream, &req, Duration::from_millis(400));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tools_call_unknown_cmd_envelope_is_detected() {
+        let body = serde_json::to_vec(&json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "result":{
+                "content":[{"type":"text","text":"{\"error\":{\"code\":\"UNKNOWN_CMD\",\"message\":\"Unknown cmd\"}}"}]
+            }
+        }))
+        .expect("json");
+        assert!(is_tools_call_unknown_cmd_envelope_error(&body));
+    }
+
+    #[test]
+    fn tools_call_success_envelope_is_not_detected() {
+        let body = serde_json::to_vec(&json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "result":{
+                "content":[{"type":"text","text":"{\"success\":true,\"result\":{}}"}]
+            }
+        }))
+        .expect("json");
+        assert!(!is_tools_call_unknown_cmd_envelope_error(&body));
+    }
 }

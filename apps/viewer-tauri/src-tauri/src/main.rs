@@ -27,6 +27,9 @@ fn main() {
             commands::knowledge_search,
             commands::knowledge_card_get,
             commands::anchors_list,
+            commands::architecture_lens_get,
+            commands::architecture_provenance_get,
+            commands::architecture_hotspots_get,
         ])
         .run(tauri::generate_context!())
         .expect("tauri run");

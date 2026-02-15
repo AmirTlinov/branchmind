@@ -764,6 +764,7 @@ impl McpServer {
             toolset: self.toolset,
             workspace: &args.workspace,
             omit_workspace,
+            slice_plans_v1_enabled: self.slice_plans_v1_enabled,
             kind,
             focus: focus.as_deref(),
             agent_id: args.agent_id.as_deref(),

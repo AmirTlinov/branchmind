@@ -13,6 +13,15 @@ pub(super) const SQL: &str = r#"
           project_guard TEXT
         );
 
+        -- Path → workspace bindings (DX: allow workspace to be selected by filesystem paths).
+        -- `path` should be a canonical absolute directory path.
+        CREATE TABLE IF NOT EXISTS workspace_paths (
+          path TEXT PRIMARY KEY,
+          workspace TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          last_used_at_ms INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS counters (
           workspace TEXT NOT NULL,
           name TEXT NOT NULL,

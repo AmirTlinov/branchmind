@@ -266,3 +266,97 @@ export interface AnchorsListDto {
   anchors: AnchorDto[];
   has_more: boolean;
 }
+
+export interface ArchitectureScopeDto {
+  kind: string;
+  id?: string | null;
+}
+
+export interface ArchitectureSummaryDto {
+  anchors_total: number;
+  tasks_total: number;
+  knowledge_total: number;
+  reasoning_nodes_total: number;
+  blocked_total: number;
+  evidence_total: number;
+  hypothesis_total: number;
+  proven_ratio: number;
+}
+
+export interface ArchitectureClusterDto {
+  id: string;
+  label: string;
+  layer: string;
+  node_count: number;
+  risk_count: number;
+  proven_ratio: number;
+}
+
+export interface ArchitectureNodeDto {
+  id: string;
+  label: string;
+  node_type: string;
+  layer: string;
+  status?: string | null;
+  tags: string[];
+  cluster_id: string;
+  risk_score: number;
+  evidence_score: number;
+  last_ts_ms: number;
+  refs: string[];
+}
+
+export interface ArchitectureEdgeDto {
+  from: string;
+  to: string;
+  rel: string;
+  weight: number;
+  risk: boolean;
+}
+
+export interface ArchitectureRiskDto {
+  id: string;
+  severity: string;
+  title: string;
+  reason: string;
+  node_id?: string | null;
+  refs: string[];
+}
+
+export interface ArchitectureHotspotDto {
+  id: string;
+  label: string;
+  node_type: string;
+  degree: number;
+  risk_score: number;
+  evidence_score: number;
+}
+
+export interface ArchitectureLensDto {
+  scope: ArchitectureScopeDto;
+  mode: string;
+  include_draft: boolean;
+  time_window: string;
+  generated_at_ms: number;
+  summary: ArchitectureSummaryDto;
+  clusters: ArchitectureClusterDto[];
+  nodes: ArchitectureNodeDto[];
+  edges: ArchitectureEdgeDto[];
+  risks: ArchitectureRiskDto[];
+  hotspots: ArchitectureHotspotDto[];
+  next_actions: string[];
+}
+
+export interface ArchitectureProvenanceRecordDto {
+  kind: string;
+  id: string;
+  label?: string | null;
+  note?: string | null;
+  ts_ms?: number | null;
+  refs: string[];
+}
+
+export interface ArchitectureProvenanceDto {
+  node_id: string;
+  records: ArchitectureProvenanceRecordDto[];
+}

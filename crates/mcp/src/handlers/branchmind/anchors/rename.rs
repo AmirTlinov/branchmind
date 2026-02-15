@@ -121,6 +121,26 @@ impl McpServer {
         }
 
         let anchor = renamed.anchor;
+        let bindings = match self
+            .store
+            .anchor_bindings_list_for_anchor(&workspace, anchor.id.as_str())
+        {
+            Ok(v) => v,
+            Err(StoreError::InvalidInput(msg)) => return ai_error("INVALID_INPUT", msg),
+            Err(err) => return ai_error("STORE_ERROR", &format_store_error(err)),
+        };
+        let bindings_json = bindings
+            .into_iter()
+            .map(|b| {
+                json!({
+                    "kind": b.kind,
+                    "repo_rel": b.repo_rel,
+                    "created_at_ms": b.created_at_ms,
+                    "updated_at_ms": b.updated_at_ms
+                })
+            })
+            .collect::<Vec<_>>();
+
         let result = json!({
             "workspace": workspace.as_str(),
             "from": renamed.from_id,
@@ -132,6 +152,7 @@ impl McpServer {
                 "status": anchor.status,
                 "description": anchor.description,
                 "refs": anchor.refs,
+                "bindings": bindings_json,
                 "aliases": anchor.aliases,
                 "parent_id": anchor.parent_id,
                 "depends_on": anchor.depends_on,

@@ -7,6 +7,7 @@ mod dispatch;
 mod history;
 mod jobs;
 mod jobs_proof_attach;
+mod slices;
 mod steps;
 mod views;
 

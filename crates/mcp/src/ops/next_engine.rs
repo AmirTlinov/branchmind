@@ -136,20 +136,6 @@ pub(crate) fn derive_next(
                 risk: "Низкий".to_string(),
             });
         }
-        actions.push(Action {
-            action_id: "next::think.knowledge.recall".to_string(),
-            priority: ActionPriority::Low,
-            tool: ToolName::ThinkOps.as_str().to_string(),
-            args: json!({
-                "workspace": workspace.as_str(),
-                "op": "knowledge.recall",
-                "args": { "limit": 12 },
-                "budget_profile": "portal",
-                "portal_view": "compact"
-            }),
-            why: "Подтянуть самые свежие knowledge cards (bounded) перед решением.".to_string(),
-            risk: "Низкий".to_string(),
-        });
         NextEngineReport {
             headline: "Focus set: review snapshot then take the next smallest action.".to_string(),
             refs,

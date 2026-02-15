@@ -60,13 +60,13 @@ fn jobs_radar_last_event_prefers_progress_over_stale_error() {
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
-        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": "checkpoint ok" } } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "checkpoint", "message": "checkpoint ok", "meta": { "step": { "command": "test.checkpoint", "result": "checkpoint ok" } } } } }
     }));
     let _ = server.request(json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
-        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "still working", "percent": 10 } } }
+        "params": { "name": "jobs", "arguments": { "op": "call", "cmd": "jobs.report", "args": { "workspace": "ws1", "job": job_id, "runner_id": "r1", "claim_revision": claim_revision, "kind": "progress", "message": "still working", "percent": 10, "meta": { "step": { "command": "test.progress", "result": "still working" } } } } }
     }));
 
     let radar = server.request(json!({

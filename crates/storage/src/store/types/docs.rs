@@ -5,6 +5,7 @@ pub enum DocumentKind {
     Notes,
     Trace,
     Graph,
+    PlanSpec,
 }
 
 impl DocumentKind {
@@ -13,6 +14,7 @@ impl DocumentKind {
             Self::Notes => "notes",
             Self::Trace => "trace",
             Self::Graph => "graph",
+            Self::PlanSpec => "plan_spec",
         }
     }
 }

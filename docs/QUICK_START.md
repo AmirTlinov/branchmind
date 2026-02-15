@@ -23,6 +23,20 @@ Zero-arg invocation enables flagship DX defaults:
 - workspace lock (guards against accidental cross-workspace calls)
 - DX mode defaults (compact outputs + snapshot delta on by default)
 
+## 2.1) Golden agent flow (PlanFS + strict reasoning checkpoints)
+
+Use this minimal sequence inside MCP clients:
+
+1. `system(op=quickstart args={portal:"tasks"})` — curated golden recipes only.
+2. `tasks(op=call cmd=tasks.planfs.init args={...})` / `tasks.planfs.export` — keep plans in `docs/plans/**`.
+3. `think(op=call cmd=think.trace.sequential.step args={...})` — record hypothesis→test→evidence→decision checkpoints.
+4. `tasks(op=call cmd=tasks.snapshot args={view:"smart"})` — continue from the next actionable step.
+
+Notes:
+
+- Command/schema listing is golden-by-default (`system.cmd.list` / `system.schema.list`), use `mode="all"` for long-tail discovery.
+- Knowledge namespace is removed by design; durable memory is repo-local skills + PlanFS files.
+
 ## OpenCode (recommended)
 
 Configure the server as a local MCP backend and let BranchMind auto-configure everything:

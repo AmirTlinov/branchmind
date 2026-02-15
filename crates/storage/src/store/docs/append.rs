@@ -21,6 +21,19 @@ impl SqliteStore {
         self.doc_append_entry(workspace, DocumentKind::Trace, DocEntryKind::Note, request)
     }
 
+    pub fn doc_append_plan_spec(
+        &mut self,
+        workspace: &WorkspaceId,
+        request: DocAppendRequest,
+    ) -> Result<DocEntryRow, StoreError> {
+        self.doc_append_entry(
+            workspace,
+            DocumentKind::PlanSpec,
+            DocEntryKind::Note,
+            request,
+        )
+    }
+
     fn doc_append_entry(
         &mut self,
         workspace: &WorkspaceId,

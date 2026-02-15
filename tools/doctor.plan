@@ -1,0 +1,7 @@
+# branchmind — doctor.plan
+# Lines are executed in a shell, in order.
+
+rustc --version
+cargo --version
+
+

@@ -29,10 +29,30 @@ Inspired by the “AI-first IDE Interface Design” reference:
 
 ```
 Sidebar (projects/workspaces/tasks)
-  | Center (tabs: Graph / Plan / Notes / Trace / Knowledge)
+  | Center (tabs: Architecture / Plan / Notes / Trace / Knowledge)
   | Inspector (details of selected task/step/node)
   + Command Palette (Cmd/Ctrl+K)
 ```
+
+### Architecture tab (flagship lens)
+
+Graph tab has two data sources:
+
+- `Architecture lens` (default): synthesized map from anchors, knowledge keys/cards, tasks/plans, and reasoning graph fragments.
+- `Reasoning graph`: raw branch/doc graph for the selected task.
+
+Lens controls:
+
+- `mode`: `combined | system | execution | reasoning | risk`
+- `scope`: `workspace | plan | task`
+- `time_window`: `all | 7d | 24h`
+- `include draft`: toggles `v:draft` reasoning nodes
+
+Inspector in architecture mode shows:
+
+- summary capsule (coverage/proven ratio/risk count)
+- selected node metadata (layer, risk/evidence, refs)
+- provenance trail (`architecture_provenance_get`)
 
 ## Running locally
 

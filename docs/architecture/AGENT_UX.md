@@ -13,6 +13,36 @@ This is not a human UI project. The MCP surface *is* the UX.
 - Every unified resume/snapshot must include a **small, versioned handoff capsule** (`capsule`) that stays useful even under aggressive `max_chars` trimming.
 - The numeric anti-noise guardrails are fixed in `docs/architecture/NOISE_CONTRACT.md`.
 
+## 1.1) Canonical planning loop (Plan → Slice‑Plans v1)
+
+Plans are executed **one reviewable slice at a time** (avoid “whole repo context + whole repo diff”).
+
+Default loop:
+
+`tasks.slices.propose_next → (edit slice_plan_spec) → tasks.slices.apply → tasks.slice.open/validate → (solo|orchestrate)`
+
+Where:
+- **Solo:** `jobs.macro.dispatch.scout` → lead applies patches manually (builder skipped).
+- **Orchestrate:** `scout → builder → validator → lead gate → apply`.
+
+## 1.2) Canonical team loop for high-risk slices
+
+For NT+/critical slices, the default orchestration is:
+
+`scout (mini/context) → builder (diff batch) → validator (independent) → lead gate → apply`
+
+UX rules for this loop:
+
+- Scout must stay context-only (no code/diff).
+- Before builder, run `jobs.pipeline.context.review` as a cheap fail-closed context gate
+  (`pass|need_more|reject` + deterministic next actions).
+- Builder and validator exchange only artifact refs (`artifact://...`) + stable slice ids.
+- Builder default is strict input mode (no repo/tool discovery); if context is insufficient,
+  builder requests bounded `context_request` (max retry loop is capped).
+- Gate is always explicit and emits a decision object (`approve|rework|reject`) with reasons/actions.
+- Apply is fail-closed (requires `approve`, valid lineage, and revision match).
+- `jobs.control.center` should surface the next blocked stage first (`dispatch.validator`, then `pipeline.gate`, then `pipeline.apply`).
+
 ## 1.1) Semantic de-duplication: tagged line protocol
 
 Agents should not spend 90% of their context budget on repeated schema boilerplate.
@@ -46,7 +76,7 @@ Invariants:
 - Keep command lines copy/paste-minimal by omitting stable defaults when the server can supply them safely
   (e.g., omit `checkpoints="gate"` when it is the deterministic default).
 - Prefer **one primary** command line. If progressive disclosure is required, allow at most **two** commands:
-  first `tools/list toolset=...`, then `<the action>`.
+  first `system op=schema.get` / `system op=cmd.list`, then `<the action>`.
 - Keep `ERROR:` lines typed and actionable (code + recovery hint).
 - Keep `WARNING:` lines typed and actionable (warning/heads-up + recovery hint).
 - Do not teach “switch to json” as a daily habit. If a structured payload is needed, expose it as an explicit
@@ -61,25 +91,25 @@ Transport note:
 
 This is the small “definition of done” that protects daily AX from slowly regressing back into noise.
 
-If you change portal output formatting, recovery, or toolset curation, the change is only acceptable if:
+If you change portal output formatting or recovery, the change is only acceptable if:
 
 1) Tag-light invariant holds: no JSON envelope, no blank lines, no legacy `WATERMARK:` / `ANSWER:` prefixes in BM-L1.
 2) Happy path stays tiny: for daily portals, BM-L1 is **2 lines max**:
    - 1 untagged state line
    - 1 next action command line
 3) Errors stay typed and minimal: `ERROR:` plus at most **one** recovery command line (two only for disclosure).
-4) Progressive disclosure stays deterministic: if next action is hidden, return exactly:
-   - `tools/list toolset=...`
-   - `<action> ...` (must include copy/paste-ready args via `args_hint`)
+4) Progressive disclosure stays deterministic: if the next action needs discovery/schema, return exactly:
+   - `system op=schema.get args={cmd:"..."}`
+   - `<action> ...` (must include copy/paste-ready args)
 5) Budget signals stay warnings: truncation/clamps must render as `WARNING: BUDGET_*`, never as errors, and should keep
    the output within a single screen.
 
 Canonical smoke scenarios (must stay green in tests):
 
-- `status` in `toolset=daily` → 1 state line + 1 next action command line.
-- `tasks_macro_start` → `tasks_snapshot` → both are 2-line “state + command”.
-- `tasks_macro_close_step` without focus in an empty workspace → typed error + portal recovery command (`tasks_macro_start`).
-- `tasks_macro_close_step` on a proof-required step without proof → typed error (`PROOF_REQUIRED`) + a single portal recovery command (retry with `proof=...`).
+- `status` (BM-L1) → 1 state line + 1 next action command line.
+- `tasks cmd=tasks.macro.start` → `tasks cmd=tasks.snapshot` → both are 2-line “state + command” in BM-L1.
+- `tasks cmd=tasks.macro.close.step` without focus in an empty workspace → typed error + portal recovery command (`tasks cmd=tasks.macro.start`).
+- `tasks cmd=tasks.macro.close.step` on a proof-required step without proof → typed error (`PROOF_REQUIRED`) + a single portal recovery command (retry with `proof=...`).
 - Hidden action recommended (e.g. decompose) → 1 state line + 2 commands (disclosure then action).
 - Tiny budget snapshot → `WARNING: BUDGET_*` appears and output remains small.
 
@@ -93,15 +123,13 @@ If an operation fails due to a fixable precondition, return:
 
 ## 2.1) Recovery UX for hidden operations (progressive disclosure)
 
-When the server advertises a reduced toolset (`core`/`daily`), the internal implementation may still produce recovery suggestions
-that point at low-level tools (because those are the raw building blocks).
+Even with a small, stable portal surface, agents will hit unknown `cmd` / unfamiliar `args`.
 
 The MCP adapter must keep recovery **cognitively cheap**:
 
 - Prefer portal equivalents over low-level suggestions (portals are accelerators, not bypasses).
-- If a required action is outside the currently advertised toolset, include a single progressive-disclosure suggestion
-  (`call_method` → `tools/list`) for the minimal tier that unlocks recovery (`daily` or `full`).
-  - Place the disclosure suggestion first so clients that enforce “advertised tools only” can recover deterministically.
+- If the next action needs exact arguments, include `system op=schema.get(args={cmd:"..."})` and a minimal valid call example.
+- If the agent is clearly using a wrong/unknown `cmd`, include `system op=cmd.list(args={q:"..."})` (substring search) as the first recovery step.
 - Never “double-suggest” the same fix (no prepend + keep the original hidden action): replace when possible.
 
 ## 3) Prefer diffs and deltas
@@ -118,19 +146,19 @@ The MCP adapter must keep recovery **cognitively cheap**:
 
 The number of tools is part of the UX.
 
-- Provide a **curated “daily driver” toolset** that covers the common workflow with a *tiny* subset of tools.
-- Target: **≤ 7 tools** for daily usage (portal tools), with progressive disclosure for everything else.
-- Keep the full parity surface available, but allow MCP clients to opt into a smaller `tools/list` set to reduce
-  token waste and command-selection confusion.
+- v1 tool surface is fixed and small: **10 portal tools**.
+- Reduce noise via **budget_profile** and **portal_view** (portal→default→audit), not by hiding tools.
+- Prefer golden ops for common flows and `op=call + cmd` for the long tail.
 - Prefer fewer high-leverage tools + composable macros over many “one-off” wrappers.
 
 Progressive disclosure mechanism:
 
-- `tools/list` accepts optional `{ "toolset": "full|daily|core" }` params to override the server default for that call.
+- `tools/list` always returns the v1 surface (10 tools). `toolset` params are ignored.
 - To reduce boilerplate, tool calls may omit `workspace`.
   - The server uses its default workspace (derived deterministically from the repo root, or overridden via
-    `--workspace` / `BRANCHMIND_WORKSPACE`).
+    `--workspace` / `BRANCHMIND_WORKSPACE` (id or absolute path; paths are mapped/bound to ids).
   - Explicit `workspace` always wins.
+- To inspect the path→id mapping (transparency), call `workspace op=list` (shows `bound_path`).
 - When a default workspace is present, portal outputs should avoid repeating it in “next action” args (keep actions copy/paste-ready but minimal).
 
 ## 5) Budgets everywhere
@@ -190,25 +218,19 @@ must keep a small stable block that never disappears under budgets:
 
 This is the critical trick: agents learn to “think after reading where/now/next”.
 
-### 8.4 Knowledge recall-first (evolvable memory, not a junk drawer)
+### 8.4 PlanFS-first (planning as durable memory)
 
-Goal: when an agent touches a component, it should be able to **recall the right invariants fast**
-without scanning the entire graph or generating duplicates.
+Goal: when an agent touches a component, it should be able to resume the right intent fast
+from stable files, not from transient session state.
 
 Rules:
 
-- Knowledge cards can be given a stable identity via `(anchor, key)`:
-  - `anchor` = meaning coordinate (e.g. `a:core`)
-  - `key` = stable slug (e.g. `determinism`, `locking`, `pitfalls`)
-- Knowledge is **versioned**:
-  - editing text creates a new `card_id` (history stays in the graph),
-  - `(anchor,key)` always resolves to the latest version via the storage index.
-- Default UX is **recall-first**:
-  - prefer `think op=knowledge.recall` before implementing changes,
-  - if knowledge is missing, seed a minimal card via `think op=knowledge.upsert`.
-
-This is intentionally “semi-strict”: the server should guide via warnings/actions,
-not block step closure (hard gates are reserved for proof/evidence and safety-critical flows).
+- Every plan is an on-disk contract:
+  - `docs/plans/<plan_slug>/PLAN.md`
+  - `docs/plans/<plan_slug>/SLICE-*.md`
+- The planning surface is the default source of truth for multi-agent continuity.
+- Use `tasks.*` to track execution and keep these files updated in lockstep; runtime graph stays execution-facing.
+- Legacy “knowledge card” patterns are no longer the primary mechanism for context continuity.
 
 ## 9) Multi-agent concurrency (leases + audit)
 

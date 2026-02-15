@@ -55,5 +55,26 @@ pub(super) fn apply(conn: &Connection) -> Result<(), StoreError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
 
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS plan_slices (
+          workspace TEXT NOT NULL,
+          plan_id TEXT NOT NULL,
+          slice_id TEXT NOT NULL,
+          slice_task_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          objective TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'planned',
+          budgets_json TEXT,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (workspace, plan_id, slice_id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_slices_workspace_slice ON plan_slices(workspace, slice_id);
+        CREATE INDEX IF NOT EXISTS idx_plan_slices_plan_updated ON plan_slices(workspace, plan_id, updated_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_plan_slices_task ON plan_slices(workspace, slice_task_id);
+        "#,
+    )?;
+
     Ok(())
 }

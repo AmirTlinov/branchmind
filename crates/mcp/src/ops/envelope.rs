@@ -145,6 +145,8 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
 
             // UX: parse-time errors should still be actionable (schema-on-demand + safe retry).
             if let Some(args_obj) = raw_args_for_err.as_object() {
+                append_parse_error_actions(&mut resp, tool, args_obj, &err, registry);
+
                 let workspace = args_obj.get("workspace").and_then(|v| v.as_str());
                 let cmd = cmd_for_error_recovery(tool, args_obj, registry);
                 if let Some(cmd) = cmd.as_deref() {
@@ -161,12 +163,18 @@ pub(crate) fn handle_ops_call(server: &mut McpServer, tool: ToolName, raw_args: 
         }
     };
     let Some(spec) = registry.find_by_cmd(&env.cmd) else {
+        let recovery = crate::ops::recovery::removed_knowledge_recovery(&env.cmd)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                "Use system op=cmd.list to discover cmds, then system op=schema.get for exact args."
+                    .to_string()
+            });
         return OpResponse::error(
             "error".to_string(),
             OpError {
                 code: "UNKNOWN_CMD".to_string(),
                 message: format!("Unknown cmd: {}", env.cmd),
-                recovery: Some("Use system op=schema.get to discover cmd schemas.".to_string()),
+                recovery: Some(recovery),
             },
         )
         .into_value();
@@ -295,6 +303,246 @@ fn append_budget_truncation_actions(resp: &mut OpResponse, tool: ToolName, env: 
         risk: "Ответ может стать более объёмным; при необходимости сузьте limit/фильтры."
             .to_string(),
     });
+}
+
+fn suggest_cmd_list_query(cmd_raw: &str) -> String {
+    let parts = cmd_raw.trim().to_ascii_lowercase();
+    let parts = parts.split('.').collect::<Vec<_>>();
+    // Heuristic: for `domain.category.verb` prefer searching by category, otherwise by verb.
+    if parts.len() >= 3 {
+        return parts[1].to_string();
+    }
+    parts.last().unwrap_or(&"").to_string()
+}
+
+fn append_parse_error_actions(
+    resp: &mut OpResponse,
+    tool: ToolName,
+    args_obj: &serde_json::Map<String, Value>,
+    err: &OpError,
+    registry: &CommandRegistry,
+) {
+    let mut seen = BTreeSet::<String>::new();
+    for a in resp.actions.iter() {
+        seen.insert(a.action_id.clone());
+    }
+
+    if err.code == "UNKNOWN_OP" {
+        // Common DX footgun: op=<fully-qualified cmd> (e.g. op="tasks.snapshot").
+        // Suggest retrying as op=call + cmd=<op> (and preserve portal_view vs cmd-args.view).
+        if let Some(op_raw) = args_obj.get("op").and_then(|v| v.as_str())
+            && let Ok(cmd_candidate) = crate::ops::normalize_cmd(op_raw)
+            && let Some(spec) = registry.find_by_cmd(&cmd_candidate)
+            && spec.domain_tool == tool
+        {
+            let mut retry_env = args_obj.clone();
+            retry_env.insert("op".to_string(), Value::String("call".to_string()));
+            retry_env.insert("cmd".to_string(), Value::String(cmd_candidate.clone()));
+
+            // Ensure args is an object (op=call requires it).
+            let args_entry = retry_env
+                .entry("args".to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if !args_entry.is_object() {
+                *args_entry = Value::Object(serde_json::Map::new());
+            }
+
+            // If both portal_view and view are set and differ, treat `view` as the cmd-arg
+            // (common in legacy portal calls) and move it under args.view.
+            let portal_view = retry_env
+                .get("portal_view")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let view = retry_env
+                .get("view")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            if let (Some(portal_view), Some(view)) = (portal_view, view)
+                && portal_view != view
+            {
+                if let Some(inner) = retry_env.get_mut("args").and_then(|v| v.as_object_mut()) {
+                    inner
+                        .entry("view".to_string())
+                        .or_insert_with(|| Value::String(view.to_string()));
+                }
+                retry_env.remove("view");
+            }
+
+            let action_id = format!("recover.did_you_mean.call::{cmd_candidate}");
+            if seen.insert(action_id.clone()) {
+                resp.actions.push(Action {
+                    action_id,
+                    priority: ActionPriority::High,
+                    tool: tool.as_str().to_string(),
+                    args: Value::Object(retry_env),
+                    why: format!(
+                        "op выглядит как cmd; повторить вызов как op=call cmd={cmd_candidate}."
+                    ),
+                    risk: "Низкий".to_string(),
+                });
+            }
+        }
+
+        let action_id = "recover.system.ops.summary".to_string();
+        if seen.insert(action_id.clone()) {
+            resp.actions.push(Action {
+                action_id,
+                priority: ActionPriority::High,
+                tool: "system".to_string(),
+                args: json!({
+                    "op": "ops.summary",
+                    "args": {},
+                    "budget_profile": "portal"
+                }),
+                why: "Показать доступные ops/cmd (SSOT) и быстро найти правильный вызов."
+                    .to_string(),
+                risk: "Низкий".to_string(),
+            });
+        }
+    }
+
+    let Some(cmd_raw) = args_obj.get("cmd").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let cmd_raw = cmd_raw.trim();
+    if cmd_raw.is_empty() {
+        return;
+    }
+
+    let cmd_list_q = suggest_cmd_list_query(cmd_raw);
+
+    // UNKNOWN_CMD: most common DX footgun is calling op=call with cmd=<op-alias>
+    // (e.g. cmd="schema.get"). Suggest retrying as op=<alias> (omit cmd) when possible.
+    if err.code == "UNKNOWN_CMD" {
+        if let Ok(alias) = crate::ops::normalize_op(cmd_raw)
+            && alias != "call"
+            && registry.find_by_alias(tool, &alias).is_some()
+        {
+            let mut retry_env = args_obj.clone();
+            retry_env.insert("op".to_string(), Value::String(alias.clone()));
+            retry_env.remove("cmd");
+
+            let action_id = format!("recover.did_you_mean.op::{alias}");
+            if seen.insert(action_id.clone()) {
+                resp.actions.push(Action {
+                    action_id,
+                    priority: ActionPriority::High,
+                    tool: tool.as_str().to_string(),
+                    args: Value::Object(retry_env),
+                    why: format!(
+                        "cmd похож на op-алиас; повторить вызов как op={alias} (без cmd)."
+                    ),
+                    risk: "Низкий".to_string(),
+                });
+            }
+
+            // Keep a discovery fallback as the second action.
+            let action_id = "recover.system.cmd.list".to_string();
+            if seen.insert(action_id.clone()) {
+                resp.actions.push(Action {
+                    action_id,
+                    priority: ActionPriority::Medium,
+                    tool: "system".to_string(),
+                    args: json!({
+                        "op": "cmd.list",
+                        "args": { "q": cmd_list_q },
+                        "budget_profile": "portal"
+                    }),
+                    why: "Найти правильный cmd (поиск по подстроке).".to_string(),
+                    risk: "Низкий".to_string(),
+                });
+            }
+            return;
+        }
+
+        let action_id = "recover.system.cmd.list".to_string();
+        if seen.insert(action_id.clone()) {
+            resp.actions.push(Action {
+                action_id,
+                priority: ActionPriority::High,
+                tool: "system".to_string(),
+                args: json!({
+                    "op": "cmd.list",
+                    "args": { "q": cmd_list_q },
+                    "budget_profile": "portal"
+                }),
+                why: "Найти правильный cmd (поиск по подстроке).".to_string(),
+                risk: "Низкий".to_string(),
+            });
+        }
+        return;
+    }
+
+    // INVALID_INPUT where cmd is malformed: provide a deterministic legacy escape hatch.
+    if err.code == "INVALID_INPUT" && err.message.starts_with("cmd ") {
+        let legacy_candidate = if !cmd_raw.contains('.') && cmd_raw.contains('_') {
+            let candidate = crate::ops::name_to_cmd_segments(cmd_raw);
+            if registry.find_by_cmd(&candidate).is_some() {
+                Some(candidate)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(candidate) = legacy_candidate {
+            let mut retry_env = args_obj.clone();
+            retry_env.insert("op".to_string(), Value::String("call".to_string()));
+            retry_env.insert("cmd".to_string(), Value::String(candidate.clone()));
+            if !retry_env.contains_key("args") {
+                retry_env.insert("args".to_string(), Value::Object(serde_json::Map::new()));
+            }
+
+            let action_id = format!("recover.legacy.cmd.to_dotted::{candidate}");
+            if seen.insert(action_id.clone()) {
+                resp.actions.push(Action {
+                    action_id,
+                    priority: ActionPriority::High,
+                    tool: tool.as_str().to_string(),
+                    args: Value::Object(retry_env),
+                    why: "Похоже на legacy cmd (snake_case). Повторить с точками вместо '_'."
+                        .to_string(),
+                    risk: "Низкий".to_string(),
+                });
+            }
+
+            let action_id = "recover.system.migration.lookup".to_string();
+            if seen.insert(action_id.clone()) {
+                resp.actions.push(Action {
+                    action_id,
+                    priority: ActionPriority::Medium,
+                    tool: "system".to_string(),
+                    args: json!({
+                        "op": "migration.lookup",
+                        "args": { "old_name": cmd_raw },
+                        "budget_profile": "portal"
+                    }),
+                    why: "Маппинг legacy имени → v1 cmd (с примером вызова).".to_string(),
+                    risk: "Низкий".to_string(),
+                });
+            }
+            return;
+        }
+
+        let action_id = "recover.system.migration.lookup".to_string();
+        if seen.insert(action_id.clone()) {
+            resp.actions.push(Action {
+                action_id,
+                priority: ActionPriority::High,
+                tool: "system".to_string(),
+                args: json!({
+                    "op": "migration.lookup",
+                    "args": { "old_name": cmd_raw },
+                    "budget_profile": "portal"
+                }),
+                why: "Маппинг legacy имени → v1 cmd (с примером вызова).".to_string(),
+                risk: "Низкий".to_string(),
+            });
+        }
+    }
 }
 
 fn cmd_for_error_recovery(
@@ -440,21 +688,39 @@ fn parse_envelope(
         let cmd = crate::ops::normalize_cmd(cmd_raw).map_err(|msg| OpError {
             code: "INVALID_INPUT".to_string(),
             message: format!("cmd {msg}"),
-            recovery: None,
+            recovery: Some(
+                "cmd must be fully-qualified (e.g. tasks.snapshot). If you meant a golden op alias (plan.create), use op=plan.create and omit cmd; for legacy names use system op=migration.lookup."
+                    .to_string(),
+            ),
         })?;
-        if registry.find_by_cmd(&cmd).is_none() {
-            return Err(OpError {
-                code: "UNKNOWN_CMD".to_string(),
-                message: format!("Unknown cmd: {cmd}"),
-                recovery: Some("Use system op=schema.get to discover cmd schemas.".to_string()),
-            });
+        if registry.find_by_cmd(&cmd).is_some() {
+            cmd
+        } else {
+            let legacy_candidate = cmd.replace('_', ".");
+            if legacy_candidate != cmd && registry.find_by_cmd(&legacy_candidate).is_some() {
+                legacy_candidate
+            } else {
+                let recovery = crate::ops::recovery::removed_knowledge_recovery(&cmd)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| {
+                        "Use system op=cmd.list (q/prefix) to discover cmds, then system op=schema.get for exact args. If cmd looks like an op alias, use op=<alias> and omit cmd."
+                            .to_string()
+                    });
+                return Err(OpError {
+                    code: "UNKNOWN_CMD".to_string(),
+                    message: format!("Unknown cmd: {cmd}"),
+                    recovery: Some(recovery),
+                });
+            }
         }
-        cmd
     } else {
         let spec = registry.find_by_alias(tool, &op).ok_or_else(|| OpError {
             code: "UNKNOWN_OP".to_string(),
             message: format!("Unknown op: {op}"),
-            recovery: Some("Use op=call + cmd or tools/list for golden ops.".to_string()),
+            recovery: Some(
+                "Use system op=ops.summary to see available ops, or use op=call + cmd (discover via system op=cmd.list)."
+                    .to_string(),
+            ),
         })?;
         spec.cmd.clone()
     };
@@ -526,6 +792,31 @@ fn parse_envelope(
             .or_else(|| server.default_workspace.clone());
     }
 
+    // DX: accept workspace as a filesystem path (e.g. "/home/me/repo") and resolve/bind it to a
+    // stable WorkspaceId before allowlist/lock checks run.
+    if let Some(ws) = workspace.as_deref() {
+        match server.workspace_id_resolve(ws) {
+            Ok(resolved) => workspace = Some(resolved),
+            Err(crate::StoreError::InvalidInput(msg)) => {
+                return Err(OpError {
+                    code: "INVALID_INPUT".to_string(),
+                    message: msg.to_string(),
+                    recovery: Some(
+                        "Use workspace like my-workspace (or pass a repo path to auto-bind)."
+                            .to_string(),
+                    ),
+                });
+            }
+            Err(err) => {
+                return Err(OpError {
+                    code: "STORE_ERROR".to_string(),
+                    message: crate::format_store_error(err),
+                    recovery: None,
+                });
+            }
+        }
+    }
+
     let mut args = Value::Object(args_obj_inner.clone());
     if cmd == "tasks.resume.super"
         && let Some(obj) = args.as_object_mut()
@@ -572,7 +863,7 @@ fn parse_envelope(
             budget_profile = spec.budget.default_profile;
         }
         let caps = spec.budget.caps_for(budget_profile);
-        apply_budget_caps(&mut args, caps)?;
+        apply_budget_caps(&mut args, &cmd, caps)?;
     } else {
         // Unknown cmd already handled above.
     }
@@ -586,7 +877,11 @@ fn parse_envelope(
     })
 }
 
-fn apply_budget_caps(args: &mut Value, caps: crate::ops::BudgetCaps) -> Result<(), OpError> {
+fn apply_budget_caps(
+    args: &mut Value,
+    cmd: &str,
+    caps: crate::ops::BudgetCaps,
+) -> Result<(), OpError> {
     let Some(obj) = args.as_object_mut() else {
         return Ok(());
     };
@@ -620,17 +915,23 @@ fn apply_budget_caps(args: &mut Value, caps: crate::ops::BudgetCaps) -> Result<(
         }
     }
     if let Some(limit) = caps.limit {
-        if let Some(v) = obj.get("limit").and_then(|v| v.as_u64()) {
-            if v as usize > limit {
-                return Err(OpError {
-                    code: "BUDGET_EXCEEDED".to_string(),
-                    message: "limit exceeds budget profile".to_string(),
-                    recovery: Some(format!("Use limit <= {limit}")),
-                });
-            }
-        } else {
-            obj.insert("limit".to_string(), Value::Number(limit.into()));
+        if let Some(v) = obj.get("limit").and_then(|v| v.as_u64())
+            && v as usize > limit
+        {
+            return Err(OpError {
+                code: "BUDGET_EXCEEDED".to_string(),
+                message: "limit exceeds budget profile".to_string(),
+                recovery: Some(format!("Use limit <= {limit}")),
+            });
         }
+        // Intentionally do NOT inject default `limit` from budget profile.
+        //
+        // `limit` is a semantic argument for many commands (selection scan depth, result
+        // cardinality, etc). Auto-injecting profile limits silently overrides command-level
+        // defaults (e.g. macro auto-select defaults) and regresses flagship UX predictability.
+        //
+        // We still enforce an upper cap when users explicitly pass `limit`.
+        let _ = cmd; // keep signature explicit for future cmd-specific cap policies.
     }
     Ok(())
 }
