@@ -107,6 +107,10 @@ fn bm_runner_defaults_can_find_repo_root_store_from_subdir() {
     let status = Command::new(&runner_path)
         .current_dir(&nested)
         .env("BRANCHMIND_VIEWER", "0")
+        // CI machines do not have codex/claude installed. `--dry-run` must still succeed and
+        // complete the claimed job.
+        .env("BM_CODEX_BIN", "__missing_codex__")
+        .env("BM_CLAUDE_BIN", "__missing_claude__")
         .args(["--dry-run", "--once"])
         .status()
         .expect("run bm_runner");

@@ -1005,6 +1005,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // We own the job lease now; mark runner as live immediately (no ambiguity in inbox).
         send_runner_heartbeat(&mut mcp, &cfg, "live", Some(job_id));
 
+        // Dry-run is a pure smoke test: claim → checkpoint → complete.
+        //
+        // It must *not* depend on external executors (codex/claude) being installed, because CI
+        // runners (and some developer environments) intentionally don't have them.
+        if cfg.dry_run {
+            let _ = mcp.call_tool(
+                "jobs",
+                json!({
+                    "workspace": cfg.workspace,
+                    "op": "call",
+                    "cmd": "jobs.report",
+                    "args": {
+                        "job": job_id,
+                        "runner_id": cfg.runner_id,
+                        "claim_revision": claim_revision,
+                        "lease_ttl_ms": job_claim_lease_ttl_ms(&cfg),
+                        "kind": "checkpoint",
+                        "message": "dry-run: claimed and completing immediately",
+                        "percent": 0,
+                        "refs": [ job_id ],
+                        "meta": { "dry_run": true, "step": { "command": "dry_run", "result": "dry-run: claimed and completing immediately" } }
+                    }
+                }),
+            );
+            let refs = vec![job_id.to_string()];
+            let _ = complete_job_with_retry(
+                &mut mcp,
+                &cfg,
+                CompleteJobRequest {
+                    job_id,
+                    claim_revision,
+                    status: "DONE",
+                    summary: "dry-run complete",
+                    refs: &refs,
+                    meta: json!({ "dry_run": true }),
+                },
+            );
+            last_runner_beat_ms = now_ms();
+            send_runner_heartbeat(&mut mcp, &cfg, "idle", None);
+            if cfg.once {
+                break;
+            }
+            continue;
+        }
+
         let open_args = json!({
             "job": job_id,
             "include_prompt": true,
@@ -1147,47 +1192,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             String::new()
         };
-
-        if cfg.dry_run {
-            let _ = mcp.call_tool(
-                "jobs",
-                json!({
-                    "workspace": cfg.workspace,
-                    "op": "call",
-                    "cmd": "jobs.report",
-                    "args": {
-                        "job": job_id,
-                        "runner_id": cfg.runner_id,
-                        "claim_revision": claim_revision,
-                        "lease_ttl_ms": job_claim_lease_ttl_ms(&cfg),
-                        "kind": "checkpoint",
-                        "message": "dry-run: claimed and completing immediately",
-                        "percent": 0,
-                        "refs": [ job_id ],
-                        "meta": { "dry_run": true, "step": { "command": "dry_run", "result": "dry-run: claimed and completing immediately" } }
-                    }
-                }),
-            );
-            let refs = vec![job_id.to_string()];
-            let _ = complete_job_with_retry(
-                &mut mcp,
-                &cfg,
-                CompleteJobRequest {
-                    job_id,
-                    claim_revision,
-                    status: "DONE",
-                    summary: "dry-run complete",
-                    refs: &refs,
-                    meta: json!({ "dry_run": true }),
-                },
-            );
-            last_runner_beat_ms = now_ms();
-            send_runner_heartbeat(&mut mcp, &cfg, "idle", None);
-            if cfg.once {
-                break;
-            }
-            continue;
-        }
 
         let job_started_ms = now_ms();
         let max_runtime_ms = (cfg.max_runtime_s as i64).saturating_mul(1000);
