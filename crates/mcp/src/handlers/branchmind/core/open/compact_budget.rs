@@ -65,11 +65,6 @@ pub(super) fn trim_compact_open_result_for_budget(v: &mut Value, limit: usize) -
         }
     }
     if json_len_chars(v) > limit {
-        // Keep top-level binding stable; `budget.truncated` already carries the truncation state.
-        changed |= drop_fields_at(v, &[], &["truncated"]);
-    }
-
-    if json_len_chars(v) > limit {
         // Last resort: keep binding under tight budgets.
         // Prefer trimming large nested strings first (so callers still get a hint of context),
         // then drop if we still can't fit.

@@ -72,7 +72,6 @@ fn bm_runner_dry_run_claims_and_completes_a_job() {
 
     let runner_path = root.join("target").join("debug").join("bm_runner");
     let status = Command::new(&runner_path)
-        .env("BRANCHMIND_VIEWER", "0")
         .args([
             "--storage-dir",
             storage_dir.to_str().expect("storage dir utf-8"),

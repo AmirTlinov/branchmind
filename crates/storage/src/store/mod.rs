@@ -155,7 +155,7 @@ impl SqliteStore {
             Err(err) if is_missing_column(&err, "project_guard") => {
                 // Backwards compatibility:
                 // - older stores (pre-migration) don't have `workspaces.project_guard`.
-                // - read-only consumers (like the desktop viewer) do not run migrations.
+                // - read-only consumers do not run migrations.
                 //
                 // We fall back to the legacy projection and treat `project_guard` as None.
                 return self.list_workspaces_legacy(limit_i64, offset_i64);
