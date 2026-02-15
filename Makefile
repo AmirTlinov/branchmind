@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check clippy test check run-mcp run-viewer run-viewer-x11 viewer-install viewer-typecheck viewer-build viewer-tauri-dev
+.PHONY: help fmt fmt-check clippy test check run-mcp
 
 CARGO ?= cargo
 
@@ -11,13 +11,6 @@ help:
 		"  make clippy     Run clippy (deny warnings)" \
 		"  make test       Run workspace tests" \
 		"  make run-mcp    Run MCP server (DX defaults)" \
-		"" \
-		"Viewer (Tauri, optional):" \
-		"  make run-viewer       Run the desktop viewer (tauri dev)" \
-		"  make run-viewer-x11   Run the desktop viewer forcing X11 backend (Linux fallback)" \
-		"  make viewer-install   Install npm deps (apps/viewer-tauri/)" \
-		"  make viewer-typecheck Typecheck the viewer" \
-		"  make viewer-build     Build the viewer frontend (Vite)" \
 		""
 
 fmt:
@@ -37,19 +30,3 @@ check: fmt-check clippy test
 # Golden path: zero-arg run enables DX defaults.
 run-mcp:
 	$(CARGO) run -p bm_mcp
-
-run-viewer: viewer-tauri-dev
-run-viewer-x11:
-	BM_VIEWER_FORCE_X11=1 $(MAKE) viewer-tauri-dev
-
-viewer-install:
-	cd apps/viewer-tauri && npm ci
-
-viewer-typecheck:
-	cd apps/viewer-tauri && npm run typecheck
-
-viewer-build:
-	cd apps/viewer-tauri && npm run build
-
-viewer-tauri-dev:
-	@apps/viewer-tauri/scripts/tauri-dev.sh
