@@ -552,7 +552,10 @@ fn install_v3_schema_extensions(conn: &Connection) -> Result<(), StoreError> {
         conn.execute("ALTER TABLE branches ADD COLUMN head_commit_id TEXT", [])?;
     }
     if !table_has_column(conn, "branches", "updated_at_ms")? {
-        conn.execute("ALTER TABLE branches ADD COLUMN updated_at_ms INTEGER", [])?;
+        conn.execute(
+            "ALTER TABLE branches ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
 
     conn.execute(
@@ -658,10 +661,10 @@ fn bootstrap_default_branch_tx(
     let base_seq = doc_entries_head_seq_tx(tx, workspace)?.unwrap_or(0);
     tx.execute(
         r#"
-        INSERT OR IGNORE INTO branches(workspace, name, base_branch, base_seq, created_at_ms)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT OR IGNORE INTO branches(workspace, name, base_branch, base_seq, created_at_ms, head_commit_id, updated_at_ms)
+        VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)
         "#,
-        params![workspace, DEFAULT_BRANCH, DEFAULT_BRANCH, base_seq, now_ms],
+        params![workspace, DEFAULT_BRANCH, DEFAULT_BRANCH, base_seq, now_ms, now_ms],
     )?;
     branch_checkout_set_tx(tx, workspace, DEFAULT_BRANCH, now_ms)?;
     Ok(true)

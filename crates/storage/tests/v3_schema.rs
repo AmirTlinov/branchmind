@@ -1,3 +1,4 @@
+use bm_core::ids::WorkspaceId;
 use bm_storage::{
     AppendCommitRequest, CreateBranchRequest, CreateMergeRecordRequest, DeleteBranchRequest,
     ListBranchesRequest, ListMergeRecordsRequest, ShowCommitRequest, SqliteStore, StoreError,
@@ -85,6 +86,28 @@ fn v3_branch_commit_merge_api_and_atomic_merge_write() {
         })
         .expect("main commit should be appended");
 
+    store
+        .create_branch(CreateBranchRequest {
+            workspace_id: "ws-a".to_string(),
+            branch_id: "hotfix".to_string(),
+            parent_branch_id: Some("main".to_string()),
+            created_at_ms: 13,
+        })
+        .expect("child branch should be created from main");
+
+    let branches_after_child = store
+        .list_branches(ListBranchesRequest {
+            workspace_id: "ws-a".to_string(),
+            limit: 20,
+            offset: 0,
+        })
+        .expect("branches should list after child create");
+    let hotfix_branch = branches_after_child
+        .iter()
+        .find(|branch| branch.branch_id() == "hotfix")
+        .expect("hotfix branch must exist");
+    assert_eq!(hotfix_branch.head_commit_id(), Some("c-m-1"));
+
     let merge = store
         .create_merge_record(CreateMergeRecordRequest {
             workspace_id: "ws-a".to_string(),
@@ -169,6 +192,35 @@ fn v3_branch_commit_merge_api_and_atomic_merge_write() {
         branches_after_delete
             .iter()
             .all(|branch| branch.branch_id() != "feature")
+    );
+}
+
+#[test]
+fn legacy_branch_inserts_also_set_non_null_updated_at_ms() {
+    let dir = temp_storage_dir("legacy-branch-updated-at");
+    let mut store = SqliteStore::open(&dir).expect("fresh storage should open");
+    let workspace = WorkspaceId::try_new("ws-legacy").expect("workspace id should be valid");
+
+    store
+        .workspace_init(&workspace)
+        .expect("workspace init should succeed");
+    store
+        .branch_create(&workspace, "child", Some("main"))
+        .expect("legacy branch_create should succeed");
+
+    let branches = store
+        .list_branches(ListBranchesRequest {
+            workspace_id: "ws-legacy".to_string(),
+            limit: 20,
+            offset: 0,
+        })
+        .expect("branches should list");
+
+    assert!(
+        branches
+            .iter()
+            .all(|branch| branch.updated_at_ms() >= branch.created_at_ms()),
+        "all branch rows must have non-null monotonic updated_at_ms"
     );
 }
 

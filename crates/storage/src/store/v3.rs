@@ -16,34 +16,39 @@ impl SqliteStore {
             .map(|value| canonicalize_identifier("parent_branch_id", value))
             .transpose()?;
 
+        let tx = self.conn.transaction()?;
+        let workspace = WorkspaceId::try_new(workspace_id.clone())
+            .map_err(|_| StoreError::InvalidInput("invalid workspace_id"))?;
+        ensure_workspace_tx(&tx, &workspace, request.created_at_ms)?;
+
+        let parent_head_commit_id = if let Some(parent_branch_id) = parent_branch_id.as_deref() {
+            let parent_state = branch_state_v3_tx(&tx, &workspace_id, parent_branch_id)?;
+            Some(parent_state.head_commit_id)
+        } else {
+            None
+        }
+        .flatten();
+
         let branch = ThoughtBranch::try_new(
             workspace_id,
             branch_id,
             parent_branch_id,
-            None,
+            parent_head_commit_id,
             request.created_at_ms,
             request.created_at_ms,
         )
         .map_err(|_| StoreError::InvalidInput("invalid v3 branch payload"))?;
 
-        let tx = self.conn.transaction()?;
-        let workspace = WorkspaceId::try_new(branch.workspace_id().to_string())
-            .map_err(|_| StoreError::InvalidInput("invalid workspace_id"))?;
-        ensure_workspace_tx(&tx, &workspace, branch.created_at_ms())?;
-
-        if let Some(parent_branch_id) = branch.parent_branch_id() {
-            ensure_branch_exists_v3_tx(&tx, branch.workspace_id(), parent_branch_id)?;
-        }
-
         let base_branch = branch.parent_branch_id().unwrap_or(branch.branch_id());
         let insert_result = tx.execute(
             "INSERT INTO branches(workspace, name, base_branch, base_seq, created_at_ms, head_commit_id, updated_at_ms) \
-             VALUES (?1, ?2, ?3, 0, ?4, NULL, ?5)",
+             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)",
             params![
                 branch.workspace_id(),
                 branch.branch_id(),
                 base_branch,
                 branch.created_at_ms(),
+                branch.head_commit_id(),
                 branch.updated_at_ms()
             ],
         );
@@ -65,7 +70,7 @@ impl SqliteStore {
         let offset = to_sqlite_i64(request.offset)?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT workspace, name, base_branch, head_commit_id, created_at_ms, updated_at_ms \
+            "SELECT workspace, name, base_branch, head_commit_id, created_at_ms, COALESCE(updated_at_ms, created_at_ms) AS updated_at_ms \
              FROM branches \
              WHERE workspace=?1 \
              ORDER BY created_at_ms ASC, name ASC \
@@ -372,7 +377,7 @@ fn branch_state_v3_tx(
 ) -> Result<BranchStateV3, StoreError> {
     let value = tx
         .query_row(
-            "SELECT head_commit_id, updated_at_ms FROM branches WHERE workspace=?1 AND name=?2",
+            "SELECT head_commit_id, COALESCE(updated_at_ms, created_at_ms) FROM branches WHERE workspace=?1 AND name=?2",
             params![workspace_id, branch_id],
             |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
         )
