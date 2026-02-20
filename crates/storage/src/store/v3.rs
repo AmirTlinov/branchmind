@@ -112,6 +112,8 @@ impl SqliteStore {
         let tx = self.conn.transaction()?;
         ensure_branch_exists_v3_tx(&tx, &workspace_id, &branch_id)?;
         ensure_branch_has_no_descendants_v3_tx(&tx, &workspace_id, &branch_id)?;
+        delete_branch_merge_records_v3_tx(&tx, &workspace_id, &branch_id)?;
+        delete_branch_commits_v3_tx(&tx, &workspace_id, &branch_id)?;
 
         tx.execute(
             "DELETE FROM branches WHERE workspace=?1 AND name=?2",
@@ -432,6 +434,42 @@ fn ensure_branch_has_no_descendants_v3_tx(
     } else {
         Ok(())
     }
+}
+
+fn delete_branch_merge_records_v3_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    branch_id: &str,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "DELETE FROM merge_records WHERE workspace=?1 AND (source_branch=?2 OR target_branch=?2)",
+        params![workspace_id, branch_id],
+    )?;
+    Ok(())
+}
+
+fn delete_branch_commits_v3_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    branch_id: &str,
+) -> Result<(), StoreError> {
+    loop {
+        let deleted = tx.execute(
+            "DELETE FROM commits \
+             WHERE workspace=?1 AND branch=?2 \
+               AND commit_id NOT IN ( \
+                   SELECT parent_commit_id \
+                   FROM commits \
+                   WHERE workspace=?1 AND branch=?2 AND parent_commit_id IS NOT NULL \
+               )",
+            params![workspace_id, branch_id],
+        )?;
+
+        if deleted == 0 {
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_commit_exists_v3_tx(

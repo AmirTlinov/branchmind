@@ -77,6 +77,18 @@ fn v3_branch_commit_merge_api_and_atomic_merge_write() {
     store
         .append_commit(AppendCommitRequest {
             workspace_id: "ws-a".to_string(),
+            branch_id: "feature".to_string(),
+            commit_id: "c-f-2".to_string(),
+            parent_commit_id: None,
+            message: "feature follow-up".to_string(),
+            body: "feature work 2".to_string(),
+            created_at_ms: 12,
+        })
+        .expect("feature second commit should be appended");
+
+    store
+        .append_commit(AppendCommitRequest {
+            workspace_id: "ws-a".to_string(),
             branch_id: "main".to_string(),
             commit_id: "c-m-1".to_string(),
             parent_commit_id: None,
@@ -190,6 +202,17 @@ fn v3_branch_commit_merge_api_and_atomic_merge_write() {
     assert!(
         deleted_feature_commit.is_none(),
         "feature commits must be removed via foreign key cascade"
+    );
+
+    let deleted_feature_commit_2 = store
+        .show_commit(ShowCommitRequest {
+            workspace_id: "ws-a".to_string(),
+            commit_id: "c-f-2".to_string(),
+        })
+        .expect("show commit should succeed after delete");
+    assert!(
+        deleted_feature_commit_2.is_none(),
+        "feature commit chain must be removed on branch delete"
     );
 
     let branches_after_delete = store
