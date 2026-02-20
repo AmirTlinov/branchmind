@@ -1,177 +1,33 @@
-# Contracts — Tasks ↔ Reasoning Integration (v0)
+# Contracts — v3 Integration Invariants
 
-This document defines what makes the system a **single organism** rather than two unrelated toolsets.
+This document defines how `branch`, `think`, and `merge` compose into one deterministic workflow.
 
-## Core invariant
+## Core invariants
 
-Every mutating task operation produces a durable reasoning event.
+1. **Single workspace scope**
+   - Every write/read is scoped to explicit `workspace`.
+2. **Branch-first history**
+   - `think.commit` writes to an existing branch and advances branch head.
+3. **Deterministic pagination**
+   - `think.log.next_commit_id` is the first omitted item, never skipped.
+4. **Merge diagnostics are preserved**
+   - Partial merge failures return structured warnings.
+   - Total merge failure (`MERGE_FAILED`) still returns warnings/failures detail.
+5. **Fail-closed surface**
+   - Unknown tool/verb/arg shapes are rejected explicitly.
 
-Stated differently:
+## Minimal end-to-end flow
 
-> If the task state changed, the reasoning log must reflect it — without relying on agent discipline.
+1. Create main lane:
+   - `branch` + ` ```bm\nmain\n``` `
+2. Add commits:
+   - `think` + ` ```bm\ncommit branch=main commit=c1 message=... body=...\n``` `
+3. Inspect history:
+   - `think` + ` ```bm\nlog branch=main limit=20\n``` `
+4. Merge feature lane:
+   - `merge` + ` ```bm\ninto target=main from=feature strategy=squash\n``` `
 
-Branching note:
+## Out of scope
 
-- Task mutations always ingest into the **canonical** `reasoning_ref.branch` (and its `trace_doc`), regardless of any reasoning checkout/what-if branches.
-
-## Human-authored note mirroring (tasks_note → notes_doc)
-
-Some task operations carry meaningful human-authored text (progress notes).
-
-To avoid losing that meaning between sessions, `tasks_note` must be mirrored into reasoning memory:
-
-- The note content is appended as a `doc_entries.kind="note"` entry into the target's `notes_doc`.
-- The mirror is written atomically with the task event (same transaction).
-- The mirror always targets the **canonical** `reasoning_ref.branch` (never the checkout branch).
-
-Recommended metadata (stored in `meta_json`) for the mirrored note:
-
-- `source="tasks_note"`
-- `task_id`, `step_id`, `path`
-- `note_seq` (step note seq)
-- `event_id` (the corresponding task event id)
-
-## PlanFS mirroring (files ↔ reasoning/task stream)
-
-PlanFS keeps planning as durable repo files (`docs/plans/<slug>/PLAN.md` + `Slice-*.md`) while
-preserving integration guarantees inside the organism.
-
-### `tasks.planfs.init` / `tasks.planfs.export`
-
-- Source of truth for rendering is the task step tree (or `from_plan_spec=true` snapshot).
-- Every successful init/export also persists canonical `plan_spec.v1` JSON into reasoning docs:
-  - canonical branch: target `reasoning_ref.branch`
-  - canonical doc: `plan_spec:<TASK-ID>`
-- Append is idempotent:
-  - `status="unchanged"` when latest payload is identical
-  - `status="appended"` when a new snapshot is written
-
-This gives deterministic replay/branching/merge for plans without relying on implicit client state.
-
-### `tasks.planfs.import`
-
-- `apply=true` maps PlanFS files back into the task step tree.
-- Step/task mutations emit normal task events (`step_defined`, `step_noted`, `step_verified`, `step_done`, …),
-  which are ingested into trace/graph via the standard atomic integration path.
-- `apply=false` is validation-only (no task mutation, no task events).
-
-Fail-closed rule:
-
-- Invalid PlanFS structure/placeholders/budgets reject before mutation.
-
-## Reasoning reference
-
-Each task/plan must be associated with a stable “reasoning reference”:
-
-```json
-{
-  "branch": "task/TASK-001",
-  "notes_doc": "notes",
-  "graph_doc": "task-TASK-001-graph",
-  "trace_doc": "task-TASK-001-trace"
-}
-```
-
-Properties:
-
-- Created lazily (on first need) and persisted.
-- Survives server restarts.
-- Returned in `tasks_radar` and `tasks_resume`-like payloads.
-
-## Task → graph projection (v0)
-
-To make the system a **single organism**, task mutations project into the task's `graph_doc`
-atomically and deterministically.
-
-Projection rules:
-
-- Node ids:
-  - Task: `task:<TASK-###>`
-  - Step: `step:<STEP-XXXXXXXX>`
-- Node types: `task`, `step`.
-- Edge type: `contains` (task → step, parent step → child step).
-- Step node status is derived from step completion (`open` | `done`); task nodes omit status in v0.
-- Deletions emit a `graph_node_delete` op and write tombstones for the node **and** all connected
-  edges (no dangling edges in the effective view).
-- Idempotency is guaranteed via `source_event_id = event_id + graph_key` (nodes/edges) and
-  `event_id + node_delete + id` (deletes).
-- Graph writes happen in the **same transaction** as the task event and trace ingestion,
-  atomically and deterministically.
-
-### Namespace (reserved)
-
-- Task node id: `task:<TASK-###>`
-- Step node id: `step:<STEP-XXXXXXXX>`
-
-### Node types
-
-- `task`
-- `step`
-
-### Edges
-
-- `contains` — structural containment (task → step, parent step → child step)
-
-### Guarantees
-
-- Projection is written in the **same transaction** as the task event.
-- `source_event_id` is derived from the task event id + graph key to ensure idempotency.
-- MCP inputs/outputs are unchanged; this is an internal consistency rule.
-
-## Sync event stream
-
-Every mutating `tasks_*` response must include an append-only list of events:
-
-```json
-{
-  "events": [
-    {
-      "event_id": "evt_...",
-      "ts": "2025-12-25T00:00:00Z",
-      "ts_ms": 1735084800000,
-      "workspace": "acme/repo",
-      "task": "TASK-001",
-      "path": "s:0.t:1.s:2",
-      "type": "step_defined",
-      "payload": { "title": "...", "criteria": ["..."] }
-    }
-  ]
-}
-```
-
-Requirements:
-
-- `event_id` is globally unique and idempotent.
-- Events are written atomically with the task mutation.
-- Events are ingested into the reasoning subsystem (trace + optional graph nodes) deterministically.
-
-Typical task-step event types (v0):
-
-- `steps_added`
-- `step_defined`
-- `step_noted`
-- `step_verified`
-- `step_done`
-
-Additional event types (v0.2 parity):
-
-- `task_patched`
-- `task_completed`
-- `task_deleted`
-- `task_node_added` / `task_node_defined` / `task_node_deleted`
-- `step_reopened`
-- `step_blocked` / `step_unblocked`
-- `step_deleted`
-- `plan_updated`
-- `contract_updated`
-- `evidence_captured`
-- `undo_applied` / `redo_applied`
-
-## Conflicts lifecycle (discoverable)
-
-When a merge conflict exists, it must be discoverable via a query:
-
-- either a dedicated conflict listing tool, or
-- conflict entities present in the graph with `status="conflict"`.
-
-When resolved, the conflict must disappear from that listing/query.
+- Legacy multi-portal surfaces and alias tools.
+- Non-markdown tool inputs.

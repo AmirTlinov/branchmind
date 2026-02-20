@@ -1,85 +1,75 @@
-# Quick Start
+# Quick Start (v3)
 
-This repo is a deterministic, contract-first MCP server.
+This repo currently ships a strict v3 MCP surface with exactly three tools:
 
-## 1) Verify toolchain and run checks
+- `branch`
+- `think`
+- `merge`
+
+## 1) Verify
 
 ```bash
 make check
 ```
 
-## 2) Run the MCP server (DX defaults)
+## 2) Run server
 
 ```bash
 make run-mcp
 ```
 
-Zero-arg invocation enables flagship DX defaults:
+## 3) Smoke-check in your MCP client
 
-- shared proxy (session-scoped)
-- default workspace (derived from repo root)
-- repo-local store (`.agents/mcp/.branchmind/`)
-- daily toolset
-- workspace lock (guards against accidental cross-workspace calls)
-- DX mode defaults (compact outputs + snapshot delta on by default)
+### 3.1 tools/list must expose only 3 tools
 
-## 2.1) Golden agent flow (PlanFS + strict reasoning checkpoints)
+Expect names:
 
-Use this minimal sequence inside MCP clients:
+- `branch`
+- `think`
+- `merge`
 
-1. `system(op=quickstart args={portal:"tasks"})` — curated golden recipes only.
-2. `tasks(op=call cmd=tasks.planfs.init args={...})` / `tasks.planfs.export` — keep plans in `docs/plans/**`.
-3. `think(op=call cmd=think.trace.sequential.step args={...})` — record hypothesis→test→evidence→decision checkpoints.
-4. `tasks(op=call cmd=tasks.snapshot args={view:"smart"})` — continue from the next actionable step.
+### 3.2 Create a branch
 
-Notes:
+Tool: `branch`
 
-- Command/schema listing is golden-by-default (`system.cmd.list` / `system.schema.list`), use `mode="all"` for long-tail discovery.
-- Knowledge namespace is removed by design; durable memory is repo-local skills + PlanFS files.
-
-## OpenCode (recommended)
-
-Configure the server as a local MCP backend and let BranchMind auto-configure everything:
-
-```json
-{
-  "mcp": {
-    "branchmind": {
-      "type": "local",
-      "command": ["/abs/path/to/bm_mcp"],
-      "enabled": true,
-      "timeout": 30000
-    }
-  }
-}
+```text
+```bm
+main
+```
 ```
 
-## 3) Run the delegation runner (optional)
+### 3.3 Append a thought commit
 
-BranchMind (`bm_mcp`) is deterministic and does not execute arbitrary external programs.
-Delegated work is modeled as `JOB-*` entities and executed out-of-process by the first-party runner:
+Tool: `think`
 
-```bash
-cargo run -p bm_runner
+```text
+```bm
+commit branch=main commit=c1 message=Init body=Initial note
+```
 ```
 
-To enable the `claude_code` executor (Claude Code CLI), configure the binary path:
+### 3.4 Read history
 
-```bash
-# Option A: env
-BM_CLAUDE_BIN=claude cargo run -p bm_runner
+Tool: `think`
 
-# Option B: flag
-cargo run -p bm_runner -- --claude-bin claude
+```text
+```bm
+log branch=main limit=20
+```
 ```
 
-Notes:
+### 3.5 Merge feature into main
 
-- `bm_runner` uses repo-derived defaults (workspace + store) so the zero-arg invocation is the golden path.
-- When no runner is live, jobs stay QUEUED; the portals (`status` / `jobs_radar`) surface a copy/paste bootstrap hint.
+Tool: `merge`
 
-## 4) Where to look next
+```text
+```bm
+into target=main from=feature strategy=squash
+```
+```
 
-- Contracts: `docs/contracts/OVERVIEW.md`
-- Architecture: `docs/architecture/ARCHITECTURE.md`
-- Agent map: `AGENTS.md`
+## Notes
+
+- Inputs must be a single strict ` ```bm ... ``` ` fenced block.
+- Unknown tools, verbs, or args fail closed with typed errors.
+- Contracts: `docs/contracts/OVERVIEW.md` and `docs/contracts/V3_MCP_SURFACE.md`.

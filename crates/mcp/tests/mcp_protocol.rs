@@ -161,6 +161,85 @@ fn parser_rejects_unknown_verb_for_tool() {
 }
 
 #[test]
+fn parser_rejects_unknown_top_level_arg() {
+    let mut server = Server::start_initialized("parser_rejects_unknown_top_level_arg");
+
+    let call = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": {
+            "name": "branch",
+            "arguments": {
+                "workspace": "ws-parser",
+                "markdown": "```bm\nlist\n```",
+                "unexpected": true
+            }
+        }
+    }));
+    let payload = extract_tool_text(&call);
+    assert_eq!(
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("UNKNOWN_ARG")
+    );
+}
+
+#[test]
+fn parser_rejects_duplicate_command_args() {
+    let mut server = Server::start_initialized("parser_rejects_duplicate_command_args");
+
+    let call = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": "ws-parser",
+                "markdown": "```bm\nlog branch=main branch=other\n```"
+            }
+        }
+    }));
+    let payload = extract_tool_text(&call);
+    assert_eq!(
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_INPUT")
+    );
+}
+
+#[test]
+fn parser_rejects_multiple_bm_blocks() {
+    let mut server = Server::start_initialized("parser_rejects_multiple_bm_blocks");
+
+    let call = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "tools/call",
+        "params": {
+            "name": "branch",
+            "arguments": {
+                "workspace": "ws-parser",
+                "markdown": "```bm\nlist\n```\n```bm\nlist\n```"
+            }
+        }
+    }));
+    let payload = extract_tool_text(&call);
+    assert_eq!(
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_INPUT")
+    );
+}
+
+#[test]
 fn think_log_pagination_cursor_points_to_first_omitted_commit() {
     let mut server = Server::start_initialized("think_log_pagination_cursor");
     let workspace = "ws-pagination";

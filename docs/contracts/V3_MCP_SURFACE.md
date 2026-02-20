@@ -8,15 +8,17 @@
 - `branch`
 - `merge`
 
-Any legacy tool name is rejected with `UNKNOWN_TOOL`.
+Legacy tool names are fail-closed with `UNKNOWN_TOOL`.
 
-## Input contract (all three tools)
+## Shared input contract
 
 Input is a JSON object:
 
 - `workspace` (string, required)
 - `markdown` (string, required)
 - `max_chars` (integer, optional, `1..=65536`, default `8192`)
+
+Unknown top-level keys are rejected with `UNKNOWN_ARG`.
 
 ## Strict parser contract
 
@@ -33,16 +35,26 @@ Rules:
 
 - No non-whitespace text before/after the fenced block.
 - Opening fence is exactly ```` ```bm ````.
-- Closing fence is exactly ```` ``` ````.
-- First line in the block is required and parsed as command line.
-- Tokens after verb must be `key=value`; duplicate keys are rejected.
+- Closing fence is exactly ```` ``` ```` on its own line.
+- First block line is required and parsed as command line.
+- Tokens after verb must be `key=value`.
+- Duplicate keys are rejected.
 - Unknown verbs are rejected with `UNKNOWN_VERB`.
+
+## Tool verbs
+
+- `branch`: `main`, `create`, `list`, `checkout`, `delete`
+- `think`: `commit`, `log`, `show`, `amend`, `delete`
+- `merge`: `into`
 
 ## Error model (typed)
 
-- `UNKNOWN_TOOL` — tool is not in `{think, branch, merge}`.
-- `INVALID_INPUT` — malformed args/markdown/command line.
-- `UNKNOWN_ARG` — top-level tool argument is not allowed.
-- `UNKNOWN_VERB` — verb is not valid for selected tool.
-- `BUDGET_EXCEEDED` — markdown exceeds `max_chars`.
-- `UNKNOWN_ID` / `ALREADY_EXISTS` / `STORE_ERROR` — runtime/store failures.
+- `UNKNOWN_TOOL`
+- `UNKNOWN_ARG`
+- `INVALID_INPUT`
+- `UNKNOWN_VERB`
+- `BUDGET_EXCEEDED`
+- `UNKNOWN_ID`
+- `ALREADY_EXISTS`
+- `MERGE_FAILED`
+- `STORE_ERROR`

@@ -1,30 +1,30 @@
 # Contracts — Overview (v3 MCP surface)
 
-This folder defines the **stable, versioned contracts** for the MCP tools exposed by this server.
+This folder defines the active MCP contract for BranchMind.
 
-## Scope
+## Version
 
-- Contracts describe the MCP tool shapes and parser/runtime behavior.
-- MCP transport (stdio, JSON-RPC envelope) is not repeated here.
-- All tools are deterministic.
-- Side effects are limited to the local embedded store, except for explicitly documented
-  local-only features (e.g. optional runner autostart).
+- Active contract version: **v3**.
+- Advertised tools: **`think`**, **`branch`**, **`merge`**.
+- Input style: markdown-only ` ```bm ... ``` ` command blocks.
+- Legacy tool names are fail-closed with `UNKNOWN_TOOL`.
 
-## Versioning
+## Active contract index
 
-- Contract version: **v3 MCP surface**.
-- Stable advertised tools: `think`, `branch`, `merge`.
-- Inputs are markdown-only (` ```bm ... ``` ` fenced command block parser).
-- Legacy tools are fail-closed (`UNKNOWN_TOOL`).
+- `V3_MCP_SURFACE.md` — tools, verbs, strict parser rules.
+- `TYPES.md` — response envelope + typed error model.
+- `MEMORY.md` — branch/commit/merge data model.
+- `INTEGRATION.md` — deterministic cross-tool invariants.
+- `PARITY.md` — v3 parity target and non-goals.
 
-## Naming constraints
+## Archived docs (de-indexed)
 
-Many MCP clients require tool names to match `^[a-zA-Z0-9_-]+$`.
+The following are not active contracts and must not be used as current behavior:
 
-## Contract index
+- `V1_*.md`
+- `*_v1.md`
+- legacy portal/ops migration docs
 
-- `V3_MCP_SURFACE.md` — v3 tool list + strict fenced `bm` parser contract.
+## Related
 
-Related:
-
-- `../GLOSSARY.md` — shared terminology across domains
+- `../GLOSSARY.md` — shared terminology

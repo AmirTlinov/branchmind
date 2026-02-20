@@ -1,67 +1,28 @@
-# BranchMind — durable working memory + execution cockpit for AI agents (MCP server)
+# BranchMind (v3 MCP surface)
 
-BranchMind is a **Rust-first, MCP-only** server that helps AI agents execute long, complex work
-without losing context, proof, or decisions. Think “mission control” for tasks + “versioned brain”
-for reasoning — **low noise, high discipline, deterministic**.
+BranchMind is a deterministic Rust MCP server with a minimal tool surface:
 
-## Why it exists
+- `branch`
+- `think`
+- `merge`
 
-Agents drift. Evidence gets lost. Multi‑session work becomes a mess.
-BranchMind makes progress **traceable**, **resumable**, and **auditable** while keeping the UX
-lean enough for daily use.
+All three tools use the same markdown command input (` ```bm ... ``` `).
 
-## Who it’s for
+## What v3 guarantees
 
-- Agent builders who need **durable memory** + **proof-first execution**.
-- Teams running long tasks that span sessions and need **zero‑drift handoffs**.
-- Developers who want **deterministic, local‑only** tooling with clear contracts.
+- strict, fail-closed parser
+- typed errors with recovery hints
+- local embedded-store only (no network I/O)
+- deterministic behavior from args + persisted state
 
-## What you get
-
-- **Task execution control tower**: checkpoints, progress radar, “next action” guidance.
-- **Versioned reasoning memory**: notes, diffs, merges, graphs, thinking traces.
-- **Proof‑first gates**: close steps with real receipts, not narrative.
-- **Low‑noise daily portal**: minimal tool surface, progressive disclosure.
-- **Delegation jobs** via `bm_runner` (out‑of‑process) with a fail-closed pipeline:
-  scout → builder → validator → gate → apply.
-
-## Concrete benefits (what users actually feel)
-
-**For AI agents**
-- **Context that sticks**: repo-local skills (`.agents/skills/**`) + PlanFS files (`docs/plans/**`) + reasoning docs.
-- **Planning with control**: explicit steps, checkpoints, and next‑action guidance.
-- **Better reasoning**: hypotheses → tests → evidence → decisions, not just chat.
-- **Artifacts you can trust**: proofs, logs, and refs are first‑class.
-- **Safe exploration**: branch/merge reasoning without losing the main thread.
-- **Parallel execution**: delegate jobs without breaking determinism.
-
-**For users and teams**
-- **Fewer regressions**: “DONE” means proven, not assumed.
-- **Faster resumes**: restart a week later and continue at the exact step.
-- **Auditable history**: who did what, why, with evidence.
-- **Lower coordination cost**: shared memory and structured handoffs.
-- **Predictable behavior**: local‑only, deterministic, contract‑first.
-
-## How it works (mental model)
-
-1. `status` gives the **next action**.
-2. `tasks.snapshot` is your **compass**; `open <ref>` is your **zoom**.
-3. For multi-agent slices, run scout → builder → validator, then gate before apply.
-4. Apply only from an approved gate decision (fail-closed by default).
-5. Close steps with `tasks.macro.close.step` + `proof_input`  
-   (URL/CMD/path → LINK/CMD/FILE; NOTE doesn’t satisfy proof).
-6. Persist plans and slices as files (`docs/plans/<slug>/PLAN.md`, `SLICE-*.md`) and keep BranchMind steps aligned 1:1 with those slices.
-
-## Quick start (from source)
+## Quick start
 
 ```bash
 make check
 make run-mcp
 ```
 
-## Add to your MCP client
-
-Example config (OpenCode-style):
+## MCP client config (example)
 
 ```json
 {
@@ -76,44 +37,47 @@ Example config (OpenCode-style):
 }
 ```
 
-Notes:
-- Build/install both binaries so runner autostart works:
-  `bm_mcp` and `bm_runner` should sit in the same directory (or `bm_runner` in `PATH`).
+## Minimal workflow
 
-## Runtime flags (selected)
+1) Create main branch:
 
-- `--storage-dir <path>` — embedded store directory.
-- `--workspace <id|path>` — default workspace id (or an absolute path that will be mapped/bound to an id).
-- `--agent-id <id|auto>` — default actor id (stored once, reused across restarts).
-- `--toolset daily|full|core` — controls default UX/formatting (e.g. BM‑L1 line mode vs full JSON). The v1 tool surface (`tools/list`) remains the fixed 10 portals.
-- `--shared` / `--daemon` — shared local daemon modes.
-
-Full list: `bm_mcp --help`.
-
-## Release notes (v2.0.0)
-
-- Removed legacy knowledge-card command family (`think.knowledge.*`, `think.add.knowledge`).
-- PlanFS is the planning SSOT in git (`docs/plans/<slug>/PLAN.md` + `Slice-*.md`).
-- `doc_kind=plan_spec` supports branch/diff/merge/export for deterministic plan evolution.
-- Default command/schema listing is golden-first (`mode=golden`, opt-in `mode=all`).
-
-## Repository map
-
-```text
-crates/
-  core/      pure domain (tasks + reasoning primitives)
-  storage/   persistence adapter (single embedded store)
-  mcp/       MCP server (stdio) adapter
-  runner/    delegation runner (JOB-* worker)
-docs/
-  contracts/     MCP surface (schemas + semantics)
-  architecture/  boundaries, storage, test strategy
+```json
+{
+  "name": "branch",
+  "arguments": {
+    "workspace": "demo",
+    "markdown": "```bm\nmain\n```"
+  }
+}
 ```
 
-## Start here (docs)
+2) Write thought commit:
 
-- `GOALS.md` — what “done” means
-- `PHILOSOPHY.md` — guiding principles
-- `AGENTS.md` — development rules for AI agents
-- `docs/contracts/OVERVIEW.md` — contract entrypoint
-- `docs/QUICK_START.md` — developer golden path
+```json
+{
+  "name": "think",
+  "arguments": {
+    "workspace": "demo",
+    "markdown": "```bm\ncommit branch=main commit=c1 message=Start body=Initial\n```"
+  }
+}
+```
+
+3) Merge a feature branch into main:
+
+```json
+{
+  "name": "merge",
+  "arguments": {
+    "workspace": "demo",
+    "markdown": "```bm\ninto target=main from=feature strategy=squash\n```"
+  }
+}
+```
+
+## Docs
+
+- Contracts entrypoint: `docs/contracts/OVERVIEW.md`
+- v3 surface contract: `docs/contracts/V3_MCP_SURFACE.md`
+- Developer quick start: `docs/QUICK_START.md`
+- Architecture: `docs/architecture/ARCHITECTURE.md`

@@ -10,7 +10,6 @@ const HARD_MAX_CHARS: usize = 65_536;
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedToolInput {
     pub(crate) workspace: String,
-    pub(crate) max_chars: usize,
     pub(crate) command: ParsedCommand,
 }
 
@@ -55,9 +54,13 @@ pub(crate) fn parse_tool_markdown(
     tool: &str,
     allowed_verbs: &[&str],
 ) -> Result<ParsedToolInput, Value> {
-    let args_obj = args
-        .as_object()
-        .ok_or_else(|| parser_error("INVALID_INPUT", "arguments must be an object", "Use a JSON object for tool arguments."))?;
+    let args_obj = args.as_object().ok_or_else(|| {
+        parser_error(
+            "INVALID_INPUT",
+            "arguments must be an object",
+            "Use a JSON object for tool arguments.",
+        )
+    })?;
 
     let allowed_keys = BTreeSet::from([
         "workspace".to_string(),
@@ -119,7 +122,7 @@ pub(crate) fn parse_tool_markdown(
                 "INVALID_INPUT",
                 "max_chars must be a positive integer",
                 "Set max_chars between 1 and 65536.",
-            ))
+            ));
         }
     };
 
@@ -145,12 +148,15 @@ pub(crate) fn parse_tool_markdown(
     let command = parse_command_block(markdown, tool, allowed_verbs)?;
     Ok(ParsedToolInput {
         workspace: workspace.as_str().to_string(),
-        max_chars,
         command,
     })
 }
 
-fn parse_command_block(markdown: &str, tool: &str, allowed_verbs: &[&str]) -> Result<ParsedCommand, Value> {
+fn parse_command_block(
+    markdown: &str,
+    tool: &str,
+    allowed_verbs: &[&str],
+) -> Result<ParsedCommand, Value> {
     let normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
     let mut lines: Vec<&str> = normalized.lines().collect();
 
@@ -237,7 +243,10 @@ fn parse_command_block(markdown: &str, tool: &str, allowed_verbs: &[&str]) -> Re
         return Err(parser_error(
             "UNKNOWN_VERB",
             &format!("Unknown {tool} verb: {verb}"),
-            &format!("Use tools/list and choose one of: {}.", allowed_verbs.join(", ")),
+            &format!(
+                "Use tools/list and choose one of: {}.",
+                allowed_verbs.join(", ")
+            ),
         ));
     }
 
