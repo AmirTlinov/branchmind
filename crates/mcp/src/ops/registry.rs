@@ -236,9 +236,9 @@ impl CommandRegistry {
                 .as_deref()
                 .is_some_and(|name| !name.trim().is_empty());
             let has_custom_handler = spec.handler.is_some();
-            if has_handler_name == has_custom_handler {
+            if !has_handler_name && !has_custom_handler {
                 panic!(
-                    "registry wiring error for {}: use exactly one dispatch path (handler_name or handler)",
+                    "registry wiring error for {}: define at least one dispatch path (handler_name or handler)",
                     spec.cmd
                 );
             }

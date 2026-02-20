@@ -49,6 +49,28 @@ fn registry_has_doc_and_schema_for_all_cmds() {
 }
 
 #[test]
+fn docs_transcripts_hooks_keep_handler_name_for_recovery_routing() {
+    let registry = CommandRegistry::global();
+    let open = registry
+        .find_by_cmd("docs.transcripts.open")
+        .expect("docs.transcripts.open must be registered");
+    assert_eq!(open.handler_name.as_deref(), Some("transcripts_open"));
+    assert!(
+        open.handler.is_some(),
+        "hooked docs command must keep custom handler"
+    );
+
+    let digest = registry
+        .find_by_cmd("docs.transcripts.digest")
+        .expect("docs.transcripts.digest must be registered");
+    assert_eq!(digest.handler_name.as_deref(), Some("transcripts_digest"));
+    assert!(
+        digest.handler.is_some(),
+        "hooked docs command must keep custom handler"
+    );
+}
+
+#[test]
 fn action_priority_ranking_is_stable() {
     assert!(ActionPriority::High.rank() < ActionPriority::Medium.rank());
     assert!(ActionPriority::Medium.rank() < ActionPriority::Low.rank());
