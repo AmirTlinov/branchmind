@@ -186,7 +186,7 @@ fn budget_profiles_can_avoid_truncation_warnings_for_large_reads() {
             let code = w.get("code").and_then(|v| v.as_str());
             code != Some("BUDGET_TRUNCATED") && code != Some("BUDGET_MINIMAL")
         }),
-        "expected no budget truncation warnings under budget_profile=audit, got: {warnings:?}"
+        "expected no budget truncation warnings for explicit max_chars request, got: {warnings:?}"
     );
 
     let _ = fs::remove_dir_all(&dir);

@@ -10,7 +10,7 @@ fn markdown_schema() -> Value {
             "markdown": { "type": "string" },
             "max_chars": { "type": "integer", "minimum": 1, "maximum": 65536 }
         },
-        "required": ["markdown"]
+        "required": ["workspace", "markdown"]
     })
 }
 

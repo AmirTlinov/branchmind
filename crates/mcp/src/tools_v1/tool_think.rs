@@ -126,7 +126,12 @@ fn handle_log(
     let mut commits = Vec::new();
     let mut truncated = false;
 
-    while let Some(commit_id) = cursor {
+    while let Some(commit_id) = cursor.clone() {
+        if commits.len() >= limit {
+            truncated = true;
+            break;
+        }
+
         if !seen.insert(commit_id.clone()) {
             return crate::ai_error_with(
                 "STORE_ERROR",
@@ -157,10 +162,6 @@ fn handle_log(
         if skipped < offset {
             skipped += 1;
             continue;
-        }
-        if commits.len() >= limit {
-            truncated = true;
-            break;
         }
         commits.push(commit_to_json(&commit));
     }

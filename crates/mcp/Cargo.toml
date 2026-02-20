@@ -2,7 +2,6 @@
 name = "bm_mcp"
 version = "2.0.0"
 edition = "2024"
-autotests = false
 
 [dependencies]
 bm_core = { path = "../core" }
@@ -17,11 +16,3 @@ time = { version = "0.3", features = ["formatting"] }
 # Unix-only: used to poll stdin with a timeout so hot reload can trigger even when the MCP client
 # is idle (no manual restarts required).
 nix = { version = "0.28", default-features = false, features = ["poll"] }
-
-[[test]]
-name = "tool_dispatch_guard"
-path = "tests/tool_dispatch_guard.rs"
-
-[[test]]
-name = "mcp_protocol"
-path = "tests/mcp_protocol.rs"

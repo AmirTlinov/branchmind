@@ -5,6 +5,28 @@ use support::*;
 
 use serde_json::json;
 
+fn call_markdown_tool(
+    server: &mut Server,
+    id: i64,
+    name: &str,
+    workspace: &str,
+    markdown: &str,
+) -> serde_json::Value {
+    let resp = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": name,
+            "arguments": {
+                "workspace": workspace,
+                "markdown": markdown
+            }
+        }
+    }));
+    extract_tool_text(&resp)
+}
+
 #[test]
 fn mcp_auto_init_allows_tools_list_without_notifications() {
     let mut server = Server::start("auto_init_tools_list_v3");
@@ -124,4 +146,115 @@ fn parser_rejects_unknown_verb_for_tool() {
         payload.get("error").and_then(|v| v.get("code")).and_then(|v| v.as_str()),
         Some("UNKNOWN_VERB")
     );
+}
+
+#[test]
+fn think_log_pagination_cursor_points_to_first_omitted_commit() {
+    let mut server = Server::start_initialized("think_log_pagination_cursor");
+    let workspace = "ws-pagination";
+
+    let main = call_markdown_tool(&mut server, 20, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    for (id, commit_id) in ["c1", "c2", "c3"].into_iter().enumerate() {
+        let payload = call_markdown_tool(
+            &mut server,
+            30 + id as i64,
+            "think",
+            workspace,
+            &format!("```bm\ncommit branch=main commit={commit_id} message={commit_id} body={commit_id}\n```"),
+        );
+        assert_eq!(payload.get("success").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    let page1 = call_markdown_tool(
+        &mut server,
+        40,
+        "think",
+        workspace,
+        "```bm\nlog branch=main limit=1\n```",
+    );
+    assert_eq!(page1.get("success").and_then(|v| v.as_bool()), Some(true));
+    let page1_items = page1
+        .get("result")
+        .and_then(|v| v.get("items"))
+        .and_then(|v| v.as_array())
+        .expect("result.items");
+    assert_eq!(page1_items.len(), 1);
+    assert_eq!(
+        page1_items[0]
+            .get("commit_id")
+            .and_then(|v| v.as_str())
+            .expect("commit_id"),
+        "c3"
+    );
+    let next_commit_id = page1
+        .get("result")
+        .and_then(|v| v.get("next_commit_id"))
+        .and_then(|v| v.as_str())
+        .expect("next_commit_id");
+    assert_eq!(next_commit_id, "c2");
+
+    let page2 = call_markdown_tool(
+        &mut server,
+        41,
+        "think",
+        workspace,
+        &format!("```bm\nlog branch=main from={next_commit_id} limit=1\n```"),
+    );
+    assert_eq!(page2.get("success").and_then(|v| v.as_bool()), Some(true));
+    let page2_first = page2
+        .get("result")
+        .and_then(|v| v.get("items"))
+        .and_then(|v| v.as_array())
+        .and_then(|items| items.first())
+        .expect("result.items[0]");
+    assert_eq!(
+        page2_first
+            .get("commit_id")
+            .and_then(|v| v.as_str())
+            .expect("commit_id"),
+        "c2"
+    );
+}
+
+#[test]
+fn think_log_limit_zero_returns_empty_page_and_head_cursor() {
+    let mut server = Server::start_initialized("think_log_limit_zero_cursor");
+    let workspace = "ws-limit-zero";
+
+    let main = call_markdown_tool(&mut server, 50, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    for (id, commit_id) in ["c1", "c2"].into_iter().enumerate() {
+        let payload = call_markdown_tool(
+            &mut server,
+            60 + id as i64,
+            "think",
+            workspace,
+            &format!("```bm\ncommit branch=main commit={commit_id} message={commit_id} body={commit_id}\n```"),
+        );
+        assert_eq!(payload.get("success").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    let page = call_markdown_tool(
+        &mut server,
+        70,
+        "think",
+        workspace,
+        "```bm\nlog branch=main limit=0\n```",
+    );
+    assert_eq!(page.get("success").and_then(|v| v.as_bool()), Some(true));
+    let items = page
+        .get("result")
+        .and_then(|v| v.get("items"))
+        .and_then(|v| v.as_array())
+        .expect("result.items");
+    assert!(items.is_empty(), "limit=0 must return no items");
+    let next_commit_id = page
+        .get("result")
+        .and_then(|v| v.get("next_commit_id"))
+        .and_then(|v| v.as_str())
+        .expect("next_commit_id");
+    assert_eq!(next_commit_id, "c2");
 }
