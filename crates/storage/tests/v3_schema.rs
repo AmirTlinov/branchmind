@@ -168,3 +168,94 @@ fn v3_branch_commit_merge_api_and_atomic_merge_write() {
             .all(|branch| branch.branch_id() != "feature")
     );
 }
+
+#[test]
+fn branch_updated_at_is_monotonic_for_stale_commit_and_merge_timestamps() {
+    let dir = temp_storage_dir("branch-updated-at-monotonic");
+    let mut store = SqliteStore::open(&dir).expect("fresh storage should open");
+
+    store
+        .create_branch(CreateBranchRequest {
+            workspace_id: "ws-b".to_string(),
+            branch_id: "main".to_string(),
+            parent_branch_id: None,
+            created_at_ms: 100,
+        })
+        .expect("main branch should be created");
+
+    store
+        .create_branch(CreateBranchRequest {
+            workspace_id: "ws-b".to_string(),
+            branch_id: "feature".to_string(),
+            parent_branch_id: Some("main".to_string()),
+            created_at_ms: 101,
+        })
+        .expect("feature branch should be created");
+
+    store
+        .append_commit(AppendCommitRequest {
+            workspace_id: "ws-b".to_string(),
+            branch_id: "main".to_string(),
+            commit_id: "c-main-1".to_string(),
+            parent_commit_id: None,
+            message: "first main".to_string(),
+            body: "first main body".to_string(),
+            created_at_ms: 200,
+        })
+        .expect("first main commit should be appended");
+
+    store
+        .append_commit(AppendCommitRequest {
+            workspace_id: "ws-b".to_string(),
+            branch_id: "main".to_string(),
+            commit_id: "c-main-stale".to_string(),
+            parent_commit_id: None,
+            message: "stale main".to_string(),
+            body: "stale body".to_string(),
+            created_at_ms: 150,
+        })
+        .expect("stale main commit should be accepted with clamped updated_at_ms");
+
+    store
+        .append_commit(AppendCommitRequest {
+            workspace_id: "ws-b".to_string(),
+            branch_id: "feature".to_string(),
+            commit_id: "c-feature-1".to_string(),
+            parent_commit_id: None,
+            message: "feature init".to_string(),
+            body: "feature body".to_string(),
+            created_at_ms: 220,
+        })
+        .expect("feature commit should be appended");
+
+    store
+        .create_merge_record(CreateMergeRecordRequest {
+            workspace_id: "ws-b".to_string(),
+            merge_id: "merge-stale-time".to_string(),
+            source_branch_id: "feature".to_string(),
+            target_branch_id: "main".to_string(),
+            strategy: "squash".to_string(),
+            summary: "merge with stale timestamp".to_string(),
+            synthesis_commit_id: "c-main-merge-stale".to_string(),
+            synthesis_message: "merge stale".to_string(),
+            synthesis_body: "merge stale body".to_string(),
+            created_at_ms: 180,
+        })
+        .expect("merge should succeed with clamped updated_at_ms");
+
+    let branches = store
+        .list_branches(ListBranchesRequest {
+            workspace_id: "ws-b".to_string(),
+            limit: 10,
+            offset: 0,
+        })
+        .expect("branches should list");
+
+    let main_branch = branches
+        .iter()
+        .find(|branch| branch.branch_id() == "main")
+        .expect("main branch must exist");
+
+    assert_eq!(main_branch.updated_at_ms(), 200);
+    assert_eq!(main_branch.head_commit_id(), Some("c-main-merge-stale"));
+}

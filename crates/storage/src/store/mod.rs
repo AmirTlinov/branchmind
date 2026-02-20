@@ -137,13 +137,13 @@ impl SqliteStore {
         let branch_id = canonical_identifier("branch_id", request.branch_id)?;
 
         let tx = self.conn.transaction()?;
-        let head_commit = branch_head_tx(&tx, &workspace_id, &branch_id)?;
+        let branch_state = branch_state_tx(&tx, &workspace_id, &branch_id)?;
 
         let commit = ThoughtCommit::try_new(
             workspace_id,
             branch_id,
             request.commit_id,
-            request.parent_commit_id.or(head_commit),
+            request.parent_commit_id.or(branch_state.head_commit_id),
             request.message,
             request.body,
             request.created_at_ms,
@@ -171,13 +171,15 @@ impl SqliteStore {
             return Err(map_insert_conflict(err, "commit", commit.commit_id()));
         }
 
+        let updated_at_ms =
+            monotonic_updated_at_ms(branch_state.updated_at_ms, commit.created_at_ms());
         tx.execute(
             "UPDATE branches SET head_commit_id=?3, updated_at_ms=?4 WHERE workspace_id=?1 AND branch_id=?2",
             params![
                 commit.workspace_id(),
                 commit.branch_id(),
                 commit.commit_id(),
-                commit.created_at_ms()
+                updated_at_ms
             ],
         )?;
 
@@ -245,13 +247,13 @@ impl SqliteStore {
         let tx = self.conn.transaction()?;
 
         ensure_branch_exists_tx(&tx, &workspace_id, &source_branch_id)?;
-        let target_head = branch_head_tx(&tx, &workspace_id, &target_branch_id)?;
+        let target_state = branch_state_tx(&tx, &workspace_id, &target_branch_id)?;
 
         let synthesis_commit = ThoughtCommit::try_new(
             workspace_id.clone(),
             target_branch_id.clone(),
             request.synthesis_commit_id,
-            target_head,
+            target_state.head_commit_id,
             request.synthesis_message,
             request.synthesis_body,
             request.created_at_ms,
@@ -319,13 +321,15 @@ impl SqliteStore {
             ));
         }
 
+        let updated_at_ms =
+            monotonic_updated_at_ms(target_state.updated_at_ms, synthesis_commit.created_at_ms());
         tx.execute(
             "UPDATE branches SET head_commit_id=?3, updated_at_ms=?4 WHERE workspace_id=?1 AND branch_id=?2",
             params![
                 synthesis_commit.workspace_id(),
                 synthesis_commit.branch_id(),
                 synthesis_commit.commit_id(),
-                synthesis_commit.created_at_ms()
+                updated_at_ms
             ],
         )?;
 
@@ -556,26 +560,39 @@ fn ensure_branch_exists_tx(
     }
 }
 
-fn branch_head_tx(
+#[derive(Debug)]
+struct BranchState {
+    head_commit_id: Option<String>,
+    updated_at_ms: i64,
+}
+
+fn branch_state_tx(
     tx: &Transaction<'_>,
     workspace_id: &str,
     branch_id: &str,
-) -> Result<Option<String>, StoreError> {
+) -> Result<BranchState, StoreError> {
     let value = tx
         .query_row(
-            "SELECT head_commit_id FROM branches WHERE workspace_id=?1 AND branch_id=?2",
+            "SELECT head_commit_id, updated_at_ms FROM branches WHERE workspace_id=?1 AND branch_id=?2",
             params![workspace_id, branch_id],
-            |row| row.get::<_, Option<String>>(0),
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
         )
         .optional()?;
 
     match value {
-        Some(head) => Ok(head),
+        Some((head_commit_id, updated_at_ms)) => Ok(BranchState {
+            head_commit_id,
+            updated_at_ms,
+        }),
         None => Err(StoreError::NotFound {
             entity: "branch",
             id: format!("{workspace_id}/{branch_id}"),
         }),
     }
+}
+
+fn monotonic_updated_at_ms(previous_updated_at_ms: i64, candidate_updated_at_ms: i64) -> i64 {
+    previous_updated_at_ms.max(candidate_updated_at_ms)
 }
 
 fn ensure_commit_exists_tx(
