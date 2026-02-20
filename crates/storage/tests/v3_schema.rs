@@ -32,7 +32,10 @@ fn storage_open_is_fail_closed_on_legacy_schema() {
 
     let err = SqliteStore::open(&dir).expect_err("legacy storage must be rejected");
     assert_eq!(err.code(), "RESET_REQUIRED");
-    assert!(matches!(err, StoreError::ResetRequired { .. }));
+    assert!(matches!(
+        err,
+        StoreError::InvalidInput(message) if message.starts_with("RESET_REQUIRED")
+    ));
 }
 
 #[test]
