@@ -1,6 +1,6 @@
 use super::super::*;
 use bm_core::ids::WorkspaceId;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 impl SqliteStore {
     pub fn branch_create(
@@ -48,16 +48,27 @@ impl SqliteStore {
 
         let base_seq = doc_entries_head_seq_tx(&tx, workspace.as_str())?.unwrap_or(0);
 
+        let parent_head_commit_id = tx
+            .query_row(
+                "SELECT head_commit_id FROM branches WHERE workspace=?1 AND name=?2",
+                params![workspace.as_str(), base_branch.as_str()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+
         tx.execute(
             r#"
-            INSERT INTO branches(workspace, name, base_branch, base_seq, created_at_ms)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            INSERT INTO branches(workspace, name, base_branch, base_seq, created_at_ms, head_commit_id, updated_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 workspace.as_str(),
                 name,
                 base_branch.as_str(),
                 base_seq,
+                now_ms,
+                parent_head_commit_id,
                 now_ms
             ],
         )?;

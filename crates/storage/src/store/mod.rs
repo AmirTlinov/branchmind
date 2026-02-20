@@ -17,6 +17,7 @@ mod jobs;
 mod ops_history;
 mod portal_cursors;
 mod reasoning_ref;
+mod requests;
 mod runners;
 mod slices;
 mod steps;
@@ -24,6 +25,7 @@ mod support;
 mod tasks;
 mod think;
 mod types;
+mod v3;
 mod vcs;
 
 use bm_core::ids::WorkspaceId;
@@ -32,8 +34,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_BRANCH: &str = "main";
+const V3_SCHEMA_VERSION: i64 = 3;
 
 pub use error::StoreError;
+pub use requests::*;
 pub use types::*;
 
 use support::*;
@@ -67,8 +71,11 @@ impl SqliteStore {
         let db_path = storage_dir.join("branchmind_rust.db");
         let conn = Connection::open(db_path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let preflight = v3_preflight_gate(&conn)?;
         let store = Self { storage_dir, conn };
         store.migrate()?;
+        store.ensure_v3_schema(preflight)?;
         Ok(store)
     }
 
@@ -101,6 +108,13 @@ impl SqliteStore {
 
     fn migrate(&self) -> Result<(), StoreError> {
         migrate_sqlite_schema(&self.conn)
+    }
+
+    fn ensure_v3_schema(&self, preflight: V3Preflight) -> Result<(), StoreError> {
+        if matches!(preflight, V3Preflight::Empty) {
+            install_v3_schema_extensions(&self.conn)?;
+        }
+        Ok(())
     }
 
     pub fn workspace_exists(&self, workspace: &WorkspaceId) -> Result<bool, StoreError> {
@@ -430,6 +444,149 @@ impl SqliteStore {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V3Preflight {
+    Empty,
+    Compatible,
+}
+
+fn v3_preflight_gate(conn: &Connection) -> Result<V3Preflight, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut tables = Vec::new();
+    while let Some(row) = rows.next()? {
+        tables.push(row.get::<_, String>(0)?);
+    }
+
+    if tables.is_empty() {
+        return Ok(V3Preflight::Empty);
+    }
+
+    if !tables.iter().any(|name| name == "workspace_state") {
+        return Err(StoreError::InvalidInput(
+            "RESET_REQUIRED: workspace_state table is missing",
+        ));
+    }
+
+    let version = conn
+        .query_row(
+            "SELECT schema_version FROM workspace_state WHERE singleton=1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+
+    match version {
+        Some(v) if v == V3_SCHEMA_VERSION => Ok(V3Preflight::Compatible),
+        Some(_) => Err(StoreError::InvalidInput(
+            "RESET_REQUIRED: schema version mismatch",
+        )),
+        None => Err(StoreError::InvalidInput(
+            "RESET_REQUIRED: schema state row is missing",
+        )),
+    }
+}
+
+fn install_v3_schema_extensions(conn: &Connection) -> Result<(), StoreError> {
+    let now_ms = now_ms();
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS workspace_state (
+          singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+          schema_version INTEGER NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS commits (
+          workspace TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          commit_id TEXT NOT NULL,
+          parent_commit_id TEXT,
+          message TEXT NOT NULL,
+          body TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          PRIMARY KEY(workspace, commit_id),
+          FOREIGN KEY(workspace, branch)
+            REFERENCES branches(workspace, name)
+            ON DELETE CASCADE,
+          FOREIGN KEY(workspace, parent_commit_id)
+            REFERENCES commits(workspace, commit_id)
+            ON DELETE RESTRICT,
+          CHECK(parent_commit_id IS NULL OR parent_commit_id <> commit_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_commits_workspace_branch_created
+          ON commits(workspace, branch, created_at_ms, commit_id);
+
+        CREATE TABLE IF NOT EXISTS merge_records (
+          workspace TEXT NOT NULL,
+          merge_id TEXT NOT NULL,
+          source_branch TEXT NOT NULL,
+          target_branch TEXT NOT NULL,
+          synthesis_commit_id TEXT NOT NULL,
+          strategy TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          PRIMARY KEY(workspace, merge_id),
+          FOREIGN KEY(workspace, source_branch)
+            REFERENCES branches(workspace, name)
+            ON DELETE CASCADE,
+          FOREIGN KEY(workspace, target_branch)
+            REFERENCES branches(workspace, name)
+            ON DELETE CASCADE,
+          FOREIGN KEY(workspace, synthesis_commit_id)
+            REFERENCES commits(workspace, commit_id)
+            ON DELETE RESTRICT,
+          CHECK(source_branch <> target_branch)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_merge_records_workspace_created
+          ON merge_records(workspace, created_at_ms, merge_id);
+        ",
+    )?;
+
+    if !table_has_column(conn, "branches", "head_commit_id")? {
+        conn.execute("ALTER TABLE branches ADD COLUMN head_commit_id TEXT", [])?;
+    }
+    if !table_has_column(conn, "branches", "updated_at_ms")? {
+        conn.execute(
+            "ALTER TABLE branches ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "UPDATE branches SET updated_at_ms = COALESCE(updated_at_ms, created_at_ms)",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO workspace_state(singleton, schema_version, created_at_ms, updated_at_ms) \
+         VALUES (1, ?1, ?2, ?2) \
+         ON CONFLICT(singleton) DO UPDATE SET \
+           schema_version=excluded.schema_version, \
+           updated_at_ms=excluded.updated_at_ms",
+        params![V3_SCHEMA_VERSION, now_ms],
+    )?;
+
+    Ok(())
+}
+
+fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
+    let query = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&query)?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn base36(mut value: u64) -> String {
     const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     if value == 0 {
@@ -505,10 +662,10 @@ fn bootstrap_default_branch_tx(
     let base_seq = doc_entries_head_seq_tx(tx, workspace)?.unwrap_or(0);
     tx.execute(
         r#"
-        INSERT OR IGNORE INTO branches(workspace, name, base_branch, base_seq, created_at_ms)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT OR IGNORE INTO branches(workspace, name, base_branch, base_seq, created_at_ms, head_commit_id, updated_at_ms)
+        VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)
         "#,
-        params![workspace, DEFAULT_BRANCH, DEFAULT_BRANCH, base_seq, now_ms],
+        params![workspace, DEFAULT_BRANCH, DEFAULT_BRANCH, base_seq, now_ms, now_ms],
     )?;
     branch_checkout_set_tx(tx, workspace, DEFAULT_BRANCH, now_ms)?;
     Ok(true)
