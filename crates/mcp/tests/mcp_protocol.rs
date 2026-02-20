@@ -37,7 +37,10 @@ fn mcp_auto_init_allows_tools_list_without_notifications() {
         "method": "initialize",
         "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
     }));
-    assert!(init.get("result").is_some(), "initialize must return result");
+    assert!(
+        init.get("result").is_some(),
+        "initialize must return result"
+    );
 
     let tools_list = server.request(json!({
         "jsonrpc": "2.0",
@@ -97,7 +100,10 @@ fn parser_rejects_non_fenced_markdown() {
     }));
     let payload = extract_tool_text(&call);
     assert_eq!(
-        payload.get("error").and_then(|v| v.get("code")).and_then(|v| v.as_str()),
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
         Some("INVALID_INPUT")
     );
 }
@@ -120,7 +126,10 @@ fn parser_rejects_text_outside_bm_fence() {
     }));
     let payload = extract_tool_text(&call);
     assert_eq!(
-        payload.get("error").and_then(|v| v.get("code")).and_then(|v| v.as_str()),
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
         Some("INVALID_INPUT")
     );
 }
@@ -143,7 +152,10 @@ fn parser_rejects_unknown_verb_for_tool() {
     }));
     let payload = extract_tool_text(&call);
     assert_eq!(
-        payload.get("error").and_then(|v| v.get("code")).and_then(|v| v.as_str()),
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
         Some("UNKNOWN_VERB")
     );
 }
@@ -162,7 +174,9 @@ fn think_log_pagination_cursor_points_to_first_omitted_commit() {
             30 + id as i64,
             "think",
             workspace,
-            &format!("```bm\ncommit branch=main commit={commit_id} message={commit_id} body={commit_id}\n```"),
+            &format!(
+                "```bm\ncommit branch=main commit={commit_id} message={commit_id} body={commit_id}\n```"
+            ),
         );
         assert_eq!(payload.get("success").and_then(|v| v.as_bool()), Some(true));
     }
@@ -232,7 +246,9 @@ fn think_log_limit_zero_returns_empty_page_and_head_cursor() {
             60 + id as i64,
             "think",
             workspace,
-            &format!("```bm\ncommit branch=main commit={commit_id} message={commit_id} body={commit_id}\n```"),
+            &format!(
+                "```bm\ncommit branch=main commit={commit_id} message={commit_id} body={commit_id}\n```"
+            ),
         );
         assert_eq!(payload.get("success").and_then(|v| v.as_bool()), Some(true));
     }
@@ -257,4 +273,111 @@ fn think_log_limit_zero_returns_empty_page_and_head_cursor() {
         .and_then(|v| v.as_str())
         .expect("next_commit_id");
     assert_eq!(next_commit_id, "c2");
+}
+
+#[test]
+fn merge_into_long_branch_ids_keeps_unique_ids_for_each_source() {
+    let mut server = Server::start_initialized("merge_long_branch_ids_unique");
+    let workspace = "ws-merge-long";
+
+    let main = call_markdown_tool(&mut server, 80, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let target = format!("t{}", "x".repeat(109));
+    let source_a = format!("s{}a", "q".repeat(107));
+    let source_b = format!("s{}b", "q".repeat(107));
+
+    for (id, branch) in [
+        (81, target.as_str()),
+        (82, source_a.as_str()),
+        (83, source_b.as_str()),
+    ] {
+        let create = call_markdown_tool(
+            &mut server,
+            id,
+            "branch",
+            workspace,
+            &format!("```bm\ncreate branch={branch} from=main\n```"),
+        );
+        assert_eq!(
+            create.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "branch create should succeed for {branch}: {create}"
+        );
+    }
+
+    let merge = call_markdown_tool(
+        &mut server,
+        84,
+        "merge",
+        workspace,
+        &format!("```bm\ninto target={target} from={source_a},{source_b} strategy=squash\n```"),
+    );
+    assert_eq!(
+        merge.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "merge should succeed: {merge}"
+    );
+
+    let merged = merge
+        .get("result")
+        .and_then(|v| v.get("merged"))
+        .and_then(|v| v.as_array())
+        .expect("result.merged");
+    assert_eq!(merged.len(), 2, "both sources should merge");
+
+    let merge_ids = merged
+        .iter()
+        .filter_map(|item| item.get("merge_id").and_then(|v| v.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let synth_ids = merged
+        .iter()
+        .filter_map(|item| item.get("synthesis_commit_id").and_then(|v| v.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(merge_ids.len(), 2, "merge ids must be unique");
+    assert_eq!(synth_ids.len(), 2, "synthesis commit ids must be unique");
+}
+
+#[test]
+fn merge_total_failure_returns_diagnostic_warnings() {
+    let mut server = Server::start_initialized("merge_total_failure_returns_warnings");
+    let workspace = "ws-merge-fail";
+
+    let main = call_markdown_tool(&mut server, 90, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let merge = call_markdown_tool(
+        &mut server,
+        91,
+        "merge",
+        workspace,
+        "```bm\ninto target=main from=missing_a,missing_b strategy=squash\n```",
+    );
+    assert_eq!(merge.get("success").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(
+        merge
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("MERGE_FAILED")
+    );
+
+    let warnings = merge
+        .get("warnings")
+        .and_then(|v| v.as_array())
+        .expect("warnings array");
+    assert_eq!(warnings.len(), 2, "all source failures must be returned");
+    assert!(
+        warnings
+            .iter()
+            .all(|w| { w.get("code").and_then(|v| v.as_str()) == Some("MERGE_SOURCE_FAILED") }),
+        "warnings must include structured source failure entries"
+    );
+
+    let failures = merge
+        .get("result")
+        .and_then(|v| v.get("failures"))
+        .and_then(|v| v.as_array())
+        .expect("result.failures");
+    assert_eq!(failures.len(), 2, "result.failures must mirror warnings");
 }

@@ -4,6 +4,7 @@ use super::markdown::parse_tool_markdown;
 use bm_core::MergeRecord;
 use bm_storage::{CreateMergeRecordRequest, StoreError};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::McpServer;
 
@@ -52,14 +53,20 @@ fn handle_into(
         );
     }
 
-    let strategy = command.optional_arg("strategy").unwrap_or("squash").to_string();
-    let summary = command.optional_arg("summary").map(ToOwned::to_owned).unwrap_or_else(|| {
-        format!(
-            "merge {} into {}",
-            source_branches.join(","),
-            target_branch_id
-        )
-    });
+    let strategy = command
+        .optional_arg("strategy")
+        .unwrap_or("squash")
+        .to_string();
+    let summary = command
+        .optional_arg("summary")
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "merge {} into {}",
+                source_branches.join(","),
+                target_branch_id
+            )
+        });
     let synthesis_message = command
         .optional_arg("message")
         .map(ToOwned::to_owned)
@@ -82,15 +89,22 @@ fn handle_into(
     let mut warnings = Vec::new();
 
     for (idx, source_branch_id) in source_branches.iter().enumerate() {
-        let suffix = format!(
-            "{}-{}-{}-{}",
-            sanitize_id_part(&target_branch_id),
-            sanitize_id_part(source_branch_id),
+        let merge_id = build_stable_id(
+            "merge",
+            workspace,
+            &target_branch_id,
+            source_branch_id,
             now_ms,
-            idx
+            idx,
         );
-        let merge_id = truncate_id(format!("merge-{suffix}"));
-        let synthesis_commit_id = truncate_id(format!("c-merge-{suffix}"));
+        let synthesis_commit_id = build_stable_id(
+            "c-merge",
+            workspace,
+            &target_branch_id,
+            source_branch_id,
+            now_ms,
+            idx,
+        );
         let request = CreateMergeRecordRequest {
             workspace_id: workspace.to_string(),
             merge_id,
@@ -111,12 +125,27 @@ fn handle_into(
     }
 
     if merges.is_empty() {
-        return crate::ai_error_with(
+        let mut response = crate::ai_error_with(
             "MERGE_FAILED",
             "No source branches were merged",
             Some("Inspect warnings and retry with valid source/target branches."),
             Vec::new(),
         );
+        if let Some(obj) = response.as_object_mut() {
+            obj.insert("warnings".to_string(), Value::Array(warnings.clone()));
+            obj.insert(
+                "result".to_string(),
+                json!({
+                    "workspace": workspace,
+                    "target": target_branch_id,
+                    "strategy": strategy,
+                    "summary": summary,
+                    "merged": [],
+                    "failures": warnings,
+                }),
+            );
+        }
+        return response;
     }
 
     let result = json!({
@@ -188,10 +217,44 @@ fn sanitize_id_part(value: &str) -> String {
     if out.is_empty() { "x".to_string() } else { out }
 }
 
-fn truncate_id(id: String) -> String {
+fn build_stable_id(
+    prefix: &str,
+    workspace: &str,
+    target_branch_id: &str,
+    source_branch_id: &str,
+    now_ms: i64,
+    idx: usize,
+) -> String {
     const MAX_ID_CHARS: usize = 120;
-    if id.chars().count() <= MAX_ID_CHARS {
-        return id;
-    }
-    id.chars().take(MAX_ID_CHARS).collect::<String>()
+    const DIGEST_CHARS: usize = 16;
+
+    let mut hasher = Sha256::new();
+    hasher.update(prefix.as_bytes());
+    hasher.update(b"|");
+    hasher.update(workspace.as_bytes());
+    hasher.update(b"|");
+    hasher.update(target_branch_id.as_bytes());
+    hasher.update(b"|");
+    hasher.update(source_branch_id.as_bytes());
+    hasher.update(b"|");
+    hasher.update(now_ms.to_string().as_bytes());
+    hasher.update(b"|");
+    hasher.update(idx.to_string().as_bytes());
+    let digest = hasher.finalize();
+    let digest_hex = digest
+        .iter()
+        .take(DIGEST_CHARS / 2)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    let base = format!(
+        "{}-{}",
+        sanitize_id_part(target_branch_id),
+        sanitize_id_part(source_branch_id)
+    );
+    let fixed = prefix.chars().count() + 1 + 1 + DIGEST_CHARS;
+    let max_base = MAX_ID_CHARS.saturating_sub(fixed).max(1);
+    let base = base.chars().take(max_base).collect::<String>();
+
+    format!("{prefix}-{base}-{digest_hex}")
 }
