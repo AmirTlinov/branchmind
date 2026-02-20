@@ -148,7 +148,7 @@ impl McpServer {
         }
 
         if method == "tools/list" {
-            // v1: strict surface = 10, toolset params are ignored (legacy clients may still send).
+            // v3: strict surface = 3 markdown tools; toolset params are ignored.
             let tools = crate::tools_v1::tool_definitions();
             return Some(crate::json_rpc_response(
                 request.id,
@@ -211,8 +211,8 @@ impl McpServer {
         let name_norm = normalize_tool_name(&raw_name);
         let name_ref = name_norm;
 
-        // v1 cutover: only the 10 advertised portal tools are callable.
-        // Legacy names (status, tasks_*, graph_*, etc.) are rejected to avoid UX entropy.
+        // v3 cutover: only the 3 advertised markdown tools are callable.
+        // Legacy names are rejected fail-closed.
         if !crate::tools_v1::is_v1_tool(name_ref) {
             return crate::ops::error_unknown_tool(name_ref);
         }
