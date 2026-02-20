@@ -3,9 +3,7 @@
 use super::markdown::parse_tool_markdown;
 use crate::{McpServer, WorkspaceId};
 use bm_core::ThoughtBranch;
-use bm_storage::{
-    CreateBranchRequest, DeleteBranchRequest, ListBranchesRequest, StoreError,
-};
+use bm_storage::{CreateBranchRequest, DeleteBranchRequest, ListBranchesRequest, StoreError};
 use serde_json::{Value, json};
 
 pub(crate) fn handle(server: &mut McpServer, args: Value) -> Value {
@@ -50,7 +48,10 @@ fn handle_create(
         parent_branch_id,
         created_at_ms: crate::now_ms_i64(),
     }) {
-        Ok(branch) => crate::ai_ok("branch.create", json!({ "branch": branch_to_json(&branch) })),
+        Ok(branch) => crate::ai_ok(
+            "branch.create",
+            json!({ "branch": branch_to_json(&branch) }),
+        ),
         Err(err) => map_store_error(err),
     }
 }
@@ -103,7 +104,7 @@ fn handle_checkout(
                 "workspace must be a valid WorkspaceId",
                 Some("Use only letters, digits, '.', '-', '_' or '/'."),
                 Vec::new(),
-            )
+            );
         }
     };
 
@@ -167,7 +168,7 @@ fn handle_main(server: &mut McpServer, workspace: &str) -> Value {
                 "workspace must be a valid WorkspaceId",
                 Some("Use only letters, digits, '.', '-', '_' or '/'."),
                 Vec::new(),
-            )
+            );
         }
     };
 
@@ -216,7 +217,7 @@ fn map_store_error(err: StoreError) -> Value {
     match err {
         StoreError::InvalidInput(msg) => crate::ai_error_with(
             "INVALID_INPUT",
-            &msg,
+            msg,
             Some("Fix input fields and retry."),
             Vec::new(),
         ),

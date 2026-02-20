@@ -406,7 +406,7 @@ fn map_store_error(err: StoreError) -> Value {
     match err {
         StoreError::InvalidInput(msg) => crate::ai_error_with(
             "INVALID_INPUT",
-            &msg,
+            msg,
             Some("Fix input fields and retry."),
             Vec::new(),
         ),

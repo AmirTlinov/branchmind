@@ -643,6 +643,7 @@ fn looks_like_workspace_path(raw: &str) -> bool {
 }
 
 impl McpServer {
+    #[allow(dead_code)]
     pub(crate) fn workspace_id_resolve(&mut self, raw: &str) -> Result<String, crate::StoreError> {
         let raw = raw.trim();
         if raw.is_empty() {

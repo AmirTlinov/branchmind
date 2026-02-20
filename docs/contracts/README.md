@@ -1,21 +1,21 @@
-[LEGEND]
+# Contracts (active)
 
-[CONTENT]
-This directory contains versioned contracts (v1, v2, ...).
+Active contract set is **v3 MCP surface only**.
 
-Start with:
-- [[docs/contracts/CONTRACT_STANDARD.md]]
-- [[docs/contracts/docs_format_v1.md]]
+## Start here
 
-Contracts (v1):
-- [[docs/contracts/workflow_v1.md]]
-- [[docs/contracts/orchestration_v1.md]]
-- [[docs/contracts/tool_bus_v1.md]]
-- [[docs/contracts/event_log_v1.md]]
-- [[docs/contracts/policy_v1.md]]
-- [[docs/contracts/cognition_v1.md]]
-- [[docs/contracts/team_cognition_v1.md]]
-- [[docs/contracts/ui_recipe_v1.md]]
+- `OVERVIEW.md` — active contract index.
+- `V3_MCP_SURFACE.md` — tool list, markdown parser, tool verbs.
+- `TYPES.md` — stable response envelope + typed error model.
+- `MEMORY.md` — data model used by `think` / `branch` / `merge`.
+- `INTEGRATION.md` — deterministic invariants across the 3 tools.
 
-Gate behavior:
-- `./tools/gate` validates that every `*_vN.md` contract follows the contract standard.
+## Archived (not active contract)
+
+Legacy v1/v2 docs are kept only for historical context and are **not** part of the active MCP contract:
+
+- `V1_*.md`
+- `*_v1.md`
+- older parity/migration narratives tied to portal surfaces
+
+For current behavior, use only the v3 docs listed above.
