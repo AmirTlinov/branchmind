@@ -390,18 +390,6 @@ fn commit_to_json(commit: &ThoughtCommit) -> Value {
     })
 }
 
-#[allow(dead_code)]
-fn branch_to_json(branch: &ThoughtBranch) -> Value {
-    json!({
-        "workspace_id": branch.workspace_id(),
-        "branch_id": branch.branch_id(),
-        "parent_branch_id": branch.parent_branch_id(),
-        "head_commit_id": branch.head_commit_id(),
-        "created_at_ms": branch.created_at_ms(),
-        "updated_at_ms": branch.updated_at_ms(),
-    })
-}
-
 fn map_store_error(err: StoreError) -> Value {
     match err {
         StoreError::InvalidInput(msg) => crate::ai_error_with(

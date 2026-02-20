@@ -11,7 +11,6 @@ pub(crate) struct NextEngineReport {
     pub(crate) actions: Vec<Action>,
     pub(crate) state_fingerprint: String,
     pub(crate) focus_id: Option<String>,
-    pub(crate) checkout: Option<String>,
 }
 
 /// NextEngine v1 (minimal viable):
@@ -142,7 +141,6 @@ pub(crate) fn derive_next(
             actions,
             state_fingerprint,
             focus_id,
-            checkout,
         }
     } else {
         if queued > 0 && runner_is_offline {
@@ -197,7 +195,6 @@ pub(crate) fn derive_next(
             actions,
             state_fingerprint,
             focus_id,
-            checkout,
         }
     }
 }

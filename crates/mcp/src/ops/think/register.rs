@@ -28,7 +28,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         schema: SchemaSource::Handler,
         op_aliases: vec!["reasoning.seed".to_string()],
         handler_name: Some("think_template".to_string()),
-        handler: Some(handlers::handle_reasoning_seed),
+        handler: None,
     });
 
     specs.push(CommandSpec {
@@ -49,7 +49,7 @@ pub(crate) fn register(specs: &mut Vec<CommandSpec>) {
         schema: SchemaSource::Handler,
         op_aliases: vec!["reasoning.pipeline".to_string()],
         handler_name: Some("think_pipeline".to_string()),
-        handler: Some(handlers::handle_reasoning_pipeline),
+        handler: None,
     });
 
     // Idea-branch helpers as golden ops (handler-backed for v1).

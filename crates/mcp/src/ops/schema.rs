@@ -1,11 +1,10 @@
 #![forbid(unsafe_code)]
 
 use crate::ops::{
-    Action, ActionPriority, BudgetProfile, CommandRegistry, DocRef, OpError, OpResponse, Safety,
-    SchemaSource, Stability, Tier,
+    BudgetProfile, CommandRegistry, DocRef, OpError, Safety, SchemaSource, Stability, Tier,
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 #[derive(Clone, Debug)]
@@ -130,65 +129,6 @@ pub(crate) fn schema_bundle_for_cmd(
         stability: spec.stability,
         safety: spec.safety,
     })
-}
-
-pub(crate) fn append_schema_actions(resp: &mut OpResponse, cmd: &str, workspace: Option<&str>) {
-    let bundle = match schema_bundle_for_cmd(cmd, workspace) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-
-    let mut seen = BTreeSet::<String>::new();
-    for a in resp.actions.iter() {
-        seen.insert(a.action_id.clone());
-    }
-
-    let schema_action_id = format!("recover.schema.get::{cmd}");
-    if seen.insert(schema_action_id.clone()) {
-        resp.actions.push(Action {
-            action_id: schema_action_id,
-            priority: ActionPriority::High,
-            tool: "system".to_string(),
-            args: json!({
-                "op": "schema.get",
-                "args": { "cmd": cmd },
-                "budget_profile": "portal"
-            }),
-            why: format!("Нужна точная схема args для {cmd}."),
-            risk: "Низкий".to_string(),
-        });
-    }
-
-    let Some(spec) = CommandRegistry::global().find_by_cmd(cmd) else {
-        return;
-    };
-    let example_action_id = format!("recover.example.call::{cmd}");
-    if seen.insert(example_action_id.clone()) {
-        let mut env = serde_json::Map::new();
-        if let Some(ws) = workspace {
-            env.insert("workspace".to_string(), Value::String(ws.to_string()));
-        }
-        env.insert("op".to_string(), Value::String("call".to_string()));
-        env.insert("cmd".to_string(), Value::String(cmd.to_string()));
-        env.insert("args".to_string(), bundle.example_minimal_args.clone());
-        env.insert(
-            "budget_profile".to_string(),
-            Value::String(spec.budget.default_profile.as_str().to_string()),
-        );
-        env.insert(
-            "portal_view".to_string(),
-            Value::String("compact".to_string()),
-        );
-
-        resp.actions.push(Action {
-            action_id: example_action_id,
-            priority: ActionPriority::High,
-            tool: spec.domain_tool.as_str().to_string(),
-            args: Value::Object(env),
-            why: "Минимальный валидный пример вызова (placeholders).".to_string(),
-            risk: "Низкий".to_string(),
-        });
-    }
 }
 
 fn generate_example_from_schema(schema: &Value, key_hint: Option<&str>) -> Value {

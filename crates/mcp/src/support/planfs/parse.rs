@@ -115,18 +115,6 @@ pub(crate) fn parse_plan_with_front_matter(
     Ok((plan.clone(), plan.slices.clone()))
 }
 
-#[allow(dead_code)]
-pub(crate) fn parse_plan_file(
-    raw: &str,
-    strict: bool,
-    limits: &PlanFsReadLimits,
-) -> Result<PlanFsPlan, Value> {
-    let (plan, refs) = parse_plan_with_front_matter(raw, strict, limits)?;
-    let mut plan = plan;
-    plan.slices = refs;
-    Ok(plan)
-}
-
 pub(crate) fn parse_slice_with_front_matter(
     raw: &str,
     strict: bool,
@@ -180,15 +168,6 @@ pub(crate) fn parse_slice_with_front_matter(
         tasks,
         sections,
     })
-}
-
-#[allow(dead_code)]
-pub(crate) fn parse_slice_file(
-    raw: &str,
-    strict: bool,
-    limits: &PlanFsReadLimits,
-) -> Result<PlanFsSlice, Value> {
-    parse_slice_with_front_matter(raw, strict, limits)
 }
 
 pub(crate) fn looks_like_placeholder(value: &str) -> bool {

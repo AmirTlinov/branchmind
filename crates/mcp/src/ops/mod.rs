@@ -1,8 +1,6 @@
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
 
 mod actions;
-mod dispatch;
 mod docs;
 mod envelope;
 mod exec_summary;
@@ -22,7 +20,6 @@ mod vcs;
 mod workspace;
 
 pub(crate) use actions::*;
-pub(crate) use dispatch::*;
 pub(crate) use envelope::*;
 pub(crate) use exec_summary::*;
 pub(crate) use handler_bridge::handler_to_op_response;
