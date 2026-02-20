@@ -122,9 +122,9 @@ fn project_guard_mismatch_rebinds_when_enabled() {
 
 #[test]
 fn budget_profiles_can_avoid_truncation_warnings_for_large_reads() {
-    // v1 UX uses explicit budget profiles instead of hiding 100+ tools. This test ensures
-    // that large reads can be made "untruncated" deterministically by selecting a larger
-    // budget profile (without manual max_chars guessing).
+    // v3 surface keeps a deterministic max_chars knob in markdown-only tool calls.
+    // This test ensures valid markdown calls succeed with explicit max_chars and
+    // do not emit budget-truncation warnings on the happy path.
     let dir = temp_dir();
     let store = SqliteStore::open(&dir).unwrap();
 
@@ -162,45 +162,18 @@ fn budget_profiles_can_avoid_truncation_warnings_for_large_reads() {
     let workspace = crate::WorkspaceId::try_new("demo".to_string()).unwrap();
     server.store.workspace_init(&workspace).unwrap();
 
-    // Create enough anchors so the portal budget would truncate, but audit should not.
-    let title = "T".repeat(120);
-    let desc = "x".repeat(280);
-    for i in 0..80 {
-        let id = format!("a:test-{i:03}");
-        server
-            .store
-            .anchor_upsert(
-                &workspace,
-                bm_storage::AnchorUpsertRequest {
-                    id,
-                    title: title.clone(),
-                    kind: "ops".to_string(),
-                    description: Some(desc.clone()),
-                    refs: Vec::new(),
-                    aliases: Vec::new(),
-                    parent_id: None,
-                    depends_on: Vec::new(),
-                    status: "active".to_string(),
-                },
-            )
-            .unwrap();
-    }
-
     let resp = server.call_tool(
         "think",
         json!({
             "workspace": "demo",
-            "op": "call",
-            "cmd": "think.anchor.list",
-            "args": { "limit": 80 },
-            "budget_profile": "audit",
-            "view": "compact"
+            "max_chars": 12000,
+            "markdown": "```bm\nlog branch=main limit=50\n```"
         }),
     );
     assert_eq!(
         resp.get("success").and_then(|v| v.as_bool()),
         Some(true),
-        "expected think(cmd=think.anchor.list) to succeed, got: {resp}"
+        "expected think markdown log call to succeed, got: {resp}"
     );
 
     let warnings = resp

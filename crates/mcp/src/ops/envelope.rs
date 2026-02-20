@@ -91,34 +91,15 @@ impl OpResponse {
 }
 
 pub(crate) fn error_unknown_tool(name: &str) -> Value {
-    let mut resp = OpResponse::error(
+    OpResponse::error(
         "error".to_string(),
         OpError {
             code: "UNKNOWN_TOOL".to_string(),
             message: format!("Unknown tool: {name}"),
-            recovery: Some(
-                "Use system migration.lookup to map old names, or tools/list for v1 surface."
-                    .to_string(),
-            ),
+            recovery: Some("Use tools/list (allowed tools: think, branch, merge).".to_string()),
         },
-    );
-    resp.actions.push(Action {
-        action_id: format!("recover.migration.lookup::{name}"),
-        priority: ActionPriority::High,
-        tool: ToolName::SystemOps.as_str().to_string(),
-        args: json!({ "op": "migration.lookup", "args": { "old_name": name }, "budget_profile": "portal" }),
-        why: "Найти новый cmd для старого имени инструмента.".to_string(),
-        risk: "Без миграции вызов будет UNKNOWN_TOOL.".to_string(),
-    });
-    resp.actions.push(Action {
-        action_id: "recover.status.portal".to_string(),
-        priority: ActionPriority::Medium,
-        tool: ToolName::Status.as_str().to_string(),
-        args: json!({ "budget_profile": "portal", "portal_view": "compact" }),
-        why: "Открыть портал status (следующие действия + refs).".to_string(),
-        risk: "Низкий".to_string(),
-    });
-    resp.into_value()
+    )
+    .into_value()
 }
 
 pub(crate) fn error_internal(message: String) -> Value {
