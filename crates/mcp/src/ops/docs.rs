@@ -63,6 +63,23 @@ fn register_handler_with_hook(
         op_aliases.push(op.to_string());
     }
 
+    // Hooked docs commands (custom post-processing actions) must use custom-dispatch path.
+    // Keep schema discoverable via handler schema snapshot without requiring handler_name wiring.
+    let (schema, registered_handler_name) = if handler.is_some() {
+        let args_schema = crate::ops::handler_input_schema(handler_name)
+            .filter(|schema| schema.is_object())
+            .unwrap_or_else(|| json!({ "type": "object" }));
+        (
+            SchemaSource::Custom {
+                args_schema,
+                example_minimal_args: json!({}),
+            },
+            None,
+        )
+    } else {
+        (SchemaSource::Handler, Some(handler_name.to_string()))
+    };
+
     specs.push(CommandSpec {
         cmd: cmd.to_string(),
         domain_tool: ToolName::DocsOps,
@@ -82,9 +99,9 @@ fn register_handler_with_hook(
             idempotent: handler_name != "merge",
         },
         budget: BudgetPolicy::standard(),
-        schema: SchemaSource::Handler,
+        schema,
         op_aliases,
-        handler_name: Some(handler_name.to_string()),
+        handler_name: registered_handler_name,
         handler,
     });
 }

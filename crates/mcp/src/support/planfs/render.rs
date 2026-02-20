@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::{
     PlanFsPlan, PlanFsPlanYaml, PlanFsPlanYamlHeader, PlanFsSectionBundle, PlanFsSlice,
-    PlanFsSliceRef, PlanFsSliceYaml, PlanFsSliceYamlHeader,
+    PlanFsSliceYaml, PlanFsSliceYamlHeader,
 };
 
 type SectionAccessor = fn(&PlanFsSectionBundle) -> &[String];
@@ -41,15 +41,6 @@ pub(crate) fn render_slice_markdown(slice: &PlanFsSlice) -> Result<String, Value
     out.push_str("[CONTENT]\n");
     out.push_str(&render_sections(&slice.sections));
     Ok(out)
-}
-
-#[allow(dead_code)]
-pub(crate) fn render_plan_files_manifest(plan: &PlanFsPlan) -> Vec<&PlanFsSliceRef> {
-    let mut out = Vec::with_capacity(plan.slices.len());
-    for item in &plan.slices {
-        out.push(item);
-    }
-    out
 }
 
 fn build_plan_yaml(plan: &PlanFsPlan) -> PlanFsPlanYaml {
@@ -140,7 +131,7 @@ mod tests {
             objective: "sample objective".to_string(),
             constraints: vec!["No placeholders".to_string()],
             policy: "strict".to_string(),
-            slices: vec![PlanFsSliceRef {
+            slices: vec![crate::support::planfs::PlanFsSliceRef {
                 id: "SLICE-1".to_string(),
                 title: "Slice 1".to_string(),
                 file: "Slice-1.md".to_string(),

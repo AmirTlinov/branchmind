@@ -643,25 +643,6 @@ fn looks_like_workspace_path(raw: &str) -> bool {
 }
 
 impl McpServer {
-    #[allow(dead_code)]
-    pub(crate) fn workspace_id_resolve(&mut self, raw: &str) -> Result<String, crate::StoreError> {
-        let raw = raw.trim();
-        if raw.is_empty() {
-            return Err(crate::StoreError::InvalidInput(
-                "workspace must not be empty",
-            ));
-        }
-        if crate::WorkspaceId::try_new(raw.to_string()).is_ok() {
-            return Ok(raw.to_string());
-        }
-        if looks_like_workspace_path(raw) {
-            return self.workspace_id_from_path_store(raw);
-        }
-        Err(crate::StoreError::InvalidInput(
-            "workspace: expected WorkspaceId",
-        ))
-    }
-
     pub(crate) fn workspace_id_from_path(&mut self, raw: &str) -> Result<String, Value> {
         self.workspace_id_from_path_store(raw)
             .map_err(|err| match err {

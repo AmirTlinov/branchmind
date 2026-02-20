@@ -218,6 +218,31 @@ impl CommandRegistry {
         let mut alias_seen = BTreeSet::new();
 
         for (idx, spec) in specs.iter().enumerate() {
+            for profile in [
+                BudgetProfile::Portal,
+                BudgetProfile::Default,
+                BudgetProfile::Audit,
+            ] {
+                assert_eq!(
+                    BudgetProfile::from_str(profile.as_str()),
+                    Some(profile),
+                    "budget profile roundtrip must be stable",
+                );
+                let _ = spec.budget.caps_for(profile);
+            }
+
+            let has_handler_name = spec
+                .handler_name
+                .as_deref()
+                .is_some_and(|name| !name.trim().is_empty());
+            let has_custom_handler = spec.handler.is_some();
+            if has_handler_name == has_custom_handler {
+                panic!(
+                    "registry wiring error for {}: use exactly one dispatch path (handler_name or handler)",
+                    spec.cmd
+                );
+            }
+
             by_cmd.insert(spec.cmd.clone(), idx);
             for alias in spec.op_aliases.iter() {
                 let alias_norm = alias.trim().to_ascii_lowercase();

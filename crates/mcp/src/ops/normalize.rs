@@ -4,6 +4,7 @@ pub(crate) fn normalize_cmd(raw: &str) -> Result<String, String> {
     normalize_token(raw, true)
 }
 
+#[cfg(test)]
 pub(crate) fn normalize_op(raw: &str) -> Result<String, String> {
     if raw.trim() == "call" {
         return Ok("call".to_string());
