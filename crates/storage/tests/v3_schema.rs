@@ -181,6 +181,17 @@ fn v3_branch_commit_merge_api_and_atomic_merge_write() {
         })
         .expect("feature branch should be deletable");
 
+    let deleted_feature_commit = store
+        .show_commit(ShowCommitRequest {
+            workspace_id: "ws-a".to_string(),
+            commit_id: "c-f-1".to_string(),
+        })
+        .expect("show commit should succeed after delete");
+    assert!(
+        deleted_feature_commit.is_none(),
+        "feature commits must be removed via foreign key cascade"
+    );
+
     let branches_after_delete = store
         .list_branches(ListBranchesRequest {
             workspace_id: "ws-a".to_string(),
@@ -193,6 +204,49 @@ fn v3_branch_commit_merge_api_and_atomic_merge_write() {
             .iter()
             .all(|branch| branch.branch_id() != "feature")
     );
+}
+
+#[test]
+fn delete_branch_fails_when_descendants_exist() {
+    let dir = temp_storage_dir("delete-branch-descendants");
+    let mut store = SqliteStore::open(&dir).expect("fresh storage should open");
+
+    store
+        .create_branch(CreateBranchRequest {
+            workspace_id: "ws-c".to_string(),
+            branch_id: "main".to_string(),
+            parent_branch_id: None,
+            created_at_ms: 10,
+        })
+        .expect("main branch should be created");
+
+    store
+        .create_branch(CreateBranchRequest {
+            workspace_id: "ws-c".to_string(),
+            branch_id: "child".to_string(),
+            parent_branch_id: Some("main".to_string()),
+            created_at_ms: 11,
+        })
+        .expect("child branch should be created");
+
+    let err = store
+        .delete_branch(DeleteBranchRequest {
+            workspace_id: "ws-c".to_string(),
+            branch_id: "main".to_string(),
+        })
+        .expect_err("parent branch delete must fail while descendants exist");
+    assert_eq!(err.code(), "INVALID_INPUT");
+
+    let branches = store
+        .list_branches(ListBranchesRequest {
+            workspace_id: "ws-c".to_string(),
+            limit: 10,
+            offset: 0,
+        })
+        .expect("branches should list");
+
+    assert!(branches.iter().any(|branch| branch.branch_id() == "main"));
+    assert!(branches.iter().any(|branch| branch.branch_id() == "child"));
 }
 
 #[test]

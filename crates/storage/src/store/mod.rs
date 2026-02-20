@@ -71,6 +71,7 @@ impl SqliteStore {
         let db_path = storage_dir.join("branchmind_rust.db");
         let conn = Connection::open(db_path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         let preflight = v3_preflight_gate(&conn)?;
         let store = Self { storage_dir, conn };
         store.migrate()?;

@@ -111,6 +111,7 @@ impl SqliteStore {
 
         let tx = self.conn.transaction()?;
         ensure_branch_exists_v3_tx(&tx, &workspace_id, &branch_id)?;
+        ensure_branch_has_no_descendants_v3_tx(&tx, &workspace_id, &branch_id)?;
 
         tx.execute(
             "DELETE FROM branches WHERE workspace=?1 AND name=?2",
@@ -410,6 +411,26 @@ fn ensure_branch_exists_v3_tx(
         Ok(())
     } else {
         Err(StoreError::UnknownId)
+    }
+}
+
+fn ensure_branch_has_no_descendants_v3_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    branch_id: &str,
+) -> Result<(), StoreError> {
+    let descendants = tx.query_row(
+        "SELECT COUNT(1) FROM branches WHERE workspace=?1 AND base_branch=?2 AND name<>?2",
+        params![workspace_id, branch_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+
+    if descendants > 0 {
+        Err(StoreError::InvalidInput(
+            "branch has descendants and cannot be deleted",
+        ))
+    } else {
+        Ok(())
     }
 }
 
