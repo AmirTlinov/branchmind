@@ -47,6 +47,28 @@ impl ParsedCommand {
             )
         })
     }
+
+    pub(crate) fn reject_unknown_args(&self, allowed: &[&str]) -> Result<(), Value> {
+        let allowed = allowed
+            .iter()
+            .map(|value| value.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>();
+        for key in self.args.keys() {
+            if !allowed.contains(key) {
+                let allowed_list = if allowed.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    allowed.iter().cloned().collect::<Vec<_>>().join(", ")
+                };
+                return Err(parser_error(
+                    "UNKNOWN_ARG",
+                    &format!("Unknown command argument: {key}"),
+                    &format!("Use only supported arguments: {allowed_list}."),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn parse_tool_markdown(
@@ -97,7 +119,7 @@ pub(crate) fn parse_tool_markdown(
         )
     })?;
 
-    let max_chars = match args_obj.get("max_chars") {
+    let _max_chars = match args_obj.get("max_chars") {
         None | Some(Value::Null) => DEFAULT_MAX_CHARS,
         Some(Value::Number(v)) => {
             let Some(raw) = v.as_u64() else {
@@ -136,14 +158,10 @@ pub(crate) fn parse_tool_markdown(
                 "Provide one markdown string that contains exactly one ```bm fenced block.",
             )
         })?;
-
-    if markdown.chars().count() > max_chars {
-        return Err(parser_error(
-            "BUDGET_EXCEEDED",
-            "markdown exceeds max_chars",
-            "Increase max_chars or shorten the markdown payload.",
-        ));
-    }
+    // Important invariant:
+    // - Thought content is never truncated/rejected by transport budget knobs.
+    // - max_chars is parsed for schema stability and may be used by response shaping,
+    //   but it must not limit the user-provided markdown thought payload itself.
 
     let command = parse_command_block(markdown, tool, allowed_verbs)?;
     Ok(ParsedToolInput {

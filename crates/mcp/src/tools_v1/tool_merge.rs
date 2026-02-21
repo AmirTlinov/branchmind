@@ -30,6 +30,12 @@ fn handle_into(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) =
+        command.reject_unknown_args(&["target", "from", "strategy", "summary", "message", "body"])
+    {
+        return err;
+    }
+
     let target_branch_id = match command.require_arg("target") {
         Ok(v) => v,
         Err(err) => return err,
