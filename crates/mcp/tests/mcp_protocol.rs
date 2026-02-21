@@ -295,6 +295,83 @@ fn parser_accepts_thought_payload_even_when_max_chars_is_tiny() {
 }
 
 #[test]
+fn think_commit_without_body_uses_message_as_deterministic_fallback() {
+    let mut server = Server::start_initialized("think_commit_without_body_fallback");
+    let workspace = "ws-commit-fallback";
+
+    let main = call_markdown_tool(&mut server, 190, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let commit = call_markdown_tool(
+        &mut server,
+        191,
+        "think",
+        workspace,
+        "```bm\ncommit branch=main commit=c1 message=hello-world\n```",
+    );
+    assert_eq!(
+        commit.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "commit without explicit body must succeed: {commit}"
+    );
+    assert_eq!(
+        commit
+            .get("result")
+            .and_then(|v| v.get("commit"))
+            .and_then(|v| v.get("body"))
+            .and_then(|v| v.as_str()),
+        Some("hello-world")
+    );
+
+    let show = call_markdown_tool(
+        &mut server,
+        192,
+        "think",
+        workspace,
+        "```bm\nshow commit=c1\n```",
+    );
+    assert_eq!(show.get("success").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        show.get("result")
+            .and_then(|v| v.get("commit"))
+            .and_then(|v| v.get("body"))
+            .and_then(|v| v.as_str()),
+        Some("hello-world"),
+        "persisted body must stay non-empty and deterministic"
+    );
+}
+
+#[test]
+fn think_commit_accepts_fenced_body_without_body_arg() {
+    let mut server = Server::start_initialized("think_commit_fenced_body_without_arg");
+    let workspace = "ws-commit-fenced-body";
+
+    let main = call_markdown_tool(&mut server, 193, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let commit = call_markdown_tool(
+        &mut server,
+        194,
+        "think",
+        workspace,
+        "```bm\ncommit branch=main commit=c2 message=hello\nline one\nline two\n```",
+    );
+    assert_eq!(
+        commit.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "commit with fenced body must succeed without body arg: {commit}"
+    );
+    assert_eq!(
+        commit
+            .get("result")
+            .and_then(|v| v.get("commit"))
+            .and_then(|v| v.get("body"))
+            .and_then(|v| v.as_str()),
+        Some("line one\nline two")
+    );
+}
+
+#[test]
 fn think_log_pagination_cursor_points_to_first_omitted_commit() {
     let mut server = Server::start_initialized("think_log_pagination_cursor");
     let workspace = "ws-pagination";

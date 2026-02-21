@@ -62,15 +62,8 @@ fn handle_commit(
             } else {
                 Some(command.body.clone())
             }
-        });
-    let Some(body) = body else {
-        return crate::ai_error_with(
-            "INVALID_INPUT",
-            "body is required",
-            Some("Set body=... or provide body text on the second line inside ```bm."),
-            Vec::new(),
-        );
-    };
+        })
+        .unwrap_or_else(|| message.clone());
 
     let parent_commit_id = command.optional_arg("parent").map(ToOwned::to_owned);
     let request = AppendCommitRequest {
