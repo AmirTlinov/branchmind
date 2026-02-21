@@ -34,6 +34,12 @@ fn handle_commit(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) =
+        command.reject_unknown_args(&["branch", "commit", "message", "body", "parent"])
+    {
+        return err;
+    }
+
     let branch_id = match command.require_arg("branch") {
         Ok(v) => v,
         Err(err) => return err,
@@ -88,6 +94,10 @@ fn handle_log(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) = command.reject_unknown_args(&["branch", "limit", "offset", "from"]) {
+        return err;
+    }
+
     let branch_id = match command.require_arg("branch") {
         Ok(v) => v,
         Err(err) => return err,
@@ -206,6 +216,10 @@ fn handle_show(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) = command.reject_unknown_args(&["commit"]) {
+        return err;
+    }
+
     let commit_id = match command.require_arg("commit") {
         Ok(v) => v,
         Err(err) => return err,
@@ -232,6 +246,12 @@ fn handle_amend(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) =
+        command.reject_unknown_args(&["commit", "new_commit", "branch", "message", "body"])
+    {
+        return err;
+    }
+
     let source_commit_id = match command.require_arg("commit") {
         Ok(v) => v,
         Err(err) => return err,
@@ -304,6 +324,12 @@ fn handle_delete(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) =
+        command.reject_unknown_args(&["commit", "new_commit", "branch", "message", "body"])
+    {
+        return err;
+    }
+
     let source_commit_id = match command.require_arg("commit") {
         Ok(v) => v,
         Err(err) => return err,

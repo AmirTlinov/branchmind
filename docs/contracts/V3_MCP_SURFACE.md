@@ -20,6 +20,9 @@ Input is a JSON object:
 
 Unknown top-level keys are rejected with `UNKNOWN_ARG`.
 
+`max_chars` does **not** limit thought payload ingestion/storage.  
+Thought markdown is accepted in full; budgeting applies only to response shaping/transport.
+
 ## Strict parser contract
 
 `markdown` must contain exactly one fenced `bm` block:
@@ -40,12 +43,30 @@ Rules:
 - Tokens after verb must be `key=value`.
 - Duplicate keys are rejected.
 - Unknown verbs are rejected with `UNKNOWN_VERB`.
+- Unknown command arguments are rejected with `UNKNOWN_ARG` (fail-closed; no silent ignore).
 
 ## Tool verbs
 
 - `branch`: `main`, `create`, `list`, `checkout`, `delete`
 - `think`: `commit`, `log`, `show`, `amend`, `delete`
 - `merge`: `into`
+
+### Verb argument contract (strict)
+
+- `branch.main`: _(no args)_
+- `branch.create`: `branch`, optional one of (`from` | `parent`)  
+  (`from` and `parent` together are invalid)
+- `branch.list`: optional `limit`, `offset`
+- `branch.checkout`: `branch`
+- `branch.delete`: `branch`
+
+- `think.commit`: `branch`, `commit`, `message`, optional `body`, `parent`
+- `think.log`: `branch`, optional `limit`, `offset`, `from`
+- `think.show`: `commit`
+- `think.amend`: `commit`, `new_commit`, optional `branch`, `message`, `body`
+- `think.delete`: `commit`, `new_commit`, optional `branch`, `message`, `body`
+
+- `merge.into`: `target`, `from`, optional `strategy`, `summary`, `message`, `body`
 
 ## Error model (typed)
 

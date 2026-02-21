@@ -240,6 +240,61 @@ fn parser_rejects_multiple_bm_blocks() {
 }
 
 #[test]
+fn parser_rejects_unknown_command_arg() {
+    let mut server = Server::start_initialized("parser_rejects_unknown_command_arg");
+
+    let call = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 17,
+        "method": "tools/call",
+        "params": {
+            "name": "branch",
+            "arguments": {
+                "workspace": "ws-parser",
+                "markdown": "```bm\nlist limit=5 nonsense=1\n```"
+            }
+        }
+    }));
+    let payload = extract_tool_text(&call);
+    assert_eq!(
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("UNKNOWN_ARG")
+    );
+}
+
+#[test]
+fn parser_accepts_thought_payload_even_when_max_chars_is_tiny() {
+    let mut server = Server::start_initialized("parser_allows_full_thought_payload");
+    let workspace = "ws-max-chars";
+
+    let main = call_markdown_tool(&mut server, 18, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let call = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 19,
+        "method": "tools/call",
+        "params": {
+            "name": "think",
+            "arguments": {
+                "workspace": workspace,
+                "max_chars": 1,
+                "markdown": "```bm\ncommit branch=main commit=cmax1 message=msg\nthis payload is intentionally longer than one char\n```"
+            }
+        }
+    }));
+    let payload = extract_tool_text(&call);
+    assert_eq!(
+        payload.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "thought markdown must not be rejected by max_chars: {payload}"
+    );
+}
+
+#[test]
 fn think_log_pagination_cursor_points_to_first_omitted_commit() {
     let mut server = Server::start_initialized("think_log_pagination_cursor");
     let workspace = "ws-pagination";
@@ -459,4 +514,53 @@ fn merge_total_failure_returns_diagnostic_warnings() {
         .and_then(|v| v.as_array())
         .expect("result.failures");
     assert_eq!(failures.len(), 2, "result.failures must mirror warnings");
+}
+
+#[test]
+fn branch_create_accepts_parent_alias_and_rejects_conflict_with_from() {
+    let mut server = Server::start_initialized("branch_create_parent_alias");
+    let workspace = "ws-branch-parent";
+
+    let main = call_markdown_tool(&mut server, 100, "branch", workspace, "```bm\nmain\n```");
+    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
+
+    let create_with_parent = call_markdown_tool(
+        &mut server,
+        101,
+        "branch",
+        workspace,
+        "```bm\ncreate branch=child parent=main\n```",
+    );
+    assert_eq!(
+        create_with_parent.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "parent alias should be accepted: {create_with_parent}"
+    );
+    assert_eq!(
+        create_with_parent
+            .get("result")
+            .and_then(|v| v.get("branch"))
+            .and_then(|v| v.get("parent_branch_id"))
+            .and_then(|v| v.as_str()),
+        Some("main")
+    );
+
+    let create_conflict = call_markdown_tool(
+        &mut server,
+        102,
+        "branch",
+        workspace,
+        "```bm\ncreate branch=child2 from=main parent=main\n```",
+    );
+    assert_eq!(
+        create_conflict.get("success").and_then(|v| v.as_bool()),
+        Some(false)
+    );
+    assert_eq!(
+        create_conflict
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("INVALID_INPUT")
+    );
 }

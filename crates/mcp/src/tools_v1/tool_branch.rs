@@ -21,7 +21,7 @@ pub(crate) fn handle(server: &mut McpServer, args: Value) -> Value {
         "list" => handle_list(server, &parsed.workspace, &parsed.command),
         "checkout" => handle_checkout(server, &parsed.workspace, &parsed.command),
         "delete" => handle_delete(server, &parsed.workspace, &parsed.command),
-        "main" => handle_main(server, &parsed.workspace),
+        "main" => handle_main(server, &parsed.workspace, &parsed.command),
         _ => crate::ai_error_with(
             "UNKNOWN_VERB",
             "Unsupported branch verb",
@@ -36,11 +36,25 @@ fn handle_create(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) = command.reject_unknown_args(&["branch", "from", "parent"]) {
+        return err;
+    }
+
     let branch_id = match command.require_arg("branch") {
         Ok(v) => v,
         Err(err) => return err,
     };
-    let parent_branch_id = command.optional_arg("from").map(ToOwned::to_owned);
+    let from = command.optional_arg("from");
+    let parent = command.optional_arg("parent");
+    if from.is_some() && parent.is_some() {
+        return crate::ai_error_with(
+            "INVALID_INPUT",
+            "from and parent are mutually exclusive",
+            Some("Use either from=<branch> or parent=<branch>, not both."),
+            Vec::new(),
+        );
+    }
+    let parent_branch_id = from.or(parent).map(ToOwned::to_owned);
 
     match server.store.create_branch(CreateBranchRequest {
         workspace_id: workspace.to_string(),
@@ -61,6 +75,10 @@ fn handle_list(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) = command.reject_unknown_args(&["limit", "offset"]) {
+        return err;
+    }
+
     let limit = match command.optional_usize_arg("limit", 50) {
         Ok(v) => v.min(500),
         Err(err) => return err,
@@ -92,6 +110,10 @@ fn handle_checkout(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) = command.reject_unknown_args(&["branch"]) {
+        return err;
+    }
+
     let branch_id = match command.require_arg("branch") {
         Ok(v) => v,
         Err(err) => return err,
@@ -139,6 +161,10 @@ fn handle_delete(
     workspace: &str,
     command: &super::markdown::ParsedCommand,
 ) -> Value {
+    if let Err(err) = command.reject_unknown_args(&["branch"]) {
+        return err;
+    }
+
     let branch_id = match command.require_arg("branch") {
         Ok(v) => v,
         Err(err) => return err,
@@ -159,7 +185,15 @@ fn handle_delete(
     }
 }
 
-fn handle_main(server: &mut McpServer, workspace: &str) -> Value {
+fn handle_main(
+    server: &mut McpServer,
+    workspace: &str,
+    command: &super::markdown::ParsedCommand,
+) -> Value {
+    if let Err(err) = command.reject_unknown_args(&[]) {
+        return err;
+    }
+
     let workspace_id = match WorkspaceId::try_new(workspace.to_string()) {
         Ok(v) => v,
         Err(_) => {
