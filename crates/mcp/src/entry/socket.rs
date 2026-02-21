@@ -1,46 +1,23 @@
 #![forbid(unsafe_code)]
 
+use crate::McpServer;
 use crate::entry::framing::{parse_request, read_content_length_frame, write_content_length_json};
-use crate::{DefaultAgentIdConfig, McpServer, ResponseVerbosity, Toolset};
 use bm_storage::SqliteStore;
 use serde_json::{Value, json};
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
 #[derive(Clone)]
 pub(crate) struct DaemonConfig {
     pub(crate) storage_dir: PathBuf,
-    pub(crate) toolset: Toolset,
-    pub(crate) response_verbosity: ResponseVerbosity,
-    pub(crate) dx_mode: bool,
-    pub(crate) ux_proof_v2_enabled: bool,
-    pub(crate) jobs_unknown_args_fail_closed_enabled: bool,
-    pub(crate) jobs_strict_progress_schema_enabled: bool,
-    pub(crate) jobs_high_done_proof_gate_enabled: bool,
-    pub(crate) jobs_wait_stream_v2_enabled: bool,
-    pub(crate) jobs_mesh_v1_enabled: bool,
-    pub(crate) slice_plans_v1_enabled: bool,
-    pub(crate) jobs_slice_first_fail_closed_enabled: bool,
-    pub(crate) slice_budgets_enforced_enabled: bool,
-    pub(crate) default_workspace: Option<String>,
-    pub(crate) workspace_explicit: bool,
-    pub(crate) workspace_allowlist: Option<Vec<String>>,
-    pub(crate) workspace_lock: bool,
-    pub(crate) project_guard: Option<String>,
-    pub(crate) project_guard_rebind_enabled: bool,
-    pub(crate) default_agent_id_config: Option<DefaultAgentIdConfig>,
     pub(crate) socket_path: PathBuf,
     pub(crate) hot_reload_enabled: bool,
     pub(crate) hot_reload_poll_ms: u64,
-    pub(crate) runner_autostart_dry_run: bool,
-    pub(crate) runner_autostart_enabled_shared: Arc<AtomicBool>,
-    pub(crate) runner_autostart_state_shared: Arc<Mutex<crate::RunnerAutostartState>>,
 }
 
 pub(crate) fn run_socket_daemon(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -95,6 +72,7 @@ pub(crate) fn run_socket_daemon(config: DaemonConfig) -> Result<(), Box<dyn std:
 
     loop {
         let _ = hot_reload.maybe_exec_now();
+
         // Flagship stability: if the socket path is unlinked while this daemon is running
         // (e.g., a shared proxy forces recovery), terminate. Keeping a daemon alive without
         // an address leads to process explosions and cross-session confusion.
@@ -120,23 +98,10 @@ pub(crate) fn run_socket_daemon(config: DaemonConfig) -> Result<(), Box<dyn std:
 
         match listener.accept() {
             Ok((stream, _addr)) => {
-                // The listener is set to nonblocking so the daemon main loop can poll hot reload,
-                // idle exit conditions, etc. Ensure per-connection streams are blocking so we
-                // don't accidentally treat "no data yet" as EOF/error and close the transport.
-                let _ = stream.set_nonblocking(false);
                 let config = Arc::clone(&config);
                 let counter = Arc::clone(&active_connections);
                 counter.fetch_add(1, Ordering::SeqCst);
                 thread::spawn(move || {
-                    struct ConnGuard {
-                        counter: Arc<AtomicUsize>,
-                    }
-                    impl Drop for ConnGuard {
-                        fn drop(&mut self) {
-                            self.counter.fetch_sub(1, Ordering::SeqCst);
-                        }
-                    }
-
                     let _guard = ConnGuard { counter };
                     let _ = handle_connection(stream, config);
                 });
@@ -149,10 +114,24 @@ pub(crate) fn run_socket_daemon(config: DaemonConfig) -> Result<(), Box<dyn std:
     }
 }
 
+struct ConnGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn handle_connection(
     stream: UnixStream,
     config: Arc<DaemonConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(dir) = config.socket_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
 
@@ -165,52 +144,50 @@ fn handle_connection(
 
         let response: Option<Value> = match parse_request(&body) {
             Ok(request) => {
+                let expects_response = !matches!(request.id.as_ref(), None | Some(Value::Null));
+
                 // Internal: allow the shared proxy to terminate a stale/unhealthy daemon so a fresh
                 // build can take over the stable socket path.
-                //
-                // This is intentionally not part of the tool surface (not discoverable via tools/list).
                 if request.method == "branchmind/daemon_shutdown" {
-                    let resp = crate::json_rpc_response(request.id, json!({ "ok": true }));
-                    let _ = std::fs::remove_file(&config.socket_path);
-                    write_content_length_json(&mut writer, &resp)?;
+                    if expects_response {
+                        let resp = crate::json_rpc_response(request.id, json!({ "ok": true }));
+                        let _ = std::fs::remove_file(&config.socket_path);
+                        write_content_length_json(&mut writer, &resp)?;
+                    }
                     std::process::exit(0);
                 }
 
                 // Internal: allow the shared proxy to verify that a reused daemon matches the
-                // current session's config (storage_dir / project_guard / defaults). This prevents
-                // cross-project drift when multiple repos share a stable socket path.
+                // current session's config (storage_dir). This prevents cross-project drift when
+                // multiple repos share a runtime socket base directory.
                 if request.method == "branchmind/daemon_info" {
-                    let storage_dir = std::fs::canonicalize(&config.storage_dir)
-                        .unwrap_or_else(|_| config.storage_dir.clone())
-                        .to_string_lossy()
-                        .to_string();
-                    let argv0 = std::env::args_os()
-                        .next()
-                        .map(|v| v.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let exe_path = std::env::current_exe()
-                        .ok()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    Some(crate::json_rpc_response(
-                        request.id,
-                        json!({
-                                        "compat_fingerprint": crate::build_compat_fingerprint(),
-                                        "fingerprint": crate::build_fingerprint(),
-                                        "build_time_ms": crate::binary_build_time_ms().unwrap_or(0),
-                                        "argv0": argv0,
-                                        "exe_path": exe_path,
-                                        "storage_dir": storage_dir,
-                        "toolset": config.toolset.as_str(),
-                        "response_verbosity": config.response_verbosity.as_str(),
-                        "dx_mode": config.dx_mode,
-                        "default_workspace": config.default_workspace,
-                        "workspace_explicit": config.workspace_explicit,
-                                        "workspace_allowlist": config.workspace_allowlist,
-                                        "workspace_lock": config.workspace_lock,
-                        "project_guard": config.project_guard,
-                                    }),
-                    ))
+                    if !expects_response {
+                        None
+                    } else {
+                        let storage_dir = std::fs::canonicalize(&config.storage_dir)
+                            .unwrap_or_else(|_| config.storage_dir.clone())
+                            .to_string_lossy()
+                            .to_string();
+                        let argv0 = std::env::args_os()
+                            .next()
+                            .map(|v| v.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let exe_path = std::env::current_exe()
+                            .ok()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        Some(crate::json_rpc_response(
+                            request.id,
+                            json!({
+                                "compat_fingerprint": crate::build_compat_fingerprint(),
+                                "fingerprint": crate::build_fingerprint(),
+                                "build_time_ms": crate::binary_build_time_ms().unwrap_or(0),
+                                "argv0": argv0,
+                                "exe_path": exe_path,
+                                "storage_dir": storage_dir,
+                            }),
+                        ))
+                    }
                 } else {
                     server.handle(request)
                 }
@@ -227,40 +204,8 @@ fn handle_connection(
 }
 
 fn build_server(config: &DaemonConfig) -> Result<McpServer, Box<dyn std::error::Error>> {
-    let mut store = SqliteStore::open(&config.storage_dir)?;
-    let default_agent_id = match &config.default_agent_id_config {
-        Some(DefaultAgentIdConfig::Explicit(id)) => Some(id.clone()),
-        Some(DefaultAgentIdConfig::Auto) => Some(store.default_agent_id_auto_get_or_create()?),
-        None => None,
-    };
-
-    Ok(McpServer::new(
-        store,
-        crate::McpServerConfig {
-            toolset: config.toolset,
-            response_verbosity: config.response_verbosity,
-            dx_mode: config.dx_mode,
-            ux_proof_v2_enabled: config.ux_proof_v2_enabled,
-            jobs_unknown_args_fail_closed_enabled: config.jobs_unknown_args_fail_closed_enabled,
-            jobs_strict_progress_schema_enabled: config.jobs_strict_progress_schema_enabled,
-            jobs_high_done_proof_gate_enabled: config.jobs_high_done_proof_gate_enabled,
-            jobs_wait_stream_v2_enabled: config.jobs_wait_stream_v2_enabled,
-            jobs_mesh_v1_enabled: config.jobs_mesh_v1_enabled,
-            slice_plans_v1_enabled: config.slice_plans_v1_enabled,
-            jobs_slice_first_fail_closed_enabled: config.jobs_slice_first_fail_closed_enabled,
-            slice_budgets_enforced_enabled: config.slice_budgets_enforced_enabled,
-            default_workspace: config.default_workspace.clone(),
-            workspace_explicit: config.workspace_explicit,
-            workspace_allowlist: config.workspace_allowlist.clone(),
-            workspace_lock: config.workspace_lock,
-            project_guard: config.project_guard.clone(),
-            project_guard_rebind_enabled: config.project_guard_rebind_enabled,
-            default_agent_id,
-            runner_autostart_enabled: config.runner_autostart_enabled_shared.clone(),
-            runner_autostart_dry_run: config.runner_autostart_dry_run,
-            runner_autostart: config.runner_autostart_state_shared.clone(),
-        },
-    ))
+    let store = SqliteStore::open(&config.storage_dir)?;
+    Ok(McpServer::new(store))
 }
 
 fn daemon_is_compatible(
@@ -289,16 +234,19 @@ fn daemon_is_compatible(
         return Ok(false);
     }
 
-    let daemon_build_time_ms = info
-        .get("build_time_ms")
-        .and_then(|v| v.as_u64())
-        .filter(|ms| *ms > 0);
-    let local_build_time_ms = crate::binary_build_time_ms();
-    if let (Some(daemon_ms), Some(local_ms)) = (daemon_build_time_ms, local_build_time_ms)
-        && daemon_ms < local_ms
-    {
-        // Same compat version but older binary; force replacement.
-        return Ok(false);
+    // When BM_GIT_SHA is unavailable (non-git builds), fall back to a cheap build-time heuristic.
+    if crate::build_git_sha().is_none() {
+        let daemon_build_time_ms = info
+            .get("build_time_ms")
+            .and_then(|v| v.as_u64())
+            .filter(|ms| *ms > 0);
+        let local_build_time_ms = crate::binary_build_time_ms();
+        if let (Some(daemon_ms), Some(local_ms)) = (daemon_build_time_ms, local_build_time_ms)
+            && daemon_ms < local_ms
+        {
+            // Same compat version but older binary; force replacement.
+            return Ok(false);
+        }
     }
 
     let daemon_storage_dir = info
@@ -315,92 +263,7 @@ fn daemon_is_compatible(
         return Ok(false);
     }
 
-    let daemon_toolset = info
-        .get("toolset")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    if daemon_toolset != config.toolset.as_str() {
-        return Ok(false);
-    }
-
-    let daemon_verbosity = info
-        .get("response_verbosity")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    if !daemon_verbosity.is_empty() && daemon_verbosity != config.response_verbosity.as_str() {
-        return Ok(false);
-    }
-    let daemon_dx_mode = info
-        .get("dx_mode")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_dx_mode != config.dx_mode {
-        return Ok(false);
-    }
-
-    let daemon_workspace_explicit = info
-        .get("workspace_explicit")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_workspace_explicit != config.workspace_explicit {
-        return Ok(false);
-    }
-
-    let daemon_workspace_lock = info
-        .get("workspace_lock")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_workspace_lock != config.workspace_lock {
-        return Ok(false);
-    }
-
-    let daemon_default_workspace = info
-        .get("default_workspace")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    if daemon_default_workspace != config.default_workspace {
-        return Ok(false);
-    }
-
-    let daemon_workspace_allowlist = info
-        .get("workspace_allowlist")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                .collect::<Vec<_>>()
-        });
-    if !allowlist_equivalent(&daemon_workspace_allowlist, &config.workspace_allowlist) {
-        return Ok(false);
-    }
-
-    let daemon_project_guard = info
-        .get("project_guard")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    if daemon_project_guard != config.project_guard {
-        return Ok(false);
-    }
-
     Ok(true)
-}
-
-fn allowlist_equivalent(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(left), Some(right)) => {
-            let mut left = left.clone();
-            let mut right = right.clone();
-            left.sort();
-            left.dedup();
-            right.sort();
-            right.dedup();
-            left == right
-        }
-        _ => false,
-    }
 }
 
 fn probe_daemon_info(
@@ -467,4 +330,20 @@ fn try_shutdown_daemon(stream: &UnixStream) -> Result<(), Box<dyn std::error::Er
     });
     let _ = send_internal_request(stream, &req, Duration::from_millis(400));
     Ok(())
+}
+
+#[allow(dead_code)]
+fn socket_path_fits_unix_limit(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        const MAX_BYTES: usize = 100;
+        path.as_os_str().as_bytes().len() < MAX_BYTES
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
 }

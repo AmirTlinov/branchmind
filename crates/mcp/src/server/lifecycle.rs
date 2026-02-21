@@ -4,33 +4,10 @@ use crate::McpServer;
 use serde_json::{Value, json};
 
 impl McpServer {
-    pub(crate) fn new(store: bm_storage::SqliteStore, cfg: crate::McpServerConfig) -> Self {
+    pub(crate) fn new(store: bm_storage::SqliteStore) -> Self {
         Self {
             initialized: false,
             store,
-            toolset: cfg.toolset,
-            response_verbosity: cfg.response_verbosity,
-            dx_mode: cfg.dx_mode,
-            ux_proof_v2_enabled: cfg.ux_proof_v2_enabled,
-            jobs_unknown_args_fail_closed_enabled: cfg.jobs_unknown_args_fail_closed_enabled,
-            jobs_strict_progress_schema_enabled: cfg.jobs_strict_progress_schema_enabled,
-            jobs_high_done_proof_gate_enabled: cfg.jobs_high_done_proof_gate_enabled,
-            jobs_wait_stream_v2_enabled: cfg.jobs_wait_stream_v2_enabled,
-            jobs_mesh_v1_enabled: cfg.jobs_mesh_v1_enabled,
-            slice_plans_v1_enabled: cfg.slice_plans_v1_enabled,
-            jobs_slice_first_fail_closed_enabled: cfg.jobs_slice_first_fail_closed_enabled,
-            slice_budgets_enforced_enabled: cfg.slice_budgets_enforced_enabled,
-            default_workspace: cfg.default_workspace,
-            workspace_explicit: cfg.workspace_explicit,
-            workspace_override: None,
-            workspace_allowlist: cfg.workspace_allowlist,
-            workspace_lock: cfg.workspace_lock,
-            project_guard: cfg.project_guard,
-            project_guard_rebind_enabled: cfg.project_guard_rebind_enabled,
-            default_agent_id: cfg.default_agent_id,
-            runner_autostart_enabled: cfg.runner_autostart_enabled,
-            runner_autostart_dry_run: cfg.runner_autostart_dry_run,
-            runner_autostart: cfg.runner_autostart,
         }
     }
 
@@ -148,7 +125,7 @@ impl McpServer {
         }
 
         if method == "tools/list" {
-            // v3: strict surface = 3 markdown tools; toolset params are ignored.
+            // v3: strict surface = 3 markdown tools.
             let tools = crate::tools_v1::tool_definitions();
             return Some(crate::json_rpc_response(
                 request.id,
@@ -211,36 +188,36 @@ impl McpServer {
         let name_norm = normalize_tool_name(&raw_name);
         let name_ref = name_norm;
 
-        // v3 cutover: only the 3 advertised markdown tools are callable.
-        // Legacy names are rejected fail-closed.
+        // v3: only the 3 advertised markdown tools are callable. Legacy names are rejected
+        // fail-closed.
         if !crate::tools_v1::is_v1_tool(name_ref) {
-            return crate::ops::error_unknown_tool(name_ref);
+            return crate::ai_error_with(
+                "UNKNOWN_TOOL",
+                &format!("Unknown tool: {name_ref}"),
+                Some("Use tools/list to discover supported tools: branch, think, merge."),
+                Vec::new(),
+            );
         }
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // Keep the existing server pipeline (workspace guards, budget discipline, etc.)
-            // to avoid dead subsystems and to preserve deterministic runtime behavior.
-            //
-            // v1 tools return v1-shaped responses; pipeline pre/post hooks still apply.
-            let mut args_mut = args.clone();
-            if let Some(pre) = self.preprocess_args(name_ref, &mut args_mut) {
-                let ws = args_mut.get("workspace").and_then(|v| v.as_str());
-                let mut resp = crate::ops::handler_to_op_response(name_ref, ws, pre).into_value();
-                self.postprocess_response(name_ref, &args_mut, &mut resp);
-                return resp;
-            }
-
-            let mut resp = crate::tools_v1::dispatch_tool(self, name_ref, args_mut.clone())
-                .unwrap_or_else(|| crate::ops::error_unknown_tool(name_ref));
-            self.postprocess_response(name_ref, &args_mut, &mut resp);
-            resp
+            crate::tools_v1::dispatch_tool(self, name_ref, args.clone()).unwrap_or_else(|| {
+                crate::ai_error_with(
+                    "UNKNOWN_TOOL",
+                    &format!("Unknown tool: {name_ref}"),
+                    Some("Use tools/list to discover supported tools: branch, think, merge."),
+                    Vec::new(),
+                )
+            })
         }));
 
         match result {
             Ok(resp) => resp,
-            Err(_) => {
-                crate::ops::error_internal(format!("Internal panic while handling {name_ref}"))
-            }
+            Err(_) => crate::ai_error_with(
+                "STORE_ERROR",
+                &format!("Internal panic while handling {name_ref}"),
+                Some("Retry. If it persists, inspect local logs in the store dir."),
+                Vec::new(),
+            ),
         }
     }
 }

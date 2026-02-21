@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
+use crate::McpServer;
 use crate::entry::framing::{
     TransportMode, detect_mode_from_first_line, parse_request, read_content_length_frame,
     request_expects_response,
 };
 use crate::json_rpc_error;
-use crate::{DefaultAgentIdConfig, McpServer, ResponseVerbosity, Toolset};
 use bm_storage::SqliteStore;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -13,41 +13,16 @@ use std::os::unix::io::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub(crate) struct SharedProxyConfig {
     pub(crate) storage_dir: PathBuf,
-    pub(crate) toolset: Toolset,
-    pub(crate) response_verbosity: ResponseVerbosity,
-    pub(crate) dx_mode: bool,
-    pub(crate) ux_proof_v2_enabled: bool,
-    pub(crate) jobs_unknown_args_fail_closed_enabled: bool,
-    pub(crate) jobs_strict_progress_schema_enabled: bool,
-    pub(crate) jobs_high_done_proof_gate_enabled: bool,
-    pub(crate) jobs_wait_stream_v2_enabled: bool,
-    pub(crate) jobs_mesh_v1_enabled: bool,
-    pub(crate) slice_plans_v1_enabled: bool,
-    pub(crate) jobs_slice_first_fail_closed_enabled: bool,
-    pub(crate) slice_budgets_enforced_enabled: bool,
-    pub(crate) default_workspace: Option<String>,
-    pub(crate) workspace_explicit: bool,
-    pub(crate) workspace_allowlist: Option<Vec<String>>,
-    pub(crate) workspace_lock: bool,
-    pub(crate) project_guard: Option<String>,
-    pub(crate) project_guard_rebind_enabled: bool,
-    pub(crate) default_agent_id_config: Option<DefaultAgentIdConfig>,
     pub(crate) socket_path: PathBuf,
     pub(crate) socket_tag: Option<String>,
     pub(crate) shared_reset_mode: bool,
     pub(crate) hot_reload_enabled: bool,
     pub(crate) hot_reload_poll_ms: u64,
-    pub(crate) runner_autostart_dry_run: bool,
-    pub(crate) runner_autostart_enabled_shared: Arc<AtomicBool>,
-    pub(crate) runner_autostart_state_shared: Arc<Mutex<crate::RunnerAutostartState>>,
 }
 
 pub(crate) fn run_shared_proxy(
@@ -257,7 +232,7 @@ fn handle_client_body(
         Some("initialize") | Some("ping") | Some("tools/call")
     );
     let timeout = response_timeout_for_request(method.as_deref(), &body, expects_response);
-    let mut resp_body = match forward_body_with_reconnect(
+    let resp_body = match forward_body_with_reconnect(
         daemon,
         config,
         &body,
@@ -283,36 +258,7 @@ fn handle_client_body(
         },
     };
 
-    let retry_on_project_guard = expects_response
-        && resp_body.as_ref().and_then(|body| parse_error_code(body)) == Some(-32002)
-        && matches!(
-            method.as_deref(),
-            Some("tools/call" | "tools/list" | "initialize")
-        );
-    let retry_on_unknown_cmd = expects_response
-        && matches!(method.as_deref(), Some("tools/call"))
-        && resp_body
-            .as_ref()
-            .is_some_and(|body| is_tools_call_unknown_cmd_envelope_error(body));
-    if retry_on_project_guard || retry_on_unknown_cmd {
-        *daemon = None;
-        let _ = std::fs::remove_file(&config.socket_path);
-        resp_body = match forward_body_with_reconnect(
-            daemon,
-            config,
-            &body,
-            expects_response,
-            timeout,
-            true,
-        ) {
-            Ok(Some(resp_body)) => Some(resp_body),
-            Ok(None) => None,
-            Err(err) => Some(build_transport_error_response(
-                &body,
-                err.to_string().as_str(),
-            )),
-        };
-    }
+    // Recovery note: config/compat drift is handled by `connect_or_spawn` via `daemon_info`.
 
     if let Some(resp_body) = resp_body {
         match mode {
@@ -349,39 +295,8 @@ fn ensure_local_server<'a>(
     config: &SharedProxyConfig,
 ) -> Result<&'a mut McpServer, Box<dyn std::error::Error>> {
     if local_server.is_none() {
-        let mut store = SqliteStore::open(&config.storage_dir)?;
-        let default_agent_id = match &config.default_agent_id_config {
-            Some(DefaultAgentIdConfig::Explicit(id)) => Some(id.clone()),
-            Some(DefaultAgentIdConfig::Auto) => Some(store.default_agent_id_auto_get_or_create()?),
-            None => None,
-        };
-        *local_server = Some(McpServer::new(
-            store,
-            crate::McpServerConfig {
-                toolset: config.toolset,
-                response_verbosity: config.response_verbosity,
-                dx_mode: config.dx_mode,
-                ux_proof_v2_enabled: config.ux_proof_v2_enabled,
-                jobs_unknown_args_fail_closed_enabled: config.jobs_unknown_args_fail_closed_enabled,
-                jobs_strict_progress_schema_enabled: config.jobs_strict_progress_schema_enabled,
-                jobs_high_done_proof_gate_enabled: config.jobs_high_done_proof_gate_enabled,
-                jobs_wait_stream_v2_enabled: config.jobs_wait_stream_v2_enabled,
-                jobs_mesh_v1_enabled: config.jobs_mesh_v1_enabled,
-                slice_plans_v1_enabled: config.slice_plans_v1_enabled,
-                jobs_slice_first_fail_closed_enabled: config.jobs_slice_first_fail_closed_enabled,
-                slice_budgets_enforced_enabled: config.slice_budgets_enforced_enabled,
-                default_workspace: config.default_workspace.clone(),
-                workspace_explicit: config.workspace_explicit,
-                workspace_allowlist: config.workspace_allowlist.clone(),
-                workspace_lock: config.workspace_lock,
-                project_guard: config.project_guard.clone(),
-                project_guard_rebind_enabled: config.project_guard_rebind_enabled,
-                default_agent_id,
-                runner_autostart_enabled: config.runner_autostart_enabled_shared.clone(),
-                runner_autostart_dry_run: config.runner_autostart_dry_run,
-                runner_autostart: config.runner_autostart_state_shared.clone(),
-            },
-        ));
+        let store = SqliteStore::open(&config.storage_dir)?;
+        *local_server = Some(McpServer::new(store));
     }
 
     Ok(local_server
@@ -501,7 +416,7 @@ fn try_handle_locally(
             }
         }
         "tools/list" => {
-            // v1: strict surface = 10, ignore toolset overrides from legacy clients.
+            // v3: strict surface = 3 markdown tools.
             let resp = crate::json_rpc_response(
                 id,
                 json!({ "tools": crate::tools_v1::tool_definitions() }),
@@ -673,35 +588,6 @@ fn build_transport_error_response(body: &[u8], message: &str) -> Vec<u8> {
     })
 }
 
-fn parse_error_code(body: &[u8]) -> Option<i64> {
-    let value = serde_json::from_slice::<Value>(body).ok()?;
-    value
-        .get("error")
-        .and_then(|v| v.get("code"))
-        .and_then(|v| v.as_i64())
-}
-
-fn is_tools_call_unknown_cmd_envelope_error(body: &[u8]) -> bool {
-    let value = match serde_json::from_slice::<Value>(body) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let Some(content) = value
-        .get("result")
-        .and_then(|v| v.get("content"))
-        .and_then(|v| v.as_array())
-    else {
-        return false;
-    };
-    content.iter().any(|item| {
-        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        text.contains("\"code\":\"UNKNOWN_CMD\"")
-            || text.contains("\"code\": \"UNKNOWN_CMD\"")
-            || text.contains("\"code\":\"UNKNOWN_OP\"")
-            || text.contains("\"code\": \"UNKNOWN_OP\"")
-    })
-}
-
 fn extract_request_method(body: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<Value>(body).ok()?;
     value
@@ -720,25 +606,9 @@ fn response_timeout_for_method(method: Option<&str>, expects_response: bool) -> 
     }
 }
 
-fn extract_tools_call_name(body: &[u8]) -> Option<String> {
-    let value = serde_json::from_slice::<Value>(body).ok()?;
-    let name = value
-        .get("params")
-        .and_then(|v| v.get("name"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())?;
-
-    let canonical = name
-        .strip_prefix("branchmind/")
-        .or_else(|| name.strip_prefix("branchmind."))
-        .unwrap_or(name);
-    Some(canonical.to_string())
-}
-
 fn response_timeout_for_request(
     method: Option<&str>,
-    body: &[u8],
+    _body: &[u8],
     expects_response: bool,
 ) -> Option<Duration> {
     if !expects_response {
@@ -746,11 +616,8 @@ fn response_timeout_for_request(
     }
     match method {
         Some("initialize") | Some("ping") => Some(Duration::from_secs(5)),
-        Some("tools/call") => match extract_tools_call_name(body).as_deref() {
-            Some("status") => Some(Duration::from_secs(5)),
-            Some("tasks_snapshot") => Some(Duration::from_secs(10)),
-            _ => Some(Duration::from_secs(20)),
-        },
+        Some("tools/list") => Some(Duration::from_secs(5)),
+        Some("tools/call") => Some(Duration::from_secs(20)),
         _ => response_timeout_for_method(method, expects_response),
     }
 }
@@ -841,11 +708,6 @@ fn spawn_daemon(config: &SharedProxyConfig) -> Result<(), Box<dyn std::error::Er
             .arg(&config.socket_path)
             .arg("--storage-dir")
             .arg(&config.storage_dir)
-            .arg("--toolset")
-            .arg(config.toolset.as_str())
-            .arg("--response-verbosity")
-            .arg(config.response_verbosity.as_str())
-            .arg(if config.dx_mode { "--dx" } else { "--no-dx" })
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -854,34 +716,6 @@ fn spawn_daemon(config: &SharedProxyConfig) -> Result<(), Box<dyn std::error::Er
         // after a short idle period when no sessions use them anymore.
         if std::env::var_os("BRANCHMIND_MCP_DAEMON_IDLE_EXIT_SECS").is_none() {
             command.env("BRANCHMIND_MCP_DAEMON_IDLE_EXIT_SECS", "120");
-        }
-
-        if config.workspace_explicit {
-            if let Some(workspace) = &config.default_workspace {
-                command.arg("--workspace").arg(workspace);
-            }
-            if !config.workspace_lock {
-                command.env("BRANCHMIND_WORKSPACE_LOCK", "0");
-            }
-        }
-        if let Some(allowlist) = &config.workspace_allowlist {
-            command.env("BRANCHMIND_WORKSPACE_ALLOWLIST", allowlist.join(","));
-        }
-        if config.workspace_lock {
-            command.arg("--workspace-lock");
-        }
-        if let Some(project_guard) = &config.project_guard {
-            command.arg("--project-guard").arg(project_guard);
-        }
-        if let Some(agent_cfg) = &config.default_agent_id_config {
-            match agent_cfg {
-                DefaultAgentIdConfig::Auto => {
-                    command.arg("--agent-id").arg("auto");
-                }
-                DefaultAgentIdConfig::Explicit(id) => {
-                    command.arg("--agent-id").arg(id);
-                }
-            }
         }
 
         match command.spawn() {
@@ -1033,92 +867,7 @@ fn daemon_is_compatible(
         return Ok(false);
     }
 
-    let daemon_toolset = info
-        .get("toolset")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    if daemon_toolset != config.toolset.as_str() {
-        return Ok(false);
-    }
-
-    let daemon_verbosity = info
-        .get("response_verbosity")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    if !daemon_verbosity.is_empty() && daemon_verbosity != config.response_verbosity.as_str() {
-        return Ok(false);
-    }
-    let daemon_dx_mode = info
-        .get("dx_mode")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_dx_mode != config.dx_mode {
-        return Ok(false);
-    }
-
-    let daemon_workspace_explicit = info
-        .get("workspace_explicit")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_workspace_explicit != config.workspace_explicit {
-        return Ok(false);
-    }
-
-    let daemon_workspace_lock = info
-        .get("workspace_lock")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if daemon_workspace_lock != config.workspace_lock {
-        return Ok(false);
-    }
-
-    let daemon_default_workspace = info
-        .get("default_workspace")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    if daemon_default_workspace != config.default_workspace {
-        return Ok(false);
-    }
-
-    let daemon_workspace_allowlist = info
-        .get("workspace_allowlist")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                .collect::<Vec<_>>()
-        });
-    if !allowlist_equivalent(&daemon_workspace_allowlist, &config.workspace_allowlist) {
-        return Ok(false);
-    }
-
-    let daemon_project_guard = info
-        .get("project_guard")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    if daemon_project_guard != config.project_guard {
-        return Ok(false);
-    }
-
     Ok(true)
-}
-
-fn allowlist_equivalent(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(left), Some(right)) => {
-            let mut left = left.clone();
-            let mut right = right.clone();
-            left.sort();
-            left.dedup();
-            right.sort();
-            right.dedup();
-            left == right
-        }
-        _ => false,
-    }
 }
 
 fn normalize_exec_hint(raw: &str) -> Option<String> {
@@ -1232,32 +981,6 @@ mod tests {
         path.push(format!("bm_mcp_{name}_{}_{}", std::process::id(), nonce));
         std::fs::create_dir_all(&path).expect("create temp dir");
         path
-    }
-
-    #[test]
-    fn tools_call_unknown_cmd_envelope_is_detected() {
-        let body = serde_json::to_vec(&json!({
-            "jsonrpc":"2.0",
-            "id":1,
-            "result":{
-                "content":[{"type":"text","text":"{\"error\":{\"code\":\"UNKNOWN_CMD\",\"message\":\"Unknown cmd\"}}"}]
-            }
-        }))
-        .expect("json");
-        assert!(is_tools_call_unknown_cmd_envelope_error(&body));
-    }
-
-    #[test]
-    fn tools_call_success_envelope_is_not_detected() {
-        let body = serde_json::to_vec(&json!({
-            "jsonrpc":"2.0",
-            "id":1,
-            "result":{
-                "content":[{"type":"text","text":"{\"success\":true,\"result\":{}}"}]
-            }
-        }))
-        .expect("json");
-        assert!(!is_tools_call_unknown_cmd_envelope_error(&body));
     }
 
     #[test]
