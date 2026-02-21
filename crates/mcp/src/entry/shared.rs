@@ -41,6 +41,8 @@ pub(crate) struct SharedProxyConfig {
     pub(crate) project_guard_rebind_enabled: bool,
     pub(crate) default_agent_id_config: Option<DefaultAgentIdConfig>,
     pub(crate) socket_path: PathBuf,
+    pub(crate) socket_tag: Option<String>,
+    pub(crate) shared_reset_mode: bool,
     pub(crate) hot_reload_enabled: bool,
     pub(crate) hot_reload_poll_ms: u64,
     pub(crate) runner_autostart_dry_run: bool,
@@ -51,6 +53,10 @@ pub(crate) struct SharedProxyConfig {
 pub(crate) fn run_shared_proxy(
     config: SharedProxyConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if config.shared_reset_mode {
+        return run_shared_reset(&config);
+    }
+
     let mut daemon: Option<DaemonPipe> = None;
     let mut local_server: Option<McpServer> = None;
     let mut session_log = crate::SessionLog::new(&config.storage_dir);
@@ -507,6 +513,68 @@ fn try_handle_locally(
         }
         _ => LocalHandling::NotHandled,
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct SharedResetOutcome {
+    daemon_shutdown_attempted: bool,
+    daemon_shutdown_ok: bool,
+    socket_file_existed: bool,
+    socket_file_removed: bool,
+}
+
+fn run_shared_reset(config: &SharedProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let socket_path = config.socket_path.clone();
+    let result = execute_shared_reset(&socket_path);
+    let report = match &result {
+        Ok(outcome) => json!({
+            "ok": true,
+            "mode": "shared-reset",
+            "socket_path": socket_path,
+            "socket_tag": config.socket_tag.as_deref(),
+            "daemon_shutdown_attempted": outcome.daemon_shutdown_attempted,
+            "daemon_shutdown_ok": outcome.daemon_shutdown_ok,
+            "socket_file_existed": outcome.socket_file_existed,
+            "socket_file_removed": outcome.socket_file_removed,
+        }),
+        Err(err) => json!({
+            "ok": false,
+            "mode": "shared-reset",
+            "socket_path": socket_path,
+            "socket_tag": config.socket_tag.as_deref(),
+            "error": err.to_string(),
+        }),
+    };
+    println!("{}", serde_json::to_string(&report)?);
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn execute_shared_reset(socket_path: &std::path::Path) -> std::io::Result<SharedResetOutcome> {
+    let mut daemon_shutdown_attempted = false;
+    let mut daemon_shutdown_ok = false;
+    if let Ok(stream) = UnixStream::connect(socket_path) {
+        daemon_shutdown_attempted = true;
+        daemon_shutdown_ok = try_shutdown_daemon(&stream).is_ok();
+    }
+
+    let socket_file_existed = socket_path.exists();
+    let mut socket_file_removed = false;
+    match std::fs::remove_file(socket_path) {
+        Ok(()) => socket_file_removed = true,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+
+    Ok(SharedResetOutcome {
+        daemon_shutdown_attempted,
+        daemon_shutdown_ok,
+        socket_file_existed,
+        socket_file_removed,
+    })
 }
 
 struct DaemonPipe {
@@ -1145,13 +1213,26 @@ fn try_shutdown_daemon(stream: &UnixStream) -> Result<(), Box<dyn std::error::Er
         "method": "branchmind/daemon_shutdown",
         "params": {}
     });
-    let _ = send_internal_request(stream, &req, Duration::from_millis(400));
+    let _ = send_internal_request(stream, &req, Duration::from_millis(400))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        path.push(format!("bm_mcp_{name}_{}_{}", std::process::id(), nonce));
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
 
     #[test]
     fn tools_call_unknown_cmd_envelope_is_detected() {
@@ -1177,5 +1258,26 @@ mod tests {
         }))
         .expect("json");
         assert!(!is_tools_call_unknown_cmd_envelope_error(&body));
+    }
+
+    #[test]
+    fn shared_reset_removes_stale_socket_file() {
+        let temp_dir = unique_temp_dir("shared_reset");
+        let socket_path = temp_dir.join("stale.sock");
+        std::fs::write(&socket_path, b"stale").expect("write stale socket placeholder");
+
+        let outcome = execute_shared_reset(&socket_path).expect("shared reset should succeed");
+        assert_eq!(
+            outcome,
+            SharedResetOutcome {
+                daemon_shutdown_attempted: false,
+                daemon_shutdown_ok: false,
+                socket_file_existed: true,
+                socket_file_removed: true,
+            }
+        );
+        assert!(!socket_path.exists(), "socket path should be removed");
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

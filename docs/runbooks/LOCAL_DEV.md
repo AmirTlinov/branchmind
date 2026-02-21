@@ -48,21 +48,18 @@ These files never include request bodies, only minimal metadata.
 
 ## Cleanup stray processes / sockets
 
-If you see many leftover `bm_mcp` processes (e.g., after a crashed TUI session), do a hard reset:
+Use the built-in shared reset command (same socket config resolution as normal startup):
 
 ```bash
-pkill -TERM -x bm_mcp || true
-sleep 0.2
-pkill -KILL -x bm_mcp || true
-
-# Optional: clear shared-mode runtime sockets (safe; they are recreated on demand).
-rm -f "${XDG_RUNTIME_DIR:-/tmp}/branchmind_mcp"/*.sock 2>/dev/null || true
+make shared-reset
 ```
 
 Notes:
 
-- Seeing a few `[bm_mcp] <defunct>` entries usually means an old parent process hasn’t reaped children yet; restarting that parent (or rebooting) clears them.
-- Repo-local socket files under `.agents/mcp/.branchmind/*.sock` are safe to delete.
+- `--shared-reset` does **not** start stdio/shared/daemon loops; it only does best-effort daemon shutdown + stale socket unlink and prints a compact JSON report.
+- `--shared-reset` by itself keeps the same auto defaults as zero-arg `make run-mcp`, so it targets the same default shared socket tag/path.
+- If your client uses non-default flags/env (`--storage-dir`, `--toolset`, workspace/project guard), run the reset command with the same config so it targets the same socket.
+- Global process-kill snippets should be kept as last-resort OS-level recovery only.
 
 ## Codex config (recommended)
 

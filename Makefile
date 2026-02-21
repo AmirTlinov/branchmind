@@ -1,4 +1,4 @@
-.PHONY: help fmt fmt-check clippy test check run-mcp
+.PHONY: help fmt fmt-check clippy test check run-mcp shared-reset
 
 CARGO ?= cargo
 
@@ -11,6 +11,7 @@ help:
 		"  make clippy     Run clippy (deny warnings)" \
 		"  make test       Run workspace tests" \
 		"  make run-mcp    Run MCP server (DX defaults)" \
+		"  make shared-reset  Reset current shared socket (best-effort daemon shutdown + stale socket cleanup)" \
 		""
 
 fmt:
@@ -30,3 +31,6 @@ check: fmt-check clippy test
 # Golden path: zero-arg run enables DX defaults.
 run-mcp:
 	$(CARGO) run -p bm_mcp
+
+shared-reset:
+	$(CARGO) run -p bm_mcp -- --shared-reset
