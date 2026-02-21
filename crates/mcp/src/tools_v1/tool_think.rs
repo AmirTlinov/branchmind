@@ -450,8 +450,6 @@ mod tests {
     use bm_storage::{CreateBranchRequest, SqliteStore};
     use serde_json::json;
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -466,35 +464,7 @@ mod tests {
 
     fn test_server(dir: &PathBuf) -> McpServer {
         let store = SqliteStore::open(dir).expect("store should open");
-        let runner_autostart_enabled = Arc::new(AtomicBool::new(false));
-        let runner_autostart_state = Arc::new(Mutex::new(crate::RunnerAutostartState::default()));
-        McpServer::new(
-            store,
-            crate::McpServerConfig {
-                toolset: crate::Toolset::Daily,
-                response_verbosity: crate::ResponseVerbosity::Full,
-                dx_mode: false,
-                ux_proof_v2_enabled: true,
-                jobs_unknown_args_fail_closed_enabled: true,
-                jobs_strict_progress_schema_enabled: true,
-                jobs_high_done_proof_gate_enabled: true,
-                jobs_wait_stream_v2_enabled: true,
-                jobs_mesh_v1_enabled: true,
-                slice_plans_v1_enabled: true,
-                jobs_slice_first_fail_closed_enabled: true,
-                slice_budgets_enforced_enabled: true,
-                default_workspace: None,
-                workspace_explicit: false,
-                workspace_allowlist: None,
-                workspace_lock: false,
-                project_guard: None,
-                project_guard_rebind_enabled: false,
-                default_agent_id: None,
-                runner_autostart_enabled,
-                runner_autostart_dry_run: false,
-                runner_autostart: runner_autostart_state,
-            },
-        )
+        McpServer::new(store)
     }
 
     #[test]
