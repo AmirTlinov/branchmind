@@ -40,7 +40,6 @@ version = "2.0.0"
 dependencies = [
  "bm_core",
  "rusqlite",
- "serde_json",
 ]
 
 [[package]]
