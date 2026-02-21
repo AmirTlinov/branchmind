@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 fn auto_mode_enabled() -> bool {
-    if std::env::args().len() > 1 {
+    if !auto_mode_enabled_for_args(std::env::args()) {
         return false;
     }
     let keys = [
@@ -20,6 +20,16 @@ fn auto_mode_enabled() -> bool {
         "BRANCHMIND_DX",
     ];
     keys.iter().all(|key| std::env::var_os(key).is_none())
+}
+
+fn auto_mode_enabled_for_args<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .skip(1)
+        .all(|arg| arg.as_ref() == "--shared-reset")
 }
 
 fn default_repo_root() -> PathBuf {
@@ -415,6 +425,20 @@ pub(crate) fn parse_default_agent_id_config() -> Option<DefaultAgentIdConfig> {
         return Some(DefaultAgentIdConfig::Auto);
     }
     normalize_agent_id(raw).map(DefaultAgentIdConfig::Explicit)
+}
+
+pub(crate) fn parse_shared_reset_mode() -> bool {
+    parse_shared_reset_mode_from_args(std::env::args())
+}
+
+fn parse_shared_reset_mode_from_args<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .skip(1)
+        .any(|arg| arg.as_ref() == "--shared-reset")
 }
 
 pub(crate) fn parse_shared_mode() -> bool {
@@ -993,5 +1017,38 @@ mod tests {
             default_agent_id: None,
         });
         assert_ne!(base, different);
+    }
+
+    #[test]
+    fn shared_reset_mode_parser_detects_flag() {
+        assert!(parse_shared_reset_mode_from_args([
+            "bm_mcp",
+            "--shared-reset"
+        ]));
+    }
+
+    #[test]
+    fn shared_reset_mode_parser_ignores_other_flags() {
+        assert!(!parse_shared_reset_mode_from_args(["bm_mcp", "--shared"]));
+    }
+
+    #[test]
+    fn auto_mode_args_enabled_for_zero_arg_start() {
+        assert!(auto_mode_enabled_for_args(["bm_mcp"]));
+    }
+
+    #[test]
+    fn auto_mode_args_enabled_for_shared_reset_only() {
+        assert!(auto_mode_enabled_for_args(["bm_mcp", "--shared-reset"]));
+    }
+
+    #[test]
+    fn auto_mode_args_disabled_when_shared_reset_has_extra_flags() {
+        assert!(!auto_mode_enabled_for_args([
+            "bm_mcp",
+            "--shared-reset",
+            "--toolset",
+            "full",
+        ]));
     }
 }

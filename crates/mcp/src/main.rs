@@ -156,7 +156,7 @@ fn usage() -> &'static str {
     "bm_mcp — BranchMind MCP server (Rust, deterministic, stdio-first)\n\n\
 USAGE:\n\
   bm_mcp [--storage-dir DIR] [--workspace WS] [--toolset daily|full|core]\n\
-        [--shared|--daemon] [--socket PATH]\n\
+        [--shared|--daemon|--shared-reset] [--socket PATH]\n\
 \n\
 FLAGS:\n\
   -h, --help       Print this help and exit\n\
@@ -195,7 +195,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // This prevents a long-lived daemon from accidentally observing a replaced on-disk binary
     // and reporting a misleading "new" fingerprint while still running old code.
     let _ = build_fingerprint();
-    let kind = if args.iter().any(|arg| arg.as_str() == "--daemon") {
+    let kind = if args.iter().any(|arg| arg.as_str() == "--shared-reset") {
+        "shared_reset"
+    } else if args.iter().any(|arg| arg.as_str() == "--daemon") {
         "daemon"
     } else if args.iter().any(|arg| arg.as_str() == "--shared") {
         "shared_proxy"
@@ -259,6 +261,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_agent_id: default_agent_id_config.as_ref(),
     });
     let socket_path = parse_socket_path(&storage_dir, Some(&socket_tag));
+    let shared_reset_mode = parse_shared_reset_mode();
     let shared_mode = parse_shared_mode();
     let daemon_mode = parse_daemon_mode();
     let hot_reload_enabled = parse_hot_reload_enabled();
@@ -266,6 +269,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runner_autostart_enabled =
         parse_runner_autostart_override().unwrap_or(toolset != Toolset::Full);
     let runner_autostart_dry_run = parse_runner_autostart_dry_run();
+
+    if shared_reset_mode {
+        #[cfg(unix)]
+        {
+            let runner_autostart_enabled_shared =
+                Arc::new(AtomicBool::new(runner_autostart_enabled));
+            let runner_autostart_state_shared =
+                Arc::new(Mutex::new(RunnerAutostartState::default()));
+            let config = entry::SharedProxyConfig {
+                storage_dir,
+                toolset,
+                response_verbosity,
+                dx_mode,
+                ux_proof_v2_enabled,
+                jobs_unknown_args_fail_closed_enabled,
+                jobs_strict_progress_schema_enabled,
+                jobs_high_done_proof_gate_enabled,
+                jobs_wait_stream_v2_enabled,
+                jobs_mesh_v1_enabled,
+                slice_plans_v1_enabled,
+                jobs_slice_first_fail_closed_enabled,
+                slice_budgets_enforced_enabled,
+                default_workspace,
+                workspace_explicit: workspace_explicit.is_some(),
+                workspace_allowlist: workspace_allowlist.clone(),
+                workspace_lock,
+                project_guard,
+                project_guard_rebind_enabled,
+                default_agent_id_config,
+                socket_path,
+                socket_tag: Some(socket_tag),
+                shared_reset_mode: true,
+                hot_reload_enabled,
+                hot_reload_poll_ms,
+                runner_autostart_dry_run,
+                runner_autostart_enabled_shared,
+                runner_autostart_state_shared,
+            };
+            let result = entry::run_shared_proxy(config);
+            if let Err(err) = &result {
+                write_last_crash(&storage_dir_for_errors, "error", &format!("{err:?}"));
+            }
+            return result;
+        }
+
+        #[cfg(not(unix))]
+        {
+            return Err("shared reset mode is only supported on unix targets".into());
+        }
+    }
 
     if shared_mode {
         #[cfg(unix)]
@@ -296,6 +349,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 project_guard_rebind_enabled,
                 default_agent_id_config,
                 socket_path,
+                socket_tag: Some(socket_tag),
+                shared_reset_mode: false,
                 hot_reload_enabled,
                 hot_reload_poll_ms,
                 runner_autostart_dry_run,
