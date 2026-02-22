@@ -1,4 +1,3 @@
-use bm_core::ids::WorkspaceId;
 use bm_storage::{
     AppendCommitRequest, CreateBranchRequest, CreateMergeRecordRequest, DeleteBranchRequest,
     ListBranchesRequest, ListMergeRecordsRequest, ShowCommitRequest, SqliteStore, StoreError,
@@ -276,14 +275,23 @@ fn delete_branch_fails_when_descendants_exist() {
 fn legacy_branch_inserts_also_set_non_null_updated_at_ms() {
     let dir = temp_storage_dir("legacy-branch-updated-at");
     let mut store = SqliteStore::open(&dir).expect("fresh storage should open");
-    let workspace = WorkspaceId::try_new("ws-legacy").expect("workspace id should be valid");
 
     store
-        .workspace_init(&workspace)
-        .expect("workspace init should succeed");
+        .create_branch(CreateBranchRequest {
+            workspace_id: "ws-legacy".to_string(),
+            branch_id: "main".to_string(),
+            parent_branch_id: None,
+            created_at_ms: 10,
+        })
+        .expect("main branch should be created");
     store
-        .branch_create(&workspace, "child", Some("main"))
-        .expect("legacy branch_create should succeed");
+        .create_branch(CreateBranchRequest {
+            workspace_id: "ws-legacy".to_string(),
+            branch_id: "child".to_string(),
+            parent_branch_id: Some("main".to_string()),
+            created_at_ms: 11,
+        })
+        .expect("child branch should be created");
 
     let branches = store
         .list_branches(ListBranchesRequest {

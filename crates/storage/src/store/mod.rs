@@ -1,82 +1,41 @@
 #![forbid(unsafe_code)]
-//! Storage implementation (split-friendly module root).
 
-mod anchor_aliases;
-mod anchor_bindings;
-mod anchor_links;
-mod anchors;
-mod anchors_lint;
-mod anchors_merge;
-mod branches;
-mod docs;
 mod error;
-mod focus;
-mod graph;
-mod job_bus;
-mod jobs;
-mod ops_history;
-mod portal_cursors;
-mod reasoning_ref;
 mod requests;
-mod runners;
-mod slices;
-mod steps;
-mod support;
-mod tasks;
-mod think;
-mod types;
-mod v3;
-mod vcs;
 
-use bm_core::ids::WorkspaceId;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+pub use error::StoreError;
+pub use requests::*;
+
+use bm_core::{MergeRecord, ThoughtBranch, ThoughtCommit, canonical_identifier, ids::WorkspaceId};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, Transaction, params};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_BRANCH: &str = "main";
 const V3_SCHEMA_VERSION: i64 = 3;
-
-pub use error::StoreError;
-pub use requests::*;
-pub use types::*;
-
-use support::*;
-
-fn is_missing_table(err: &rusqlite::Error, table: &str) -> bool {
-    match err {
-        rusqlite::Error::SqliteFailure(_, Some(msg)) => {
-            msg.contains("no such table") && msg.contains(table)
-        }
-        _ => false,
-    }
-}
-
-#[derive(Clone, Debug)]
-enum OpsHistoryTarget {
-    Task { title: Option<String> },
-    Step { step: StepRef },
-    TaskNode,
-}
+const MAX_BRANCH_DEPTH: usize = 128;
 
 #[derive(Debug)]
 pub struct SqliteStore {
-    storage_dir: PathBuf,
     conn: Connection,
+    storage_dir: PathBuf,
 }
 
 impl SqliteStore {
     pub fn open(storage_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
         let storage_dir = storage_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&storage_dir)?;
+
         let db_path = storage_dir.join("branchmind_rust.db");
         let conn = Connection::open(db_path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let preflight = v3_preflight_gate(&conn)?;
-        let store = Self { storage_dir, conn };
-        store.migrate()?;
-        store.ensure_v3_schema(preflight)?;
-        Ok(store)
+
+        preflight_gate(&conn)?;
+        install_schema(&conn)?;
+
+        Ok(Self { conn, storage_dir })
     }
 
     pub fn storage_dir(&self) -> &Path {
@@ -87,387 +46,510 @@ impl SqliteStore {
         DEFAULT_BRANCH
     }
 
-    pub fn next_card_id(&mut self, workspace: &WorkspaceId) -> Result<String, StoreError> {
-        let now_ms = now_ms();
-        let tx = self.conn.transaction()?;
-        ensure_workspace_tx(&tx, workspace, now_ms)?;
-        let seq = next_counter_tx(&tx, workspace.as_str(), "card_seq")?;
-        tx.commit()?;
-        Ok(format!("CARD-{seq}"))
-    }
+    pub fn create_branch(
+        &mut self,
+        request: CreateBranchRequest,
+    ) -> Result<ThoughtBranch, StoreError> {
+        let workspace_id = canonicalize_workspace(&request.workspace_id)?;
+        let branch_id = canonicalize_branch(&request.branch_id)?;
+        let parent_branch_id = request
+            .parent_branch_id
+            .as_deref()
+            .map(canonicalize_branch)
+            .transpose()?;
 
-    pub fn workspace_init(&mut self, workspace: &WorkspaceId) -> Result<(), StoreError> {
-        let now_ms = now_ms();
-        let tx = self.conn.transaction()?;
-        ensure_workspace_tx(&tx, workspace, now_ms)?;
-        let _ = bootstrap_default_branch_tx(&tx, workspace.as_str(), now_ms)?;
-        let _ = ensure_checkout_branch_tx(&tx, workspace.as_str(), DEFAULT_BRANCH, now_ms)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    fn migrate(&self) -> Result<(), StoreError> {
-        migrate_sqlite_schema(&self.conn)
-    }
-
-    fn ensure_v3_schema(&self, preflight: V3Preflight) -> Result<(), StoreError> {
-        if matches!(preflight, V3Preflight::Empty) {
-            install_v3_schema_extensions(&self.conn)?;
+        if parent_branch_id
+            .as_ref()
+            .is_some_and(|parent| parent == &branch_id)
+        {
+            return Err(StoreError::BranchCycle);
         }
+
+        let tx = self.conn.transaction()?;
+        ensure_workspace_tx(&tx, &workspace_id, request.created_at_ms)?;
+
+        let parent_head_commit_id = if let Some(parent_branch_id) = parent_branch_id.as_deref() {
+            let state = branch_state_tx(&tx, &workspace_id, parent_branch_id)?;
+            let depth = branch_depth_tx(&tx, &workspace_id, parent_branch_id)?;
+            if depth + 1 > MAX_BRANCH_DEPTH {
+                return Err(StoreError::BranchDepthExceeded);
+            }
+            state.head_commit_id
+        } else {
+            None
+        };
+
+        let branch = ThoughtBranch::try_new(
+            workspace_id.clone(),
+            branch_id.clone(),
+            parent_branch_id.clone(),
+            parent_head_commit_id,
+            request.created_at_ms,
+            request.created_at_ms,
+        )
+        .map_err(|_| StoreError::InvalidInput("invalid branch payload"))?;
+
+        let insert = tx.execute(
+            "INSERT INTO branches(workspace, name, parent_branch_id, head_commit_id, created_at_ms, updated_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                branch.workspace_id(),
+                branch.branch_id(),
+                branch.parent_branch_id(),
+                branch.head_commit_id(),
+                branch.created_at_ms(),
+                branch.updated_at_ms(),
+            ],
+        );
+
+        if let Err(err) = insert {
+            return Err(map_insert_conflict(err));
+        }
+
+        tx.commit()?;
+        Ok(branch)
+    }
+
+    pub fn list_branches(
+        &self,
+        request: ListBranchesRequest,
+    ) -> Result<Vec<ThoughtBranch>, StoreError> {
+        let workspace_id = canonicalize_workspace(&request.workspace_id)?;
+        let limit = to_sqlite_i64(request.limit)?;
+        let offset = to_sqlite_i64(request.offset)?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace, name, parent_branch_id, head_commit_id, created_at_ms, updated_at_ms \
+             FROM branches \
+             WHERE workspace=?1 \
+             ORDER BY created_at_ms ASC, name ASC \
+             LIMIT ?2 OFFSET ?3",
+        )?;
+
+        let mut rows = stmt.query(params![workspace_id, limit, offset])?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            out.push(
+                ThoughtBranch::try_new(
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                )
+                .map_err(|_| StoreError::InvalidInput("invalid branch row"))?,
+            );
+        }
+
+        Ok(out)
+    }
+
+    pub fn delete_branch(&mut self, request: DeleteBranchRequest) -> Result<(), StoreError> {
+        let workspace_id = canonicalize_workspace(&request.workspace_id)?;
+        let branch_id = canonicalize_branch(&request.branch_id)?;
+
+        let tx = self.conn.transaction()?;
+        ensure_branch_exists_tx(&tx, &workspace_id, &branch_id)?;
+
+        let descendants = tx.query_row(
+            "SELECT COUNT(1) FROM branches WHERE workspace=?1 AND parent_branch_id=?2",
+            params![workspace_id, branch_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+
+        if descendants > 0 {
+            return Err(StoreError::InvalidInput(
+                "branch has descendants and cannot be deleted",
+            ));
+        }
+
+        tx.execute(
+            "DELETE FROM merge_records WHERE workspace=?1 AND (source_branch=?2 OR target_branch=?2)",
+            params![workspace_id, branch_id],
+        )?;
+
+        delete_branch_commits_tx(&tx, &workspace_id, &branch_id)?;
+
+        tx.execute(
+            "DELETE FROM branches WHERE workspace=?1 AND name=?2",
+            params![workspace_id, branch_id],
+        )?;
+
+        tx.commit()?;
         Ok(())
     }
 
-    pub fn workspace_exists(&self, workspace: &WorkspaceId) -> Result<bool, StoreError> {
+    pub fn append_commit(
+        &mut self,
+        request: AppendCommitRequest,
+    ) -> Result<ThoughtCommit, StoreError> {
+        let workspace_id = canonicalize_workspace(&request.workspace_id)?;
+        let branch_id = canonicalize_branch(&request.branch_id)?;
+        let commit_id = canonicalize_commit(&request.commit_id)?;
+        let explicit_parent = request
+            .parent_commit_id
+            .as_deref()
+            .map(canonicalize_commit)
+            .transpose()?;
+
+        let tx = self.conn.transaction()?;
+        let branch_state = branch_state_tx(&tx, &workspace_id, &branch_id)?;
+
+        let parent_commit_id = explicit_parent.or(branch_state.head_commit_id);
+        if let Some(parent_commit_id) = parent_commit_id.as_deref() {
+            ensure_commit_exists_tx(&tx, &workspace_id, parent_commit_id)?;
+            ensure_commit_belongs_to_branch_tx(&tx, &workspace_id, parent_commit_id, &branch_id)?;
+        }
+
+        let commit = ThoughtCommit::try_new(
+            workspace_id,
+            branch_id,
+            commit_id,
+            parent_commit_id,
+            request.message,
+            request.body,
+            request.created_at_ms,
+        )
+        .map_err(|_| StoreError::InvalidInput("invalid commit payload"))?;
+
+        let insert = tx.execute(
+            "INSERT INTO commits(workspace, branch, commit_id, parent_commit_id, message, body, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                commit.workspace_id(),
+                commit.branch_id(),
+                commit.commit_id(),
+                commit.parent_commit_id(),
+                commit.message(),
+                commit.body(),
+                commit.created_at_ms(),
+            ],
+        );
+
+        if let Err(err) = insert {
+            return Err(map_insert_conflict(err));
+        }
+
+        let updated_at_ms = branch_state.updated_at_ms.max(commit.created_at_ms());
+        tx.execute(
+            "UPDATE branches SET head_commit_id=?3, updated_at_ms=?4 WHERE workspace=?1 AND name=?2",
+            params![
+                commit.workspace_id(),
+                commit.branch_id(),
+                commit.commit_id(),
+                updated_at_ms,
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(commit)
+    }
+
+    pub fn show_commit(
+        &self,
+        request: ShowCommitRequest,
+    ) -> Result<Option<ThoughtCommit>, StoreError> {
+        let workspace_id = canonicalize_workspace(&request.workspace_id)?;
+        let commit_id = canonicalize_commit(&request.commit_id)?;
+
+        let row = self
+            .conn
+            .query_row(
+                "SELECT workspace, branch, commit_id, parent_commit_id, message, body, created_at_ms \
+                 FROM commits WHERE workspace=?1 AND commit_id=?2",
+                params![workspace_id, commit_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        match row {
+            Some((
+                workspace,
+                branch,
+                commit_id,
+                parent_commit_id,
+                message,
+                body,
+                created_at_ms,
+            )) => Ok(Some(
+                ThoughtCommit::try_new(
+                    workspace,
+                    branch,
+                    commit_id,
+                    parent_commit_id,
+                    message,
+                    body,
+                    created_at_ms,
+                )
+                .map_err(|_| StoreError::InvalidInput("invalid commit row"))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub fn create_merge_record(
+        &mut self,
+        request: CreateMergeRecordRequest,
+    ) -> Result<MergeRecord, StoreError> {
+        let workspace_id = canonicalize_workspace(&request.workspace_id)?;
+        let source_branch_id = canonicalize_branch(&request.source_branch_id)?;
+        let target_branch_id = canonicalize_branch(&request.target_branch_id)?;
+        let merge_id = canonicalize_merge(&request.merge_id)?;
+        let synthesis_commit_id = canonicalize_commit(&request.synthesis_commit_id)?;
+
+        let tx = self.conn.transaction()?;
+        ensure_branch_exists_tx(&tx, &workspace_id, &source_branch_id)?;
+        let target_state = branch_state_tx(&tx, &workspace_id, &target_branch_id)?;
+
+        let synthesis_commit = ThoughtCommit::try_new(
+            workspace_id.clone(),
+            target_branch_id.clone(),
+            synthesis_commit_id,
+            target_state.head_commit_id,
+            request.synthesis_message,
+            request.synthesis_body,
+            request.created_at_ms,
+        )
+        .map_err(|_| StoreError::InvalidInput("invalid synthesis commit payload"))?;
+
+        if let Some(parent_commit_id) = synthesis_commit.parent_commit_id() {
+            ensure_commit_exists_tx(&tx, &workspace_id, parent_commit_id)?;
+            ensure_commit_belongs_to_branch_tx(
+                &tx,
+                &workspace_id,
+                parent_commit_id,
+                &target_branch_id,
+            )?;
+        }
+
+        let merge_record = MergeRecord::try_new(
+            workspace_id,
+            merge_id,
+            source_branch_id,
+            target_branch_id,
+            synthesis_commit.commit_id(),
+            request.strategy,
+            request.summary,
+            request.created_at_ms,
+        )
+        .map_err(|_| StoreError::InvalidInput("invalid merge payload"))?;
+
+        let insert_commit = tx.execute(
+            "INSERT INTO commits(workspace, branch, commit_id, parent_commit_id, message, body, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                synthesis_commit.workspace_id(),
+                synthesis_commit.branch_id(),
+                synthesis_commit.commit_id(),
+                synthesis_commit.parent_commit_id(),
+                synthesis_commit.message(),
+                synthesis_commit.body(),
+                synthesis_commit.created_at_ms(),
+            ],
+        );
+
+        if let Err(err) = insert_commit {
+            return Err(map_insert_conflict(err));
+        }
+
+        let insert_merge = tx.execute(
+            "INSERT INTO merge_records(workspace, merge_id, source_branch, target_branch, synthesis_commit_id, strategy, summary, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                merge_record.workspace_id(),
+                merge_record.merge_id(),
+                merge_record.source_branch_id(),
+                merge_record.target_branch_id(),
+                merge_record.synthesis_commit_id(),
+                merge_record.strategy(),
+                merge_record.summary(),
+                merge_record.created_at_ms(),
+            ],
+        );
+
+        if let Err(err) = insert_merge {
+            return Err(map_insert_conflict(err));
+        }
+
+        let updated_at_ms = target_state
+            .updated_at_ms
+            .max(synthesis_commit.created_at_ms());
+        tx.execute(
+            "UPDATE branches SET head_commit_id=?3, updated_at_ms=?4 WHERE workspace=?1 AND name=?2",
+            params![
+                synthesis_commit.workspace_id(),
+                synthesis_commit.branch_id(),
+                synthesis_commit.commit_id(),
+                updated_at_ms,
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(merge_record)
+    }
+
+    pub fn list_merge_records(
+        &self,
+        request: ListMergeRecordsRequest,
+    ) -> Result<Vec<MergeRecord>, StoreError> {
+        let workspace_id = canonicalize_workspace(&request.workspace_id)?;
+        let limit = to_sqlite_i64(request.limit)?;
+        let offset = to_sqlite_i64(request.offset)?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace, merge_id, source_branch, target_branch, synthesis_commit_id, strategy, summary, created_at_ms \
+             FROM merge_records \
+             WHERE workspace=?1 \
+             ORDER BY created_at_ms ASC, merge_id ASC \
+             LIMIT ?2 OFFSET ?3",
+        )?;
+
+        let mut rows = stmt.query(params![workspace_id, limit, offset])?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            out.push(
+                MergeRecord::try_new(
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                )
+                .map_err(|_| StoreError::InvalidInput("invalid merge row"))?,
+            );
+        }
+
+        Ok(out)
+    }
+
+    pub fn branch_exists(&self, workspace: &WorkspaceId, branch: &str) -> Result<bool, StoreError> {
+        let workspace_id = canonicalize_workspace(workspace.as_str())?;
+        let branch_id = canonicalize_branch(branch)?;
         Ok(self
             .conn
             .query_row(
-                "SELECT 1 FROM workspaces WHERE workspace=?1",
-                params![workspace.as_str()],
-                |_| Ok(()),
+                "SELECT 1 FROM branches WHERE workspace=?1 AND name=?2",
+                params![workspace_id, branch_id],
+                |row| row.get::<_, i64>(0),
             )
             .optional()?
             .is_some())
     }
 
-    pub fn list_workspaces(
-        &self,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<WorkspaceRow>, StoreError> {
-        let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
-        let offset_i64 = i64::try_from(offset).unwrap_or(0);
-        let mut stmt = self.conn.prepare(
-            "SELECT workspace, created_at_ms, project_guard \
-             FROM workspaces \
-             ORDER BY created_at_ms DESC, workspace ASC \
-             LIMIT ?1 OFFSET ?2",
-        )?;
-        let mut rows = stmt.query(params![limit_i64, offset_i64])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(WorkspaceRow {
-                workspace: row.get(0)?,
-                created_at_ms: row.get(1)?,
-                project_guard: row.get(2)?,
-            });
-        }
-        Ok(out)
-    }
-
-    /// Resolve a workspace id bound to a canonical filesystem path.
-    ///
-    /// Notes:
-    /// - Intended for DX: callers may pass a repo path instead of a workspace id.
-    /// - `path` should be canonical absolute path (caller can normalize; we treat it verbatim).
-    pub fn workspace_path_resolve(
-        &mut self,
-        path: &str,
-    ) -> Result<Option<WorkspaceId>, StoreError> {
-        let path = path.trim();
-        if path.is_empty() {
-            return Ok(None);
-        }
-
-        let now_ms = now_ms();
-        let stored = match self.conn.query_row(
-            "SELECT workspace FROM workspace_paths WHERE path=?1",
-            params![path],
-            |row| row.get::<_, String>(0),
-        ) {
-            Ok(v) => Some(v),
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(err) if is_missing_table(&err, "workspace_paths") => None,
-            Err(err) => return Err(err.into()),
-        };
-
-        let Some(stored) = stored else {
-            return Ok(None);
-        };
-
-        // Best-effort refresh last_used_at_ms (ignore missing-table drift for read-only consumers).
-        let _ = self.conn.execute(
-            "UPDATE workspace_paths SET last_used_at_ms=?1 WHERE path=?2",
-            params![now_ms, path],
-        );
-
-        match WorkspaceId::try_new(stored) {
-            Ok(v) => Ok(Some(v)),
-            Err(_) => Ok(None),
-        }
-    }
-
-    /// Bind a canonical filesystem path to a workspace id (idempotent).
-    pub fn workspace_path_bind(
-        &mut self,
-        workspace: &WorkspaceId,
-        path: &str,
-    ) -> Result<(), StoreError> {
-        let path = path.trim();
-        if path.is_empty() {
-            return Err(StoreError::InvalidInput("workspace path must not be empty"));
-        }
-        let now_ms = now_ms();
-
-        let existing = match self.conn.query_row(
-            "SELECT workspace FROM workspace_paths WHERE path=?1",
-            params![path],
-            |row| row.get::<_, String>(0),
-        ) {
-            Ok(v) => Some(v),
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(err) if is_missing_table(&err, "workspace_paths") => None,
-            Err(err) => return Err(err.into()),
-        };
-
-        if let Some(existing) = existing {
-            if existing == workspace.as_str() {
-                let _ = self.conn.execute(
-                    "UPDATE workspace_paths SET last_used_at_ms=?1 WHERE path=?2",
-                    params![now_ms, path],
-                );
-                return Ok(());
-            }
-            // Safe-by-default: do not silently rebind an existing path.
-            return Err(StoreError::InvalidInput(
-                "workspace path is already bound to a different workspace",
-            ));
-        }
-
-        self.conn.execute(
-            "INSERT INTO workspace_paths(path, workspace, created_at_ms, last_used_at_ms) VALUES (?1, ?2, ?3, ?3)",
-            params![path, workspace.as_str(), now_ms],
-        )?;
-        Ok(())
-    }
-
-    /// Return the most-recently used bound path for a workspace (if any).
-    pub fn workspace_path_primary_get(
+    pub fn branch_checkout_get(
         &self,
         workspace: &WorkspaceId,
     ) -> Result<Option<String>, StoreError> {
-        match self.conn.query_row(
-            "SELECT path FROM workspace_paths WHERE workspace=?1 ORDER BY last_used_at_ms DESC, created_at_ms DESC LIMIT 1",
-            params![workspace.as_str()],
-            |row| row.get::<_, String>(0),
-        ) {
-            Ok(v) => Ok(Some(v)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(err) if is_missing_table(&err, "workspace_paths") => Ok(None),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    /// Return a summary of path bindings for the workspace.
-    ///
-    /// Shape: (primary_path, last_used_at_ms, count).
-    pub fn workspace_path_summary_get(
-        &self,
-        workspace: &WorkspaceId,
-    ) -> Result<Option<(String, i64, i64)>, StoreError> {
-        match self.conn.query_row(
-            "SELECT path, last_used_at_ms, (SELECT COUNT(*) FROM workspace_paths WHERE workspace=?1) AS cnt \
-             FROM workspace_paths \
-             WHERE workspace=?1 \
-             ORDER BY last_used_at_ms DESC, created_at_ms DESC \
-             LIMIT 1",
-            params![workspace.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ) {
-            Ok(v) => Ok(Some(v)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(err) if is_missing_table(&err, "workspace_paths") => Ok(None),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn workspace_project_guard_get(
-        &self,
-        workspace: &WorkspaceId,
-    ) -> Result<Option<String>, StoreError> {
-        match self.conn.query_row(
-            "SELECT project_guard FROM workspaces WHERE workspace=?1",
-            params![workspace.as_str()],
-            |row| row.get::<_, Option<String>>(0),
-        ) {
-            Ok(v) => Ok(Some(v).flatten()),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn workspace_project_guard_ensure(
-        &mut self,
-        workspace: &WorkspaceId,
-        expected_guard: &str,
-    ) -> Result<(), StoreError> {
-        let expected_guard = expected_guard.trim();
-        if expected_guard.is_empty() {
-            return Err(StoreError::InvalidInput("project_guard must not be empty"));
-        }
-
-        let now_ms = now_ms();
-        let tx = self.conn.transaction()?;
-        ensure_workspace_tx(&tx, workspace, now_ms)?;
-
-        let stored_guard = tx
-            .query_row(
-                "SELECT project_guard FROM workspaces WHERE workspace=?1",
-                params![workspace.as_str()],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-
-        match stored_guard {
-            Some(stored) if stored == expected_guard => {
-                tx.commit()?;
-                Ok(())
-            }
-            Some(stored) => Err(StoreError::ProjectGuardMismatch {
-                expected: expected_guard.to_string(),
-                stored,
-            }),
-            None => {
-                tx.execute(
-                    "UPDATE workspaces SET project_guard=?2 WHERE workspace=?1",
-                    params![workspace.as_str(), expected_guard],
-                )?;
-                tx.commit()?;
-                Ok(())
-            }
-        }
-    }
-
-    pub fn workspace_project_guard_rebind(
-        &mut self,
-        workspace: &WorkspaceId,
-        expected_guard: &str,
-    ) -> Result<(), StoreError> {
-        let expected_guard = expected_guard.trim();
-        if expected_guard.is_empty() {
-            return Err(StoreError::InvalidInput("project_guard must not be empty"));
-        }
-
-        let now_ms = now_ms();
-        let tx = self.conn.transaction()?;
-        ensure_workspace_tx(&tx, workspace, now_ms)?;
-        tx.execute(
-            "UPDATE workspaces SET project_guard=?2 WHERE workspace=?1",
-            params![workspace.as_str(), expected_guard],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn workspace_last_event_head(
-        &self,
-        workspace: &WorkspaceId,
-    ) -> Result<Option<(i64, i64)>, StoreError> {
+        let workspace_id = canonicalize_workspace(workspace.as_str())?;
         Ok(self
             .conn
             .query_row(
-                "SELECT seq, ts_ms FROM events WHERE workspace=?1 ORDER BY seq DESC LIMIT 1",
-                params![workspace.as_str()],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                "SELECT branch FROM branch_checkout WHERE workspace=?1",
+                params![workspace_id],
+                |row| row.get::<_, String>(0),
             )
             .optional()?)
     }
 
-    pub fn workspace_last_doc_entry_head(
-        &self,
+    pub fn branch_checkout_set(
+        &mut self,
         workspace: &WorkspaceId,
-    ) -> Result<Option<WorkspaceDocEntryHead>, StoreError> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT seq, ts_ms, branch, doc, kind FROM doc_entries WHERE workspace=?1 ORDER BY seq DESC LIMIT 1",
-                params![workspace.as_str()],
-                |row| {
-                    Ok(WorkspaceDocEntryHead {
-                        seq: row.get::<_, i64>(0)?,
-                        ts_ms: row.get::<_, i64>(1)?,
-                        branch: row.get::<_, String>(2)?,
-                        doc: row.get::<_, String>(3)?,
-                        kind: row.get::<_, String>(4)?,
-                    })
-                },
-            )
-            .optional()?)
-    }
-
-    /// Returns a stable default agent id for this store when the MCP server is launched with
-    /// `--agent-id auto` (or `BRANCHMIND_AGENT_ID=auto`).
-    ///
-    /// The id is persisted in the store-level `meta` table, so it survives process restarts.
-    ///
-    /// Note: This is a storage-level fallback (per store). Multi-agent isolation still requires
-    /// explicit per-agent ids when multiple concurrent agents share the same store.
-    pub fn default_agent_id_auto_get_or_create(&mut self) -> Result<String, StoreError> {
-        const KEY: &str = "default_agent_id";
+        branch: &str,
+    ) -> Result<(Option<String>, String), StoreError> {
+        let workspace_id = canonicalize_workspace(workspace.as_str())?;
+        let branch_id = canonicalize_branch(branch)?;
+        let now_ms = now_ms();
 
         let tx = self.conn.transaction()?;
-
-        let existing: Option<String> = tx
-            .query_row("SELECT value FROM meta WHERE key=?1", params![KEY], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()?;
-        if let Some(value) = existing {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                return Err(StoreError::InvalidInput(
-                    "meta.default_agent_id must not be empty",
-                ));
-            }
-            tx.commit()?;
-            return Ok(trimmed.to_string());
+        ensure_workspace_tx(&tx, &workspace_id, now_ms)?;
+        if !branch_exists_tx(&tx, &workspace_id, &branch_id)? {
+            return Err(StoreError::UnknownBranch);
         }
 
-        let now_ms = now_ms().max(0) as u64;
-        let pid = std::process::id() as u64;
-        let candidate = format!("a{}_{}", base36(now_ms), base36(pid));
+        let previous = tx
+            .query_row(
+                "SELECT branch FROM branch_checkout WHERE workspace=?1",
+                params![workspace_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
 
-        // Race-safe: if another process inserted concurrently, we read back what won.
         tx.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES (?1, ?2)",
-            params![KEY, candidate],
+            r#"
+            INSERT INTO branch_checkout(workspace, branch, updated_at_ms)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(workspace) DO UPDATE SET branch=excluded.branch, updated_at_ms=excluded.updated_at_ms
+            "#,
+            params![workspace_id, branch_id, now_ms],
         )?;
 
-        let stored: Option<String> = tx
-            .query_row("SELECT value FROM meta WHERE key=?1", params![KEY], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()?;
-        let stored = stored.unwrap_or_else(|| "self".to_string());
         tx.commit()?;
-        Ok(stored)
+        Ok((previous, branch_id))
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum V3Preflight {
-    Empty,
-    Compatible,
+#[derive(Debug)]
+struct BranchState {
+    head_commit_id: Option<String>,
+    updated_at_ms: i64,
 }
 
-fn v3_preflight_gate(conn: &Connection) -> Result<V3Preflight, StoreError> {
+fn preflight_gate(conn: &Connection) -> Result<(), StoreError> {
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     )?;
     let mut rows = stmt.query([])?;
-    let mut tables = Vec::new();
+    let mut tables = BTreeSet::new();
     while let Some(row) = rows.next()? {
-        tables.push(row.get::<_, String>(0)?);
+        tables.insert(row.get::<_, String>(0)?);
     }
 
     if tables.is_empty() {
-        return Ok(V3Preflight::Empty);
+        return Ok(());
     }
 
-    if !tables.iter().any(|name| name == "workspace_state") {
+    let required: BTreeSet<&str> = [
+        "workspace_state",
+        "workspaces",
+        "branches",
+        "branch_checkout",
+        "commits",
+        "merge_records",
+    ]
+    .into_iter()
+    .collect();
+
+    if tables
+        .iter()
+        .any(|table| !required.contains(table.as_str()))
+    {
         return Err(StoreError::InvalidInput(
-            "RESET_REQUIRED: workspace_state table is missing",
+            "RESET_REQUIRED: unsupported legacy tables detected",
         ));
+    }
+
+    for table in required {
+        if !tables.contains(table) {
+            return Err(StoreError::InvalidInput(
+                "RESET_REQUIRED: required table is missing",
+            ));
+        }
     }
 
     let version = conn
@@ -479,7 +561,7 @@ fn v3_preflight_gate(conn: &Connection) -> Result<V3Preflight, StoreError> {
         .optional()?;
 
     match version {
-        Some(v) if v == V3_SCHEMA_VERSION => Ok(V3Preflight::Compatible),
+        Some(v) if v == V3_SCHEMA_VERSION => Ok(()),
         Some(_) => Err(StoreError::InvalidInput(
             "RESET_REQUIRED: schema version mismatch",
         )),
@@ -489,16 +571,48 @@ fn v3_preflight_gate(conn: &Connection) -> Result<V3Preflight, StoreError> {
     }
 }
 
-fn install_v3_schema_extensions(conn: &Connection) -> Result<(), StoreError> {
+fn install_schema(conn: &Connection) -> Result<(), StoreError> {
     let now_ms = now_ms();
 
     conn.execute_batch(
-        "
+        r#"
         CREATE TABLE IF NOT EXISTS workspace_state (
           singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
           schema_version INTEGER NOT NULL,
           created_at_ms INTEGER NOT NULL,
           updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workspaces (
+          workspace TEXT PRIMARY KEY,
+          created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS branches (
+          workspace TEXT NOT NULL,
+          name TEXT NOT NULL,
+          parent_branch_id TEXT,
+          head_commit_id TEXT,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          PRIMARY KEY(workspace, name),
+          FOREIGN KEY(workspace) REFERENCES workspaces(workspace) ON DELETE CASCADE,
+          FOREIGN KEY(workspace, parent_branch_id)
+            REFERENCES branches(workspace, name)
+            ON DELETE RESTRICT,
+          CHECK(parent_branch_id IS NULL OR parent_branch_id <> name)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_branches_workspace_created
+          ON branches(workspace, created_at_ms, name);
+
+        CREATE TABLE IF NOT EXISTS branch_checkout (
+          workspace TEXT PRIMARY KEY,
+          branch TEXT NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          FOREIGN KEY(workspace, branch)
+            REFERENCES branches(workspace, name)
+            ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS commits (
@@ -546,143 +660,235 @@ fn install_v3_schema_extensions(conn: &Connection) -> Result<(), StoreError> {
 
         CREATE INDEX IF NOT EXISTS idx_merge_records_workspace_created
           ON merge_records(workspace, created_at_ms, merge_id);
-        ",
+        "#,
     )?;
 
-    if !table_has_column(conn, "branches", "head_commit_id")? {
-        conn.execute("ALTER TABLE branches ADD COLUMN head_commit_id TEXT", [])?;
-    }
-    if !table_has_column(conn, "branches", "updated_at_ms")? {
-        conn.execute(
-            "ALTER TABLE branches ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
-    }
-
-    conn.execute(
-        "UPDATE branches SET updated_at_ms = COALESCE(updated_at_ms, created_at_ms)",
-        [],
-    )?;
     conn.execute(
         "INSERT INTO workspace_state(singleton, schema_version, created_at_ms, updated_at_ms) \
          VALUES (1, ?1, ?2, ?2) \
-         ON CONFLICT(singleton) DO UPDATE SET \
-           schema_version=excluded.schema_version, \
-           updated_at_ms=excluded.updated_at_ms",
+         ON CONFLICT(singleton) DO UPDATE SET schema_version=excluded.schema_version, updated_at_ms=excluded.updated_at_ms",
         params![V3_SCHEMA_VERSION, now_ms],
     )?;
 
     Ok(())
 }
 
-fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
-    let query = format!("PRAGMA table_info({table})");
-    let mut stmt = conn.prepare(&query)?;
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        if row.get::<_, String>(1)? == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn base36(mut value: u64) -> String {
-    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    if value == 0 {
-        return "0".to_string();
-    }
-
-    let mut out = Vec::<u8>::new();
-    while value > 0 {
-        let idx = (value % 36) as usize;
-        out.push(DIGITS[idx]);
-        value /= 36;
-    }
-    out.reverse();
-    String::from_utf8(out).unwrap_or_else(|_| "0".to_string())
-}
-
-#[derive(Clone, Debug)]
-struct BranchSource {
-    branch: String,
-    cutoff_seq: Option<i64>,
-}
-
 fn ensure_workspace_tx(
     tx: &Transaction<'_>,
-    workspace: &WorkspaceId,
+    workspace_id: &str,
     now_ms: i64,
 ) -> Result<(), StoreError> {
     tx.execute(
         "INSERT OR IGNORE INTO workspaces(workspace, created_at_ms) VALUES (?1, ?2)",
-        params![workspace.as_str(), now_ms],
+        params![workspace_id, now_ms],
     )?;
     Ok(())
 }
 
-fn branch_checkout_get_tx(
+fn branch_exists_tx(
     tx: &Transaction<'_>,
-    workspace: &str,
-) -> Result<Option<String>, StoreError> {
+    workspace_id: &str,
+    branch_id: &str,
+) -> Result<bool, StoreError> {
     Ok(tx
         .query_row(
-            "SELECT branch FROM branch_checkout WHERE workspace=?1",
-            params![workspace],
-            |row| row.get::<_, String>(0),
+            "SELECT 1 FROM branches WHERE workspace=?1 AND name=?2",
+            params![workspace_id, branch_id],
+            |row| row.get::<_, i64>(0),
         )
-        .optional()?)
+        .optional()?
+        .is_some())
 }
 
-fn branch_checkout_set_tx(
+fn ensure_branch_exists_tx(
     tx: &Transaction<'_>,
-    workspace: &str,
-    branch: &str,
-    now_ms: i64,
+    workspace_id: &str,
+    branch_id: &str,
 ) -> Result<(), StoreError> {
-    tx.execute(
-        r#"
-        INSERT INTO branch_checkout(workspace, branch, updated_at_ms)
-        VALUES (?1, ?2, ?3)
-        ON CONFLICT(workspace) DO UPDATE SET branch=excluded.branch, updated_at_ms=excluded.updated_at_ms
-        "#,
-        params![workspace, branch, now_ms],
-    )?;
+    if branch_exists_tx(tx, workspace_id, branch_id)? {
+        Ok(())
+    } else {
+        Err(StoreError::UnknownId)
+    }
+}
+
+fn branch_state_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    branch_id: &str,
+) -> Result<BranchState, StoreError> {
+    let value = tx
+        .query_row(
+            "SELECT head_commit_id, updated_at_ms FROM branches WHERE workspace=?1 AND name=?2",
+            params![workspace_id, branch_id],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+
+    match value {
+        Some((head_commit_id, updated_at_ms)) => Ok(BranchState {
+            head_commit_id,
+            updated_at_ms,
+        }),
+        None => Err(StoreError::UnknownId),
+    }
+}
+
+fn branch_depth_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    branch_id: &str,
+) -> Result<usize, StoreError> {
+    let mut current = Some(branch_id.to_string());
+    let mut depth = 0usize;
+    let mut seen = BTreeSet::new();
+
+    while let Some(branch) = current {
+        if !seen.insert(branch.clone()) {
+            return Err(StoreError::BranchCycle);
+        }
+
+        let parent = tx
+            .query_row(
+                "SELECT parent_branch_id FROM branches WHERE workspace=?1 AND name=?2",
+                params![workspace_id, branch],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+
+        current = parent;
+        if current.is_some() {
+            depth = depth.saturating_add(1);
+            if depth > MAX_BRANCH_DEPTH {
+                return Err(StoreError::BranchDepthExceeded);
+            }
+        }
+    }
+
+    Ok(depth)
+}
+
+fn ensure_commit_exists_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    commit_id: &str,
+) -> Result<(), StoreError> {
+    let exists = tx
+        .query_row(
+            "SELECT 1 FROM commits WHERE workspace=?1 AND commit_id=?2",
+            params![workspace_id, commit_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+
+    if exists {
+        Ok(())
+    } else {
+        Err(StoreError::UnknownId)
+    }
+}
+
+fn ensure_commit_belongs_to_branch_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    commit_id: &str,
+    branch_id: &str,
+) -> Result<(), StoreError> {
+    let belongs = tx
+        .query_row(
+            "SELECT 1 FROM commits WHERE workspace=?1 AND commit_id=?2 AND branch=?3",
+            params![workspace_id, commit_id, branch_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+
+    if belongs {
+        Ok(())
+    } else {
+        Err(StoreError::InvalidInput(
+            "parent commit must belong to the same branch",
+        ))
+    }
+}
+
+fn delete_branch_commits_tx(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    branch_id: &str,
+) -> Result<(), StoreError> {
+    loop {
+        let deleted = tx.execute(
+            "DELETE FROM commits \
+             WHERE workspace=?1 AND branch=?2 \
+               AND commit_id NOT IN ( \
+                   SELECT parent_commit_id \
+                   FROM commits \
+                   WHERE workspace=?1 AND branch=?2 AND parent_commit_id IS NOT NULL \
+               )",
+            params![workspace_id, branch_id],
+        )?;
+
+        if deleted == 0 {
+            break;
+        }
+    }
     Ok(())
 }
 
-fn bootstrap_default_branch_tx(
-    tx: &Transaction<'_>,
-    workspace: &str,
-    now_ms: i64,
-) -> Result<bool, StoreError> {
-    if branch_exists_tx(tx, workspace, DEFAULT_BRANCH)? {
-        return Ok(false);
+fn map_insert_conflict(err: rusqlite::Error) -> StoreError {
+    if is_constraint_violation(&err) {
+        return StoreError::BranchAlreadyExists;
     }
-    let base_seq = doc_entries_head_seq_tx(tx, workspace)?.unwrap_or(0);
-    tx.execute(
-        r#"
-        INSERT OR IGNORE INTO branches(workspace, name, base_branch, base_seq, created_at_ms, head_commit_id, updated_at_ms)
-        VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)
-        "#,
-        params![workspace, DEFAULT_BRANCH, DEFAULT_BRANCH, base_seq, now_ms, now_ms],
-    )?;
-    branch_checkout_set_tx(tx, workspace, DEFAULT_BRANCH, now_ms)?;
-    Ok(true)
+    StoreError::Sql(err)
 }
 
-fn ensure_checkout_branch_tx(
-    tx: &Transaction<'_>,
-    workspace: &str,
-    branch: &str,
-    now_ms: i64,
-) -> Result<bool, StoreError> {
-    if branch_checkout_get_tx(tx, workspace)?.is_some() {
-        return Ok(false);
+fn is_constraint_violation(err: &rusqlite::Error) -> bool {
+    match err {
+        rusqlite::Error::SqliteFailure(code, message) => {
+            code.code == ErrorCode::ConstraintViolation
+                || message.as_deref().is_some_and(|value| {
+                    value.contains("UNIQUE constraint failed")
+                        || value.contains("PRIMARY KEY constraint failed")
+                })
+        }
+        _ => false,
     }
-    if !branch_exists_tx(tx, workspace, branch)? {
-        return Ok(false);
-    }
-    branch_checkout_set_tx(tx, workspace, branch, now_ms)?;
-    Ok(true)
+}
+
+fn to_sqlite_i64(value: usize) -> Result<i64, StoreError> {
+    i64::try_from(value).map_err(|_| StoreError::InvalidInput("numeric overflow"))
+}
+
+fn canonicalize_workspace(value: &str) -> Result<String, StoreError> {
+    canonical_identifier("workspace_id", value.to_string())
+        .map_err(|_| StoreError::InvalidInput("invalid workspace_id"))
+}
+
+fn canonicalize_branch(value: &str) -> Result<String, StoreError> {
+    canonical_identifier("branch_id", value.to_string())
+        .map_err(|_| StoreError::InvalidInput("invalid branch_id"))
+}
+
+fn canonicalize_commit(value: &str) -> Result<String, StoreError> {
+    canonical_identifier("commit_id", value.to_string())
+        .map_err(|_| StoreError::InvalidInput("invalid commit_id"))
+}
+
+fn canonicalize_merge(value: &str) -> Result<String, StoreError> {
+    canonical_identifier("merge_id", value.to_string())
+        .map_err(|_| StoreError::InvalidInput("invalid merge_id"))
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration,
+        Err(_) => return 0,
+    };
+
+    i64::try_from(now.as_millis()).unwrap_or(i64::MAX)
 }
