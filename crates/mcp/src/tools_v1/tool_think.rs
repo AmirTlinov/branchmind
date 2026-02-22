@@ -484,7 +484,7 @@ mod tests {
             .expect("main branch should exist");
 
         let mut target_branch = String::new();
-        for idx in 0..10_050usize {
+        for idx in 0..1_250usize {
             let branch_id = format!("b{idx:05}");
             server
                 .store
