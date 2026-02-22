@@ -4,9 +4,6 @@ use crate::WorkspaceId;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-const DEFAULT_MAX_CHARS: usize = 8_192;
-const HARD_MAX_CHARS: usize = 65_536;
-
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedToolInput {
     pub(crate) workspace: String,
@@ -84,17 +81,13 @@ pub(crate) fn parse_tool_markdown(
         )
     })?;
 
-    let allowed_keys = BTreeSet::from([
-        "workspace".to_string(),
-        "markdown".to_string(),
-        "max_chars".to_string(),
-    ]);
+    let allowed_keys = BTreeSet::from(["workspace".to_string(), "markdown".to_string()]);
     for key in args_obj.keys() {
         if !allowed_keys.contains(key) {
             return Err(parser_error(
                 "UNKNOWN_ARG",
                 &format!("Unknown argument: {key}"),
-                "Use only workspace, markdown, and max_chars.",
+                "Use only workspace and markdown.",
             ));
         }
     }
@@ -119,35 +112,6 @@ pub(crate) fn parse_tool_markdown(
         )
     })?;
 
-    let _max_chars = match args_obj.get("max_chars") {
-        None | Some(Value::Null) => DEFAULT_MAX_CHARS,
-        Some(Value::Number(v)) => {
-            let Some(raw) = v.as_u64() else {
-                return Err(parser_error(
-                    "INVALID_INPUT",
-                    "max_chars must be a positive integer",
-                    "Set max_chars between 1 and 65536.",
-                ));
-            };
-            let raw = usize::try_from(raw).unwrap_or(HARD_MAX_CHARS.saturating_add(1));
-            if raw == 0 || raw > HARD_MAX_CHARS {
-                return Err(parser_error(
-                    "INVALID_INPUT",
-                    "max_chars must be within [1, 65536]",
-                    "Set max_chars between 1 and 65536.",
-                ));
-            }
-            raw
-        }
-        Some(_) => {
-            return Err(parser_error(
-                "INVALID_INPUT",
-                "max_chars must be a positive integer",
-                "Set max_chars between 1 and 65536.",
-            ));
-        }
-    };
-
     let markdown = args_obj
         .get("markdown")
         .and_then(|v| v.as_str())
@@ -160,8 +124,7 @@ pub(crate) fn parse_tool_markdown(
         })?;
     // Important invariant:
     // - Thought content is never truncated/rejected by transport budget knobs.
-    // - max_chars is parsed for schema stability and may be used by response shaping,
-    //   but it must not limit the user-provided markdown thought payload itself.
+    // - Thought payload is fully parsed independently from response shaping.
 
     let command = parse_command_block(markdown, tool, allowed_verbs)?;
     Ok(ParsedToolInput {

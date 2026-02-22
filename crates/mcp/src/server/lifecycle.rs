@@ -126,7 +126,7 @@ impl McpServer {
 
         if method == "tools/list" {
             // v3: strict surface = 3 markdown tools.
-            let tools = crate::tools_v1::tool_definitions();
+            let tools = crate::tools::tool_definitions();
             return Some(crate::json_rpc_response(
                 request.id,
                 json!({ "tools": tools }),
@@ -184,26 +184,22 @@ impl McpServer {
     }
 
     pub(crate) fn call_tool(&mut self, name: &str, args: Value) -> Value {
-        let raw_name = name.to_string();
-        let name_norm = normalize_tool_name(&raw_name);
-        let name_ref = name_norm;
-
         // v3: only the 3 advertised markdown tools are callable. Legacy names are rejected
         // fail-closed.
-        if !crate::tools_v1::is_v1_tool(name_ref) {
+        if !crate::tools::is_supported_tool(name) {
             return crate::ai_error_with(
                 "UNKNOWN_TOOL",
-                &format!("Unknown tool: {name_ref}"),
+                &format!("Unknown tool: {name}"),
                 Some("Use tools/list to discover supported tools: branch, think, merge."),
                 Vec::new(),
             );
         }
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::tools_v1::dispatch_tool(self, name_ref, args.clone()).unwrap_or_else(|| {
+            crate::tools::dispatch_tool(self, name, args.clone()).unwrap_or_else(|| {
                 crate::ai_error_with(
                     "UNKNOWN_TOOL",
-                    &format!("Unknown tool: {name_ref}"),
+                    &format!("Unknown tool: {name}"),
                     Some("Use tools/list to discover supported tools: branch, think, merge."),
                     Vec::new(),
                 )
@@ -214,35 +210,10 @@ impl McpServer {
             Ok(resp) => resp,
             Err(_) => crate::ai_error_with(
                 "STORE_ERROR",
-                &format!("Internal panic while handling {name_ref}"),
+                &format!("Internal panic while handling {name}"),
                 Some("Retry. If it persists, inspect local logs in the store dir."),
                 Vec::new(),
             ),
         }
     }
-}
-
-fn normalize_tool_name(name: &str) -> &str {
-    // MCP client interoperability:
-    // Some clients incorrectly include the server namespace in the tool name, e.g.:
-    // - "branchmind/status" instead of "status"
-    // - "branchmind.status" instead of "status"
-    //
-    // The MCP server namespace is already provided by the transport (server selection),
-    // so we accept these variants to avoid spurious "unknown tool" failures.
-    let name = name.trim();
-    if let Some((_, suffix)) = name.rsplit_once('/') {
-        return suffix;
-    }
-    if let Some((prefix, suffix)) = name.split_once('.')
-        && prefix == "branchmind"
-    {
-        return suffix;
-    }
-    if let Some((prefix, suffix)) = name.split_once('.')
-        && prefix == "bm"
-    {
-        return suffix;
-    }
-    name
 }

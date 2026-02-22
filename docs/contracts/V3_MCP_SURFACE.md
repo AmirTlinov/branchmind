@@ -16,12 +16,8 @@ Input is a JSON object:
 
 - `workspace` (string, required)
 - `markdown` (string, required)
-- `max_chars` (integer, optional, `1..=65536`, default `8192`)
 
 Unknown top-level keys are rejected with `UNKNOWN_ARG`.
-
-`max_chars` does **not** limit thought payload ingestion/storage.  
-Thought markdown is accepted in full; budgeting applies only to response shaping/transport.
 
 ## Strict parser contract
 
@@ -74,7 +70,6 @@ Rules:
 - `UNKNOWN_ARG`
 - `INVALID_INPUT`
 - `UNKNOWN_VERB`
-- `BUDGET_EXCEEDED`
 - `UNKNOWN_ID`
 - `ALREADY_EXISTS`
 - `MERGE_FAILED`
