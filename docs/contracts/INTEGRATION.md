@@ -29,5 +29,5 @@ This document defines how `branch`, `think`, and `merge` compose into one determ
 
 ## Out of scope
 
-- Legacy multi-portal surfaces and alias tools.
+- Removed multi-portal surfaces and non-current alias tools.
 - Non-markdown tool inputs.

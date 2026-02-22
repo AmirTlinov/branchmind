@@ -39,7 +39,7 @@ fn tools_list_exposes_only_v3_markdown_surface() {
 fn unknown_tools_fail_closed() {
     let mut server = Server::start_initialized_with_args("v3_surface_unknown_tool", &[]);
 
-    let legacy = server.request(json!({
+    let unsupported_tool = server.request(json!({
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
@@ -48,12 +48,16 @@ fn unknown_tools_fail_closed() {
             "arguments": {}
         }
     }));
-    let payload = extract_tool_text(&legacy);
+    let payload = extract_tool_text(&unsupported_tool);
     let code = payload
         .get("error")
         .and_then(|v| v.get("code"))
         .and_then(|v| v.as_str());
-    assert_eq!(code, Some("UNKNOWN_TOOL"), "legacy tool must fail-closed");
+    assert_eq!(
+        code,
+        Some("UNKNOWN_TOOL"),
+        "unsupported tool must fail-closed"
+    );
 }
 
 #[test]
