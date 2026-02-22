@@ -21,16 +21,16 @@ fn temp_storage_dir(label: &str) -> PathBuf {
 }
 
 #[test]
-fn storage_open_is_fail_closed_on_legacy_schema() {
-    let dir = temp_storage_dir("legacy-reset-required");
+fn storage_open_is_fail_closed_on_unsupported_schema() {
+    let dir = temp_storage_dir("unsupported-reset-required");
     let db_path = dir.join("branchmind_rust.db");
 
-    let conn = Connection::open(db_path).expect("legacy db must open");
-    conn.execute("CREATE TABLE legacy_tasks(id TEXT PRIMARY KEY)", [])
-        .expect("legacy table should be created");
+    let conn = Connection::open(db_path).expect("seed db must open");
+    conn.execute("CREATE TABLE unsupported_tasks(id TEXT PRIMARY KEY)", [])
+        .expect("unsupported table should be created");
     drop(conn);
 
-    let err = SqliteStore::open(&dir).expect_err("legacy storage must be rejected");
+    let err = SqliteStore::open(&dir).expect_err("unsupported storage must be rejected");
     assert_eq!(err.code(), "RESET_REQUIRED");
     assert!(matches!(
         err,
@@ -272,13 +272,13 @@ fn delete_branch_fails_when_descendants_exist() {
 }
 
 #[test]
-fn legacy_branch_inserts_also_set_non_null_updated_at_ms() {
-    let dir = temp_storage_dir("legacy-branch-updated-at");
+fn branch_inserts_also_set_non_null_updated_at_ms() {
+    let dir = temp_storage_dir("branch-updated-at");
     let mut store = SqliteStore::open(&dir).expect("fresh storage should open");
 
     store
         .create_branch(CreateBranchRequest {
-            workspace_id: "ws-legacy".to_string(),
+            workspace_id: "ws-updated-at".to_string(),
             branch_id: "main".to_string(),
             parent_branch_id: None,
             created_at_ms: 10,
@@ -286,7 +286,7 @@ fn legacy_branch_inserts_also_set_non_null_updated_at_ms() {
         .expect("main branch should be created");
     store
         .create_branch(CreateBranchRequest {
-            workspace_id: "ws-legacy".to_string(),
+            workspace_id: "ws-updated-at".to_string(),
             branch_id: "child".to_string(),
             parent_branch_id: Some("main".to_string()),
             created_at_ms: 11,
@@ -295,7 +295,7 @@ fn legacy_branch_inserts_also_set_non_null_updated_at_ms() {
 
     let branches = store
         .list_branches(ListBranchesRequest {
-            workspace_id: "ws-legacy".to_string(),
+            workspace_id: "ws-updated-at".to_string(),
             limit: 20,
             offset: 0,
         })

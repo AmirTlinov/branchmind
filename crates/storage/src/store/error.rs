@@ -29,9 +29,9 @@ impl StoreError {
 
     pub fn recovery_hint(&self) -> Option<&'static str> {
         match self {
-            Self::InvalidInput(message) if message.starts_with("RESET_REQUIRED") => {
-                Some("legacy storage is not supported: backup data, wipe storage dir, then re-open")
-            }
+            Self::InvalidInput(message) if message.starts_with("RESET_REQUIRED") => Some(
+                "unsupported storage layout detected: backup data, wipe storage dir, then re-open",
+            ),
             Self::BranchAlreadyExists => {
                 Some("use a different identifier or delete existing record")
             }
