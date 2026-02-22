@@ -8,8 +8,6 @@ pub const MAX_COMMIT_BODY_LEN: usize = 65_536;
 pub const MAX_MERGE_STRATEGY_LEN: usize = 64;
 pub const MAX_MERGE_SUMMARY_LEN: usize = 4_096;
 
-pub mod graph;
-
 /// Core domain invariant failures.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DomainError {
@@ -79,12 +77,6 @@ impl fmt::Display for DomainError {
 impl std::error::Error for DomainError {}
 
 /// A branch in thought history.
-///
-/// Explicit invariants:
-/// - `workspace_id`, `branch_id`, `parent_branch_id`, `head_commit_id` use the same canonical identifier form
-///   (`[a-z0-9][a-z0-9._/-]{0,127}`, lowercase normalized).
-/// - `parent_branch_id != branch_id`.
-/// - `updated_at_ms >= created_at_ms` and both timestamps are non-negative.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThoughtBranch {
     workspace_id: String,
@@ -169,12 +161,6 @@ impl ThoughtBranch {
 }
 
 /// A commit in thought history.
-///
-/// Explicit invariants:
-/// - Identifiers are canonical and lowercase normalized.
-/// - `parent_commit_id != commit_id`.
-/// - `message` and `body` are trimmed, non-empty, and bounded.
-/// - `created_at_ms` is non-negative.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThoughtCommit {
     workspace_id: String,
@@ -259,12 +245,6 @@ impl ThoughtCommit {
 }
 
 /// A merge artifact that links branch integration with a synthesis commit.
-///
-/// Explicit invariants:
-/// - Identifiers are canonical and lowercase normalized.
-/// - `source_branch_id != target_branch_id`.
-/// - `strategy` and `summary` are trimmed, non-empty, and bounded.
-/// - `created_at_ms` is non-negative.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeRecord {
     workspace_id: String,
@@ -397,6 +377,8 @@ pub fn canonical_identifier(
 }
 
 pub mod ids {
+    use super::{DomainError, canonical_identifier};
+
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
     pub struct WorkspaceId(String);
 
@@ -406,8 +388,7 @@ pub mod ids {
         }
 
         pub fn try_new(value: impl Into<String>) -> Result<Self, WorkspaceIdError> {
-            let value = value.into();
-            validate_workspace_id(&value)?;
+            let value = canonical_identifier("workspace_id", value.into()).map_err(map_error)?;
             Ok(Self(value))
         }
     }
@@ -418,158 +399,22 @@ pub mod ids {
         TooLong,
         InvalidFirstChar,
         InvalidChar { ch: char, index: usize },
+        ContainsNul,
     }
 
-    fn validate_workspace_id(value: &str) -> Result<(), WorkspaceIdError> {
-        if value.is_empty() {
-            return Err(WorkspaceIdError::Empty);
-        }
-        if value.len() > 128 {
-            return Err(WorkspaceIdError::TooLong);
-        }
-        let mut chars = value.chars();
-        let Some(first) = chars.next() else {
-            return Err(WorkspaceIdError::Empty);
-        };
-        if !first.is_ascii_alphanumeric() {
-            return Err(WorkspaceIdError::InvalidFirstChar);
-        }
-        for (index, ch) in value.chars().enumerate() {
-            if index == 0 {
-                continue;
+    fn map_error(err: DomainError) -> WorkspaceIdError {
+        match err {
+            DomainError::EmptyField { .. } => WorkspaceIdError::Empty,
+            DomainError::FieldTooLong { .. } => WorkspaceIdError::TooLong,
+            DomainError::InvalidFirstChar { .. } => WorkspaceIdError::InvalidFirstChar,
+            DomainError::InvalidChar { ch, index, .. } => {
+                WorkspaceIdError::InvalidChar { ch, index }
             }
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '/' | '-') {
-                continue;
-            }
-            return Err(WorkspaceIdError::InvalidChar { ch, index });
+            DomainError::ContainsNul { .. } => WorkspaceIdError::ContainsNul,
+            DomainError::SameValue { .. }
+            | DomainError::NegativeTimestamp { .. }
+            | DomainError::TimestampOrder { .. } => WorkspaceIdError::InvalidFirstChar,
         }
-        Ok(())
-    }
-}
-
-pub mod paths {
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct StepPath {
-        indices: Vec<usize>,
-    }
-
-    impl StepPath {
-        pub fn indices(&self) -> &[usize] {
-            &self.indices
-        }
-
-        pub fn parse(value: &str) -> Result<Self, StepPathError> {
-            let value = value.trim();
-            if value.is_empty() {
-                return Err(StepPathError::Empty);
-            }
-
-            let mut indices = Vec::new();
-            for segment in value.split('.') {
-                let Some(raw) = segment.strip_prefix("s:") else {
-                    return Err(StepPathError::InvalidSegment);
-                };
-                let index = raw
-                    .parse::<usize>()
-                    .map_err(|_| StepPathError::InvalidIndex)?;
-                indices.push(index);
-            }
-
-            if indices.is_empty() {
-                return Err(StepPathError::Empty);
-            }
-
-            Ok(Self { indices })
-        }
-
-        pub fn child(&self, ordinal: usize) -> Self {
-            let mut indices = self.indices.clone();
-            indices.push(ordinal);
-            Self { indices }
-        }
-
-        pub fn root(ordinal: usize) -> Self {
-            Self {
-                indices: vec![ordinal],
-            }
-        }
-    }
-
-    impl std::fmt::Display for StepPath {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            for (idx, ordinal) in self.indices.iter().enumerate() {
-                if idx > 0 {
-                    f.write_str(".")?;
-                }
-                write!(f, "s:{ordinal}")?;
-            }
-            Ok(())
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub enum StepPathError {
-        Empty,
-        InvalidSegment,
-        InvalidIndex,
-    }
-}
-
-pub mod model {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum TaskKind {
-        Plan,
-        Task,
-    }
-
-    impl TaskKind {
-        pub fn as_str(self) -> &'static str {
-            match self {
-                TaskKind::Plan => "plan",
-                TaskKind::Task => "task",
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct ReasoningRef {
-        pub branch: String,
-        pub notes_doc: String,
-        pub graph_doc: String,
-        pub trace_doc: String,
-    }
-
-    impl ReasoningRef {
-        pub fn for_entity(kind: TaskKind, id: &str) -> Self {
-            let branch_prefix = match kind {
-                TaskKind::Plan => "plan",
-                TaskKind::Task => "task",
-            };
-            Self {
-                branch: format!("{branch_prefix}/{id}"),
-                notes_doc: "notes".to_string(),
-                graph_doc: format!("{id}-graph"),
-                trace_doc: format!("{id}-trace"),
-            }
-        }
-    }
-}
-
-pub mod think {
-    pub const SUPPORTED_THINK_CARD_TYPES: &[&str] = &[
-        "frame",
-        "hypothesis",
-        "question",
-        "test",
-        "evidence",
-        "decision",
-        "note",
-        "update",
-    ];
-
-    pub fn is_supported_think_card_type(value: &str) -> bool {
-        let value = value.trim();
-        SUPPORTED_THINK_CARD_TYPES.contains(&value)
     }
 }
 
@@ -650,35 +495,37 @@ mod tests {
         let commit = ThoughtCommit::try_new(
             "ws",
             "main",
-            "c-1",
-            Some("c-1".into()),
-            "message",
-            "body",
+            "c1",
+            Some("c0".to_string()),
+            " message ",
+            " body ",
             1,
         )
-        .expect_err("same parent/commit id must fail");
+        .expect("commit should be valid");
+
+        assert_eq!(commit.workspace_id(), "ws");
+        assert_eq!(commit.branch_id(), "main");
+        assert_eq!(commit.commit_id(), "c1");
+        assert_eq!(commit.parent_commit_id(), Some("c0"));
+        assert_eq!(commit.message(), "message");
+        assert_eq!(commit.body(), "body");
+
+        let self_parent =
+            ThoughtCommit::try_new("ws", "main", "c1", Some("c1".to_string()), "m", "b", 1)
+                .expect_err("self parent must fail");
         assert!(matches!(
-            commit,
+            self_parent,
             DomainError::SameValue {
                 field_a: "parent_commit_id",
                 field_b: "commit_id"
             }
         ));
-
-        let bad_body = ThoughtCommit::try_new("ws", "main", "c-2", None, "m", "", 1)
-            .expect_err("empty body must fail");
-        assert!(matches!(
-            bad_body,
-            DomainError::EmptyField { field: "body" }
-        ));
     }
 
     #[test]
     fn merge_record_requires_distinct_branches() {
-        let err = MergeRecord::try_new(
-            "ws", "merge-1", "main", "main", "c-9", "squash", "summary", 2,
-        )
-        .expect_err("source and target must differ");
+        let err = MergeRecord::try_new("ws", "m1", "main", "main", "c1", "squash", "summary", 1)
+            .expect_err("source and target must differ");
 
         assert!(matches!(
             err,
@@ -687,5 +534,12 @@ mod tests {
                 field_b: "target_branch_id"
             }
         ));
+    }
+
+    #[test]
+    fn workspace_id_normalizes_to_canonical_lowercase() {
+        let workspace =
+            ids::WorkspaceId::try_new(" WS-ROOT ").expect("workspace id should normalize");
+        assert_eq!(workspace.as_str(), "ws-root");
     }
 }
