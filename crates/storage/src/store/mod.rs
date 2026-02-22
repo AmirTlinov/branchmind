@@ -540,7 +540,7 @@ fn preflight_gate(conn: &Connection) -> Result<(), StoreError> {
         .any(|table| !required.contains(table.as_str()))
     {
         return Err(StoreError::InvalidInput(
-            "RESET_REQUIRED: unsupported legacy tables detected",
+            "RESET_REQUIRED: unsupported tables detected",
         ));
     }
 
