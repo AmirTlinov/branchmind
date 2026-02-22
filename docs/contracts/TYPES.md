@@ -45,7 +45,6 @@ Parser/surface errors:
 - `UNKNOWN_ARG` — unknown top-level argument.
 - `INVALID_INPUT` — malformed args, malformed markdown fence, malformed command line.
 - `UNKNOWN_VERB` — verb is not supported by selected tool.
-- `BUDGET_EXCEEDED` — `markdown` exceeds `max_chars`.
 
 Runtime/storage errors:
 

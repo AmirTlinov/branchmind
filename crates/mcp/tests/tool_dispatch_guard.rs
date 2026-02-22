@@ -36,8 +36,8 @@ fn tools_list_exposes_only_v3_markdown_surface() {
 }
 
 #[test]
-fn legacy_tools_fail_closed_with_unknown_tool() {
-    let mut server = Server::start_initialized_with_args("v3_surface_unknown_legacy_tool", &[]);
+fn unknown_tools_fail_closed() {
+    let mut server = Server::start_initialized_with_args("v3_surface_unknown_tool", &[]);
 
     let legacy = server.request(json!({
         "jsonrpc": "2.0",
@@ -57,12 +57,63 @@ fn legacy_tools_fail_closed_with_unknown_tool() {
 }
 
 #[test]
+fn namespaced_tool_names_fail_closed() {
+    let mut server = Server::start_initialized_with_args("v3_surface_unknown_namespaced_tool", &[]);
+
+    let namespaced_slash = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "branchmind/think",
+            "arguments": {
+                "workspace": "ws-parser",
+                "markdown": "```bm\\nlog branch=main\\n```"
+            }
+        }
+    }));
+    let payload_slash = extract_tool_text(&namespaced_slash);
+    let code_slash = payload_slash
+        .get("error")
+        .and_then(|v| v.get("code"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        code_slash,
+        Some("UNKNOWN_TOOL"),
+        "slash-namespaced tool must fail-closed"
+    );
+
+    let namespaced_dot = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "bm.think",
+            "arguments": {
+                "workspace": "ws-parser",
+                "markdown": "```bm\\nlog branch=main\\n```"
+            }
+        }
+    }));
+    let payload_dot = extract_tool_text(&namespaced_dot);
+    let code_dot = payload_dot
+        .get("error")
+        .and_then(|v| v.get("code"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        code_dot,
+        Some("UNKNOWN_TOOL"),
+        "dot-namespaced tool must fail-closed"
+    );
+}
+
+#[test]
 fn tools_list_schema_requires_workspace_and_markdown() {
     let mut server = Server::start_initialized_with_args("v3_surface_schema_required_fields", &[]);
 
     let tools_list = server.request(json!({
         "jsonrpc": "2.0",
-        "id": 3,
+        "id": 5,
         "method": "tools/list",
         "params": {}
     }));

@@ -7,8 +7,7 @@ fn markdown_schema() -> Value {
         "type": "object",
         "properties": {
             "workspace": { "type": "string" },
-            "markdown": { "type": "string" },
-            "max_chars": { "type": "integer", "minimum": 1, "maximum": 65536 }
+            "markdown": { "type": "string" }
         },
         "required": ["workspace", "markdown"]
     })

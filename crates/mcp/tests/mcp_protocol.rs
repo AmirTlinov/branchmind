@@ -188,6 +188,33 @@ fn parser_rejects_unknown_top_level_arg() {
 }
 
 #[test]
+fn parser_rejects_max_chars_top_level_arg() {
+    let mut server = Server::start_initialized("parser_rejects_max_chars_top_level_arg");
+
+    let call = server.request(json!({
+        "jsonrpc": "2.0",
+        "id": 140,
+        "method": "tools/call",
+        "params": {
+            "name": "branch",
+            "arguments": {
+                "workspace": "ws-parser",
+                "markdown": "```bm\nlist\n```",
+                "max_chars": 1
+            }
+        }
+    }));
+    let payload = extract_tool_text(&call);
+    assert_eq!(
+        payload
+            .get("error")
+            .and_then(|v| v.get("code"))
+            .and_then(|v| v.as_str()),
+        Some("UNKNOWN_ARG")
+    );
+}
+
+#[test]
 fn parser_rejects_duplicate_command_args() {
     let mut server = Server::start_initialized("parser_rejects_duplicate_command_args");
 
@@ -262,35 +289,6 @@ fn parser_rejects_unknown_command_arg() {
             .and_then(|v| v.get("code"))
             .and_then(|v| v.as_str()),
         Some("UNKNOWN_ARG")
-    );
-}
-
-#[test]
-fn parser_accepts_thought_payload_even_when_max_chars_is_tiny() {
-    let mut server = Server::start_initialized("parser_allows_full_thought_payload");
-    let workspace = "ws-max-chars";
-
-    let main = call_markdown_tool(&mut server, 18, "branch", workspace, "```bm\nmain\n```");
-    assert_eq!(main.get("success").and_then(|v| v.as_bool()), Some(true));
-
-    let call = server.request(json!({
-        "jsonrpc": "2.0",
-        "id": 19,
-        "method": "tools/call",
-        "params": {
-            "name": "think",
-            "arguments": {
-                "workspace": workspace,
-                "max_chars": 1,
-                "markdown": "```bm\ncommit branch=main commit=cmax1 message=msg\nthis payload is intentionally longer than one char\n```"
-            }
-        }
-    }));
-    let payload = extract_tool_text(&call);
-    assert_eq!(
-        payload.get("success").and_then(|v| v.as_bool()),
-        Some(true),
-        "thought markdown must not be rejected by max_chars: {payload}"
     );
 }
 

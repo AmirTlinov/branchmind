@@ -417,10 +417,8 @@ fn try_handle_locally(
         }
         "tools/list" => {
             // v3: strict surface = 3 markdown tools.
-            let resp = crate::json_rpc_response(
-                id,
-                json!({ "tools": crate::tools_v1::tool_definitions() }),
-            );
+            let resp =
+                crate::json_rpc_response(id, json!({ "tools": crate::tools::tool_definitions() }));
             match serde_json::to_vec(&resp) {
                 Ok(bytes) => LocalHandling::Response(bytes),
                 Err(_) => LocalHandling::NotHandled,
