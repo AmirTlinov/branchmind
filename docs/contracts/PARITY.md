@@ -14,6 +14,6 @@ v3 parity target is intentionally minimal and strict.
 
 ## Explicitly removed from parity target
 
-- Legacy portal surfaces (`tasks`, `jobs`, `system`, etc.)
-- Legacy alias tool names from v1/v2 migration eras
+- Removed non-current portal surfaces (`tasks`, `jobs`, `system`, etc.)
+- Removed alias tool names outside the current v3 surface
 - Non-markdown command modes

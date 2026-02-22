@@ -8,7 +8,7 @@
 - `branch`
 - `merge`
 
-Legacy tool names are fail-closed with `UNKNOWN_TOOL`.
+Unsupported or removed tool names are fail-closed with `UNKNOWN_TOOL`.
 
 ## Shared input contract
 

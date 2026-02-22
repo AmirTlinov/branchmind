@@ -184,8 +184,8 @@ impl McpServer {
     }
 
     pub(crate) fn call_tool(&mut self, name: &str, args: Value) -> Value {
-        // v3: only the 3 advertised markdown tools are callable. Legacy names are rejected
-        // fail-closed.
+        // v3: only the 3 advertised markdown tools are callable. Unsupported or removed names
+        // are rejected fail-closed.
         if !crate::tools::is_supported_tool(name) {
             return crate::ai_error_with(
                 "UNKNOWN_TOOL",
