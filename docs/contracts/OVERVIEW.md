@@ -1,30 +1,17 @@
-# Contracts — Overview (v3 MCP surface)
+# Contracts — Overview (v3)
 
-This folder defines the active MCP contract for BranchMind.
+Active MCP surface is strictly reasoning-only.
 
-## Version
+## Advertised tools
 
-- Active contract version: **v3**.
-- Advertised tools: **`think`**, **`branch`**, **`merge`**.
-- Input style: markdown-only ` ```bm ... ``` ` command blocks.
-- Legacy tool names are fail-closed with `UNKNOWN_TOOL`.
+- `branch`
+- `think`
+- `merge`
 
-## Active contract index
+## Contract set
 
-- `V3_MCP_SURFACE.md` — tools, verbs, strict parser rules.
-- `TYPES.md` — response envelope + typed error model.
-- `MEMORY.md` — branch/commit/merge data model.
-- `INTEGRATION.md` — deterministic cross-tool invariants.
-- `PARITY.md` — v3 parity target and non-goals.
-
-## Archived docs (de-indexed)
-
-The following are not active contracts and must not be used as current behavior:
-
-- `V1_*.md`
-- `*_v1.md`
-- legacy portal/ops migration docs
-
-## Related
-
-- `../GLOSSARY.md` — shared terminology
+- `V3_MCP_SURFACE.md` — parser/tool/verb contract
+- `TYPES.md` — response envelope and typed errors
+- `MEMORY.md` — branch/commit/merge persistence model
+- `INTEGRATION.md` — cross-tool invariants
+- `PARITY.md` — explicit in-scope/out-of-scope matrix
